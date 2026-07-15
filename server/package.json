@@ -1,0 +1,16 @@
+{
+  "name": "ecabinet-server",
+  "description": "eCabinet — Backend API (Giai đoạn 2): Node.js + PostgreSQL/PGlite + JWT",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "pg": "^8.13.1"
+  }
+}

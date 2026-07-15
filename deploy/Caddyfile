@@ -1,0 +1,10 @@
+# Caddy — HTTPS tự động qua Let's Encrypt (cần DOMAIN công khai trỏ về máy chủ).
+# Caddy tự xin và gia hạn chứng chỉ; tự chuyển HTTP->HTTPS; hỗ trợ WebSocket (/api/realtime).
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:80
+}

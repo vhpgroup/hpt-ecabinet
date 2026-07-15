@@ -1,0 +1,83 @@
+# ============================================================
+# eCabinet — TRIỂN KHAI PILOT (mức 1): HTTPS tự động + full-stack
+#   caddy : reverse proxy, TLS tự động (Let's Encrypt hoặc tự ký)
+#   web   : frontend (nginx) build với VITE_API_URL=/api, proxy /api -> api
+#   api   : backend Node (JWT, ACL, realtime)
+#   db    : PostgreSQL 16 + volume + healthcheck
+#
+# Chạy 1 lệnh:  ./deploy/pilot.sh
+# Thủ công:     cd deploy && docker compose -f docker-compose.pilot.yml --env-file .env up -d --build
+# Context build trỏ lên thư mục gốc dự án (..) vì file này nằm trong deploy/.
+# ============================================================
+name: ecabinet
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: ecabinet-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Chưa đặt DOMAIN trong deploy/.env}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # lưu chứng chỉ TLS (quan trọng — đừng xóa)
+      - caddy_config:/config
+    depends_on:
+      - web
+
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api
+    container_name: ecabinet-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    # không mở cổng ra host: chỉ Caddy tiếp xúc bên ngoài
+
+  api:
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+    container_name: ecabinet-api
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://ecabinet:${DB_PASSWORD:?Chưa đặt DB_PASSWORD}@db:5432/ecabinet
+      JWT_SECRET: ${JWT_SECRET:?Chưa đặt JWT_SECRET}
+      JWT_TTL: ${JWT_TTL:-3600}
+      REFRESH_TTL_SEC: ${REFRESH_TTL_SEC:-604800}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      LOGIN_RATE_MAX: ${LOGIN_RATE_MAX:-10}
+      CORS_ORIGIN: https://${DOMAIN}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    container_name: ecabinet-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ecabinet
+      POSTGRES_USER: ecabinet
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Chưa đặt DB_PASSWORD}
+    volumes:
+      - ecabinet_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecabinet -d ecabinet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  ecabinet_pgdata:
+  caddy_data:
+  caddy_config:

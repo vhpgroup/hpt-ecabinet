@@ -1,0 +1,73 @@
+# ============================================================
+# eCabinet — Triển khai full-stack (GIAI ĐOẠN 2)
+#   web : frontend build sẵn, phục vụ qua nginx + proxy /api
+#   api : backend Node.js (JWT, phân quyền, REST)
+#   db  : PostgreSQL 16 + volume dữ liệu
+#
+# Chạy:      docker compose up -d --build
+# Truy cập:  http://localhost:8080   (đăng nhập: chutich / 123456)
+# Đổi bí mật khi triển khai thật:
+#   DB_PASSWORD=... JWT_SECRET=... docker compose up -d --build
+# ============================================================
+services:
+  web:
+    build:
+      context: .
+      args:
+        VITE_API_URL: /api        # frontend gọi API cùng origin qua nginx
+    container_name: ecabinet-web
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  api:
+    build: ./server
+    container_name: ecabinet-api
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://ecabinet:${DB_PASSWORD:-ecabinet}@db:5432/ecabinet
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_TTL: ${JWT_TTL:-3600}
+      REFRESH_TTL_SEC: ${REFRESH_TTL_SEC:-604800}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      LOGIN_RATE_MAX: ${LOGIN_RATE_MAX:-10}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    # expose để debug trực tiếp API (tùy chọn):
+    # ports: ["3000:3000"]
+
+  db:
+    image: postgres:16-alpine
+    container_name: ecabinet-db
+    environment:
+      POSTGRES_DB: ecabinet
+      POSTGRES_USER: ecabinet
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ecabinet}
+    volumes:
+      - ecabinet_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecabinet -d ecabinet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # ---------- MỞ RỘNG GIAI ĐOẠN 3 (khai báo sẵn) ----------
+  # minio:
+  #   image: minio/minio:latest      # lưu trữ file tài liệu dung lượng lớn
+  #   command: server /data --console-address ":9001"
+  #   environment:
+  #     MINIO_ROOT_USER: ${MINIO_USER:-ecabinet}
+  #     MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-ecabinet-secret}
+  #   volumes:
+  #     - ecabinet_minio:/data
+  #   restart: unless-stopped
+
+volumes:
+  ecabinet_pgdata:
+  # ecabinet_minio:

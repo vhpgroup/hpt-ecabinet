@@ -1,0 +1,8 @@
+# Caddy — TLS TỰ KÝ (CA nội bộ của Caddy) cho mạng nội bộ / air-gapped, KHÔNG cần Internet.
+# Dùng khi TLS_MODE=internal. Trình duyệt sẽ cảnh báo chứng chỉ lần đầu — cài CA nội bộ
+# của Caddy (/data/caddy/pki/authorities/local/root.crt) vào máy trạm để hết cảnh báo.
+{$DOMAIN} {
+	tls internal
+	encode zstd gzip
+	reverse_proxy web:80
+}

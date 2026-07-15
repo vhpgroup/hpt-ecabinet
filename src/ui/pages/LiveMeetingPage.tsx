@@ -1,0 +1,377 @@
+// ============================================================
+// PHÒNG HỌP TRỰC TIẾP — màn hình điều hành khi phiên họp diễn ra:
+// chương trình + tài liệu, biểu quyết realtime (mô phỏng),
+// điểm danh, đăng ký phát biểu, trao đổi riêng/nhóm.
+// ============================================================
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import type { DocFile } from '../../domain/types';
+import { useApp } from '../../store/AppContext';
+import { Avatar, Badge, Icon, Modal, QRSvg } from '../components';
+import { can } from '../../services/authService';
+import * as meetingService from '../../services/meetingService';
+import * as chatService from '../../services/chatService';
+import { simulateLiveTick } from '../../services/sim';
+import { db } from '../../data/db';
+import { realtime } from '../../data/realtime';
+import { fmtTime, indexBy, timeAgo } from '../format';
+import { DocViewerModal } from './shared';
+import { VoteCard } from './MeetingDetailPage';
+
+export default function LiveMeetingPage() {
+  const { id } = useParams<{ id: string }>();
+  const { user, s, refresh, toast } = useApp();
+  const nav = useNavigate();
+  const m = s.meetings.find((x) => x.id === id);
+  const [rightTab, setRightTab] = useState<'attend' | 'speak' | 'chat'>('attend');
+  const [viewDoc, setViewDoc] = useState<DocFile | null>(null);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [clock, setClock] = useState('');
+  const users = useMemo(() => indexBy(s.users), [s.users]);
+  const docById = useMemo(() => indexBy(s.documents), [s.documents]);
+
+  // đồng hồ thời gian họp
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!m) return;
+      const ms = Date.now() - new Date(m.startTime).getTime();
+      const sec = Math.max(0, Math.floor(ms / 1000));
+      const hh = String(Math.floor(sec / 3600)).padStart(2, '0');
+      const mm = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+      const ss = String(sec % 60).padStart(2, '0');
+      setClock(`${hh}:${mm}:${ss}`);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [m?.startTime, m]);
+
+  // Realtime:
+  // - Chế độ máy chủ + WebSocket đang kết nối: sự kiện tự đẩy về (AppContext) — không poll
+  // - Chế độ máy chủ + WebSocket rớt: poll dự phòng 3s
+  // - Chế độ demo cục bộ: mô phỏng đại biểu khác điểm danh / biểu quyết / nhắn tin
+  const simBusy = useRef(false);
+  useEffect(() => {
+    if (!m || m.status !== 'live' || !user) return;
+    const t = setInterval(async () => {
+      if (simBusy.current) return;
+      simBusy.current = true;
+      try {
+        if (db.remote) {
+          if (!realtime.connected) await refresh(); // dự phòng khi WS rớt
+        } else {
+          const changed = await simulateLiveTick(m.id, user.id);
+          if (changed) await refresh();
+        }
+      } finally {
+        simBusy.current = false;
+      }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [m?.id, m?.status, user, refresh, m]);
+
+  if (!m || !user) return null;
+
+  const chairCtl = can.chairControls(user, m.chairId, m.secretaryId);
+  const mine = m.participants.find((p) => p.userId === user.id);
+  const currentItem = m.agenda.find((a) => a.id === m.currentAgendaItemId) ?? m.agenda[0];
+  const openVotes = s.votes.filter((v) => v.meetingId === m.id && v.status === 'open');
+  const pendingVotes = s.votes.filter((v) => v.meetingId === m.id && v.status === 'pending');
+  const speakReqs = s.speakRequests.filter((r) => r.meetingId === m.id);
+  const speaking = speakReqs.find((r) => r.status === 'speaking');
+  const waiting = speakReqs.filter((r) => r.status === 'waiting').sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+  const present = m.participants.filter((p) => p.checkedInAt).length;
+
+  const act = async (fn: () => Promise<unknown>, msg?: string) => {
+    try { await fn(); await refresh(); if (msg) toast(msg); }
+    catch (ex) { toast((ex as Error).message, 'error'); }
+  };
+
+  if (m.status !== 'live') {
+    return (
+      <div className="boot">
+        <p>Phiên họp {m.status === 'finished' ? 'đã kết thúc' : 'chưa bắt đầu'}.</p>
+        <button className="btn" onClick={() => nav(`/meetings/${m.id}`)}>Về trang phiên họp</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="live-shell">
+      <div className="live-top">
+        <button className="icon-btn" style={{ color: '#c8d6e8' }} onClick={() => nav(`/meetings/${m.id}`)} title="Về trang phiên họp">
+          <Icon name="chevleft" />
+        </button>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <h2>{m.title}</h2>
+          <div className="sub">{m.code} · Đang thảo luận: <b style={{ color: '#fff' }}>Mục {currentItem?.order}. {currentItem?.title}</b></div>
+        </div>
+        <span className="live-banner" style={{ background: 'rgba(29,158,95,.18)', borderColor: 'rgba(29,158,95,.4)', color: '#7de0ae' }}>
+          <span className="live-dot" />Trực tiếp · {present}/{m.participants.length} có mặt
+        </span>
+        <span className="live-clock" title="Thời gian họp">{clock}</span>
+        {m.isOnline && (
+          <button className="btn outline sm" style={{ background: 'transparent', color: '#c8d6e8', borderColor: 'rgba(255,255,255,.3)' }}
+            onClick={() => nav(`/meetings/${m.id}/online`)}>
+            <Icon name="video" size={14} />Trực tuyến
+          </button>
+        )}
+        <button className="btn outline sm" style={{ background: 'transparent', color: '#c8d6e8', borderColor: 'rgba(255,255,255,.3)' }}
+          title="Chế độ trình chiếu cho màn hình TV tại phòng họp" onClick={() => nav(`/meetings/${m.id}/screen`)}>
+          <Icon name="monitor" size={14} />Màn hình TV
+        </button>
+        {chairCtl && (
+          <button className="btn danger sm" onClick={() => {
+            if (window.confirm('Kết thúc phiên họp? Hệ thống sẽ chuyển sang bước lập biên bản.')) {
+              act(async () => { await meetingService.endMeeting(user, m.id); nav(`/meetings/${m.id}`); }, 'Phiên họp đã kết thúc — mời lập biên bản và ký số');
+            }
+          }}>Kết thúc phiên họp</button>
+        )}
+      </div>
+
+      <div className="live-body">
+        {/* ---------- CỘT TRÁI ---------- */}
+        <div className="live-left">
+          <div className="live-panel">
+            <div className="live-panel-h"><Icon name="list" size={15} />Chương trình phiên họp</div>
+            <div style={{ padding: '10px 15px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {m.agenda.map((a) => (
+                <button key={a.id}
+                  className={'btn sm' + (a.id === currentItem?.id ? '' : ' outline')}
+                  onClick={() => chairCtl && act(() => meetingService.setCurrentAgendaItem(user, m.id, a.id))}
+                  title={chairCtl ? 'Chuyển sang nội dung này' : a.title}
+                  style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {a.order}. {a.title.length > 34 ? a.title.slice(0, 34) + '…' : a.title}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="live-panel" style={{ flex: 1 }}>
+            <div className="live-panel-h">
+              <Icon name="file" size={15} />Tài liệu — Mục {currentItem?.order}
+              <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {(currentItem?.documentIds ?? []).map((did) => {
+                  const d = docById.get(did);
+                  return d ? (
+                    <button key={did} className="btn ghost sm" onClick={() => setViewDoc(d)}>
+                      <Icon name="eye" size={13} />{d.name.length > 28 ? d.name.slice(0, 28) + '…' : d.name}
+                    </button>
+                  ) : null;
+                })}
+              </span>
+            </div>
+            <div style={{ padding: 15, overflowY: 'auto', maxHeight: '46vh' }}>
+              {currentItem && currentItem.documentIds.length > 0 ? (
+                (() => {
+                  const d = docById.get(currentItem.documentIds[0]);
+                  return d?.content
+                    ? <div className="doc-viewer" style={{ maxHeight: 'none' }}><div className="doc-page">{d.content}</div></div>
+                    : <div className="empty"><p>Nhấn nút tài liệu phía trên để xem.</p></div>;
+                })()
+              ) : (
+                <div className="empty"><Icon name="file" size={26} /><p>Mục này chưa có tài liệu.</p></div>
+              )}
+            </div>
+          </div>
+
+          {(openVotes.length > 0 || (chairCtl && pendingVotes.length > 0)) && (
+            <div className="live-panel">
+              <div className="live-panel-h"><Icon name="vote" size={15} />Biểu quyết</div>
+              <div style={{ padding: 15, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {openVotes.map((v) => (
+                  <VoteCard key={v.id} v={v} chairCtl={chairCtl} act={act} usersMap={users} compact />
+                ))}
+                {chairCtl && pendingVotes.map((v) => (
+                  <VoteCard key={v.id} v={v} chairCtl={chairCtl} act={act} usersMap={users} compact />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ---------- CỘT PHẢI ---------- */}
+        <div className="live-right">
+          <div className="live-panel">
+            <div className="tabs">
+              <button className={'tab' + (rightTab === 'attend' ? ' active' : '')} onClick={() => setRightTab('attend')}>
+                Điểm danh <Badge color="green">{present}</Badge>
+              </button>
+              <button className={'tab' + (rightTab === 'speak' ? ' active' : '')} onClick={() => setRightTab('speak')}>
+                Phát biểu <Badge color="amber">{waiting.length}</Badge>
+              </button>
+              <button className={'tab' + (rightTab === 'chat' ? ' active' : '')} onClick={() => setRightTab('chat')}>Trao đổi</button>
+            </div>
+
+            {rightTab === 'attend' && (
+              <div className="tabpane">
+                {mine && !mine.checkedInAt && (
+                  <button className="btn success" style={{ width: '100%', justifyContent: 'center', marginBottom: 12 }}
+                    onClick={() => act(() => meetingService.checkIn(user, m.id, user.id), 'Điểm danh thành công')}>
+                    <Icon name="check" size={16} />Điểm danh tham dự
+                  </button>
+                )}
+                <button className="btn outline sm" style={{ marginBottom: 12 }} onClick={() => setQrOpen(true)}>
+                  <Icon name="qr" size={14} />Mã QR điểm danh
+                </button>
+                {m.participants.map((p) => {
+                  const u = users.get(p.userId);
+                  return (
+                    <div className="attend-row" key={p.userId}>
+                      <Avatar user={u} size={30} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 12.8, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u?.fullName}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{p.seat ?? ''}</div>
+                      </div>
+                      {p.checkedInAt
+                        ? <span style={{ color: 'var(--green)', fontSize: 12, fontWeight: 700 }}>✓ {fmtTime(p.checkedInAt)}</span>
+                        : p.attendStatus === 'declined'
+                          ? <Badge color="red">Vắng</Badge>
+                          : chairCtl
+                            ? <button className="btn ghost sm" onClick={() => act(() => meetingService.checkIn(user, m.id, p.userId), 'Đã điểm danh hộ')}>Điểm danh hộ</button>
+                            : <Badge color="gray">Chưa vào</Badge>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {rightTab === 'speak' && <SpeakPane meetingId={m.id} chairCtl={chairCtl} speaking={speaking} waiting={waiting} act={act} />}
+            {rightTab === 'chat' && <ChatPane meetingId={m.id} />}
+          </div>
+        </div>
+      </div>
+
+      {viewDoc && <DocViewerModal doc={viewDoc} onClose={() => setViewDoc(null)} />}
+      {qrOpen && (
+        <Modal title="Mã QR điểm danh" onClose={() => setQrOpen(false)} width={340}>
+          <div style={{ textAlign: 'center' }}>
+            <QRSvg seed={m.id + m.code} />
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>Đại biểu quét mã tại cửa phòng họp để điểm danh (mô phỏng).</p>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ---------------- Đăng ký phát biểu ----------------
+function SpeakPane({ meetingId, chairCtl, speaking, waiting, act }: {
+  meetingId: string; chairCtl: boolean;
+  speaking?: { id: string; userId: string; topic?: string; startedAt?: string };
+  waiting: { id: string; userId: string; topic?: string; requestedAt: string }[];
+  act: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+}) {
+  const { user, s } = useApp();
+  const [topic, setTopic] = useState('');
+  const users = indexBy(s.users);
+  const iAmWaiting = waiting.some((w) => w.userId === user?.id) || speaking?.userId === user?.id;
+
+  return (
+    <div className="tabpane">
+      {speaking && (
+        <div className="speaking-now">
+          <div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>
+            <Avatar user={users.get(speaking.userId)} size={34} />
+            <div>
+              <b style={{ fontSize: 13, color: '#10643c' }}><Icon name="mic" size={13} /> Đang phát biểu: {users.get(speaking.userId)?.fullName}</b>
+              {speaking.topic && <div style={{ fontSize: 12, color: '#42775c' }}>{speaking.topic}</div>}
+              {speaking.startedAt && <div style={{ fontSize: 11, color: '#42775c' }}>Bắt đầu {fmtTime(speaking.startedAt)}</div>}
+            </div>
+          </div>
+          {chairCtl && (
+            <button className="btn outline sm" style={{ marginTop: 8 }} onClick={() => act(() => meetingService.actOnSpeak(user!, speaking.id, 'end'), 'Đã kết thúc lượt phát biểu')}>
+              Kết thúc lượt phát biểu
+            </button>
+          )}
+        </div>
+      )}
+
+      {!iAmWaiting && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input className="inp" placeholder="Nội dung muốn phát biểu…" value={topic} onChange={(e) => setTopic(e.target.value)} />
+            <button className="btn" onClick={() => act(async () => { await meetingService.requestSpeak(user!, meetingId, topic.trim() || undefined); setTopic(''); }, 'Đã đăng ký phát biểu')}>
+              <Icon name="hand" size={15} />
+            </button>
+          </div>
+          <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 5 }}>Đăng ký phát biểu — chủ tọa sẽ mời theo thứ tự.</p>
+        </div>
+      )}
+
+      <b style={{ fontSize: 12.5, color: 'var(--muted)' }}>Danh sách chờ ({waiting.length})</b>
+      {waiting.map((w, i) => (
+        <div className="speak-row" key={w.id}>
+          <span className="agenda-no" style={{ width: 22, height: 22, fontSize: 11.5 }}>{i + 1}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 12.8 }}>{users.get(w.userId)?.fullName}</div>
+            {w.topic && <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{w.topic}</div>}
+            <div style={{ fontSize: 10.5, color: '#93a5ba' }}>{timeAgo(w.requestedAt)}</div>
+          </div>
+          {chairCtl && (
+            <>
+              <button className="btn success sm" title="Mời phát biểu" onClick={() => act(() => meetingService.actOnSpeak(user!, w.id, 'start'), 'Đã mời phát biểu')}><Icon name="mic" size={13} /></button>
+              <button className="icon-btn" title="Từ chối" onClick={() => act(() => meetingService.actOnSpeak(user!, w.id, 'reject'))}><Icon name="x" size={14} /></button>
+            </>
+          )}
+        </div>
+      ))}
+      {waiting.length === 0 && !speaking && <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>Chưa có đại biểu đăng ký phát biểu.</p>}
+    </div>
+  );
+}
+
+// ---------------- Trao đổi ----------------
+function ChatPane({ meetingId }: { meetingId: string }) {
+  const { user, s, refresh } = useApp();
+  const [toId, setToId] = useState<string>('');
+  const [text, setText] = useState('');
+  const users = indexBy(s.users);
+  const meeting = s.meetings.find((x) => x.id === meetingId);
+  const msgs = useMemo(
+    () => (user ? chatService.visibleMessages(s.messages, meetingId, user.id) : []),
+    [s.messages, meetingId, user],
+  );
+  const bottomRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs.length]);
+
+  const send = async () => {
+    if (!user || !text.trim()) return;
+    await chatService.sendMessage(user, meetingId, text, toId || null);
+    setText('');
+    await refresh();
+  };
+
+  return (
+    <>
+      <div className="tabpane">
+        <div className="chat-list">
+          {msgs.map((msg) => {
+            const mineMsg = msg.fromId === user?.id;
+            return (
+              <div key={msg.id} className={'chat-msg' + (mineMsg ? ' mine' : '')} style={{ alignSelf: mineMsg ? 'flex-end' : 'flex-start' }}>
+                <div className="who">
+                  {!mineMsg && <b>{users.get(msg.fromId)?.fullName}</b>}
+                  {msg.toId && <Badge color="purple">Riêng {msg.toId === user?.id ? '· gửi cho bạn' : `→ ${users.get(msg.toId)?.fullName}`}</Badge>}
+                  <span>{fmtTime(msg.sentAt)}</span>
+                </div>
+                <div className="bubble">{msg.content}</div>
+              </div>
+            );
+          })}
+          {msgs.length === 0 && <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>Chưa có trao đổi nào.</p>}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+      <div className="chat-input">
+        <select className="sel" style={{ width: 132, flex: 'none' }} value={toId} onChange={(e) => setToId(e.target.value)} title="Gửi tới">
+          <option value="">Cả phòng họp</option>
+          {meeting?.participants.filter((p) => p.userId !== user?.id).map((p) => (
+            <option key={p.userId} value={p.userId}>Riêng: {users.get(p.userId)?.fullName}</option>
+          ))}
+        </select>
+        <input className="inp" placeholder="Nhập nội dung trao đổi…" value={text}
+          onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} />
+        <button className="btn" onClick={send}><Icon name="send" size={15} /></button>
+      </div>
+    </>
+  );
+}
