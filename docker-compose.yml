@@ -34,6 +34,11 @@ services:
       REFRESH_TTL_SEC: ${REFRESH_TTL_SEC:-604800}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
       LOGIN_RATE_MAX: ${LOGIN_RATE_MAX:-10}
+      # Họp trực tuyến WebRTC (LiveKit) — GATED: trống -> mô phỏng; điền -> họp thật.
+      # Khuyến nghị LiveKit Cloud cho nhanh (xem README). Backend chỉ mint token.
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
     depends_on:
       db:
         condition: service_healthy

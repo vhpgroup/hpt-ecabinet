@@ -57,6 +57,13 @@ services:
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
       LOGIN_RATE_MAX: ${LOGIN_RATE_MAX:-10}
       CORS_ORIGIN: https://${DOMAIN}
+      # --- Họp trực tuyến WebRTC (LiveKit) — GATED: bỏ trống 3 biến này -> app
+      #     tự dùng giao diện mô phỏng. Điền để bật họp thật. ---
+      #   LIVEKIT_URL: URL WebSocket client kết nối tới LiveKit (wss://…/ hoặc ws://…)
+      #   LIVEKIT_API_KEY / LIVEKIT_API_SECRET: cặp khóa để server MINT access token.
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -76,6 +83,47 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # ============================================================
+  # LIVEKIT — MÁY CHỦ MEDIA WebRTC (SFU) cho họp trực tuyến thật.
+  #
+  # MẶC ĐỊNH TẮT (comment) vì media server có yêu cầu HẠ TẦNG riêng, KHÁC
+  # hẳn HTTP thường và KHÔNG proxy trọn vẹn qua Caddy như /api được:
+  #   • Cổng signaling 7880 (WS/HTTP) + TURN/TLS 7881 (TCP).
+  #   • DẢI CỔNG UDP lớn cho luồng media (mặc định 50000-60000/udp) —
+  #     PHẢI mở trên firewall/NAT, không thể giấu sau reverse proxy.
+  #   • Cần WSS (TLS) để trình duyệt kết nối: hoặc đặt LiveKit sau TLS của
+  #     riêng nó (khuyến nghị domain/subdomain riêng, vd rtc.<domain>), hoặc
+  #     dùng chứng chỉ do LiveKit tự quản.
+  #   • Khi client và server khác NAT -> cần TURN (LiveKit có TURN tích hợp).
+  #
+  # >>> KHUYẾN NGHỊ CHO PILOT: DÙNG **LiveKit Cloud** (miễn phí mức dùng thử)
+  #     để khỏi lo cổng UDP/TURN/TLS. Chỉ cần đặt trong deploy/.env:
+  #       LIVEKIT_URL=wss://<project>.livekit.cloud
+  #       LIVEKIT_API_KEY=<key>
+  #       LIVEKIT_API_SECRET=<secret>
+  #     (Backend api chỉ MINT token; không cần chạy service này.)
+  #
+  # >>> TỰ HOST: bỏ comment khối dưới, tạo deploy/livekit.yaml (mẫu ở README),
+  #     mở cổng, trỏ rtc.<domain> tới máy chủ, rồi đặt:
+  #       LIVEKIT_URL=wss://rtc.<domain>
+  #     Dùng host networking để LiveKit nắm dải UDP hiệu quả nhất.
+  #
+  #   livekit:
+  #     image: livekit/livekit-server:latest
+  #     container_name: ecabinet-livekit
+  #     restart: unless-stopped
+  #     command: ["--config", "/etc/livekit.yaml"]
+  #     network_mode: host          # cần cho dải cổng UDP media
+  #     environment:
+  #       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+  #     volumes:
+  #       - ./livekit.yaml:/etc/livekit.yaml:ro
+  #     # Nếu KHÔNG dùng host networking, thay bằng ports (kém tối ưu media):
+  #     # ports:
+  #     #   - "7880:7880"                 # signaling WS/HTTP
+  #     #   - "7881:7881"                 # TURN/TLS (TCP)
+  #     #   - "50000-60000:50000-60000/udp"  # luồng media RTP/RTCP
 
 volumes:
   ecabinet_pgdata:

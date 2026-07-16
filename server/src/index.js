@@ -26,6 +26,7 @@ import { guardPatch, validatePatch } from './guard.js';
 import { filterList, readOne } from './access.js';
 import { clientIp, hit } from './ratelimit.js';
 import { issueRefreshToken, revokeRefreshToken, rotateRefreshToken } from './sessions.js';
+import { mintLiveKitToken, rtcConfigured, rtcUrl } from './rtc.js';
 
 // GĐ4: rate-limit
 const RATE_MAX = Number(process.env.RATE_LIMIT_MAX ?? 300);            // yêu cầu / IP / cửa sổ
@@ -161,6 +162,44 @@ app.add('GET', '/api/auth/me', requireAuth, async (req, res) => {
   const data = await getExisting('c_users', req.user.sub);
   if (!data) return send(res, 401, { error: 'Tài khoản không còn tồn tại' });
   send(res, 200, sanitizeUser(data));
+});
+
+// ---------------- Họp trực tuyến WebRTC (LiveKit) ----------------
+// GATED: chỉ hoạt động khi đã đặt LIVEKIT_URL/API_KEY/API_SECRET.
+// Frontend hỏi /api/rtc/config để biết có bật RTC không; nếu chưa -> giữ
+// giao diện mô phỏng. KHÔNG bao giờ lộ secret ra ngoài.
+// LƯU Ý thứ tự đăng ký: các route /api/rtc/* PHẢI nằm TRƯỚC CRUD chung
+// /api/:collection(/:id) để router (khớp theo thứ tự) không bắt nhầm.
+app.add('GET', '/api/rtc/config', requireAuth, async (req, res) => {
+  send(res, 200, { enabled: rtcConfigured() });
+});
+
+app.add('POST', '/api/rtc/token', requireAuth, async (req, res) => {
+  if (!rtcConfigured()) {
+    return send(res, 501, { error: 'RTC chưa cấu hình' });
+  }
+  const body = (await readBody(req)) ?? {};
+  const meetingId = String(body.meetingId ?? '').trim();
+  if (!meetingId) return send(res, 400, { error: 'Thiếu meetingId' });
+
+  const meeting = await getExisting('c_meetings', meetingId);
+  if (!meeting) return send(res, 404, { error: 'Không tìm thấy phiên họp' });
+
+  // Kiểm quyền: người gọi PHẢI là thành phần phiên họp (participants có
+  // userId = req.user.sub) HOẶC có vai trò quản lý (admin/thư ký/chủ trì).
+  const isMember = (meeting.participants ?? []).some((p) => p.userId === req.user.sub);
+  const isManage = MANAGE.includes(req.user.role);
+  if (!isMember && !isManage) {
+    return send(res, 403, { error: 'Bạn không thuộc thành phần phiên họp này' });
+  }
+
+  // Lấy tên hiển thị từ hồ sơ người dùng (fallback về name trong JWT)
+  const profile = await getExisting('c_users', req.user.sub);
+  const name = profile?.fullName ?? req.user.name ?? req.user.sub;
+
+  const room = `meeting-${meetingId}`;
+  const token = mintLiveKitToken({ identity: req.user.sub, name, room });
+  send(res, 200, { url: rtcUrl(), token, room, identity: req.user.sub });
 });
 
 // ---------------- Quản trị ----------------
