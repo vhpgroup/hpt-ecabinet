@@ -7,8 +7,8 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-# Repo chưa commit package-lock.json nên dùng `npm install` (npm ci bắt buộc có lock file).
-# Khi nào commit package-lock.json thì đổi lại `npm ci` để build tái lập 100%.
+# Repo chưa commit package-lock.json nên dùng npm install (npm ci bắt buộc có lock file).
+# Khi nào commit package-lock.json thì đổi lại npm ci để build tái lập 100%.
 RUN npm install --no-audit --no-fund
 COPY . .
 ARG VITE_API_URL=/api
@@ -19,4 +19,4 @@ FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1
+HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1
