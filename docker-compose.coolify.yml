@@ -1,0 +1,75 @@
+# ============================================================
+# eCabinet — TRIỂN KHAI BẰNG COOLIFY (khuyến nghị khi VPS đã chạy Coolify)
+#
+# Khác bản docker-compose.yml gốc:
+#   • KHÔNG mở cổng ra host (không "ports:") — proxy Traefik của Coolify
+#     tự route domain -> container web:80, tránh đụng 80/443/8080 sẵn có.
+#   • Không đặt container_name cố định — để Coolify tự quản lý tên/label.
+#   • Secret bắt buộc khai báo trong tab Environment Variables của Coolify
+#     (có nút Generate): DB_PASSWORD, JWT_SECRET.
+#
+# CÁCH DÙNG (Coolify v4):
+#   1. DNS: tạo bản ghi A  ecabinet.<domain>  ->  IP VPS.
+#   2. Coolify -> Project -> + New -> Docker Compose -> chọn repo GitHub
+#      vhpgroup/hpt-ecabinet (nhánh main).
+#   3. Docker Compose Location:  /docker-compose.coolify.yml
+#   4. Environment Variables: đặt DB_PASSWORD và JWT_SECRET (bấm Generate).
+#   5. Ở service "web" -> Domains: https://ecabinet.<domain>
+#      (nếu Coolify hỏi cổng container: 80). Traefik tự xin Let's Encrypt.
+#   6. Deploy. Bật auto-deploy webhook để push GitHub là tự cập nhật.
+#
+# WebSocket realtime đi qua Traefik bình thường, không cần cấu hình thêm.
+# Họp video LiveKit: điền 3 biến LIVEKIT_* (khuyến nghị LiveKit Cloud).
+# ============================================================
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api        # frontend gọi API cùng origin, nginx trong image proxy /api -> api:3000
+    restart: unless-stopped
+    expose:
+      - "80"
+    depends_on:
+      api:
+        condition: service_started
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://ecabinet:${DB_PASSWORD:?Đặt DB_PASSWORD trong Environment Variables của Coolify}@db:5432/ecabinet
+      JWT_SECRET: ${JWT_SECRET:?Đặt JWT_SECRET trong Environment Variables của Coolify}
+      JWT_TTL: ${JWT_TTL:-3600}
+      REFRESH_TTL_SEC: ${REFRESH_TTL_SEC:-604800}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      LOGIN_RATE_MAX: ${LOGIN_RATE_MAX:-10}
+      # Họp trực tuyến WebRTC (LiveKit) — trống = giao diện mô phỏng
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ecabinet
+      POSTGRES_USER: ecabinet
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Đặt DB_PASSWORD trong Environment Variables của Coolify}
+    volumes:
+      - ecabinet_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecabinet -d ecabinet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  ecabinet_pgdata:

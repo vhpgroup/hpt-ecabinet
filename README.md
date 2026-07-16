@@ -171,11 +171,80 @@ DB_PASSWORD='mat-khau-manh' JWT_SECRET='chuoi-bi-mat-dai' docker compose up -d -
 Sao lưu: `docker compose exec db pg_dump -U ecabinet ecabinet > backup.sql`
 Khôi phục dữ liệu mẫu: nút ↻ trong app (chỉ quản trị viên) hoặc `POST /api/admin/reset`.
 
-## 6. PWA (cài như ứng dụng)
+### Triển khai bằng Coolify (VPS đã có Coolify + Traefik)
+
+Dùng file riêng **`docker-compose.coolify.yml`** — không mở cổng ra host (tránh đụng 80/443/8080 của Traefik), Coolify tự route domain và cấp HTTPS:
+
+1. DNS: bản ghi A `ecabinet.<domain>` → IP VPS
+2. Coolify → Project → **+ New → Docker Compose** → repo GitHub này (nhánh `main`)
+3. **Docker Compose Location**: `/docker-compose.coolify.yml`
+4. **Environment Variables**: đặt `DB_PASSWORD`, `JWT_SECRET` (bấm Generate)
+5. Service `web` → **Domains**: `https://ecabinet.<domain>` (cổng container: 80) → **Deploy**
+6. Bật webhook auto-deploy: push GitHub là Coolify tự build lại
+
+WebSocket realtime đi qua Traefik tự động. Muốn bật họp video thật: thêm 3 biến `LIVEKIT_*` (mục 6).
+
+## 6. Họp trực tuyến WebRTC (LiveKit)
+
+Trang **Họp trực tuyến** hỗ trợ WebRTC thật (âm thanh + hình ảnh + chia sẻ màn hình) qua [LiveKit](https://livekit.io) — một SFU (Selective Forwarding Unit) mã nguồn mở.
+
+**Cơ chế bật/tắt (GATED bằng cấu hình):**
+- **Chưa cấu hình LiveKit** (mặc định) → trang giữ **giao diện mô phỏng** như cũ. Demo trình duyệt (localStorage) **luôn** là mô phỏng.
+- **Đã cấu hình** (đặt 3 biến `LIVEKIT_*` cho backend, chạy chế độ máy chủ) → tự chuyển sang họp thật.
+- Nếu người dùng **từ chối quyền camera/micro**, không có thiết bị, hoặc trình duyệt chặn (vd nhúng iframe sandbox) → hiện thông báo (toast) và **tự quay lại giao diện mô phỏng**, không crash.
+
+**Bật bằng biến môi trường** (đặt cho service `api`, vd trong `deploy/.env`):
+
+```env
+LIVEKIT_URL=wss://<host-livekit>       # URL WSS trình duyệt kết nối
+LIVEKIT_API_KEY=<api-key>              # backend dùng để MINT access token
+LIVEKIT_API_SECRET=<api-secret>        # ký JWT HS256 (KHÔNG lộ ra frontend)
+```
+
+Kiểm tra nhanh: `GET /api/rtc/config` trả `{"enabled":true}` khi đã cấu hình; frontend tự tải `livekit-client` (UMD) qua CDN lúc chạy, xin token tại `POST /api/rtc/token {meetingId}` rồi vào phòng `meeting-<meetingId>`.
+
+### Cách 1 — LiveKit Cloud (khuyến nghị cho pilot)
+
+Nhanh nhất, **không phải tự lo cổng UDP/TURN/TLS**:
+1. Tạo project tại <https://cloud.livekit.io> (có mức dùng thử miễn phí).
+2. Lấy **Project URL** (dạng `wss://<project>.livekit.cloud`) + **API Key/Secret**.
+3. Điền 3 biến trên vào `deploy/.env`, khởi động lại `api`. Xong — không cần chạy service media nào.
+
+### Cách 2 — Tự host LiveKit (self-host)
+
+Bỏ comment service `livekit` trong `deploy/docker-compose.pilot.yml`, tạo `deploy/livekit.yaml`:
+
+```yaml
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true          # cần khi máy chủ sau NAT/cloud
+keys:
+  # PHẢI trùng LIVEKIT_API_KEY/SECRET mà backend dùng để mint token
+  <api-key>: <api-secret>
+turn:
+  enabled: true                  # TURN tích hợp cho client sau NAT chặt
+```
+
+Rồi:
+- Trỏ **subdomain riêng** (vd `rtc.<domain>`) về máy chủ và đặt `LIVEKIT_URL=wss://rtc.<domain>`.
+- **Mở firewall**: `7880/tcp` (signaling), `7881/tcp` (TURN/TLS), và **dải `50000-60000/udp`** (luồng media). Đây là điểm khác biệt lớn so với web thường — media UDP **không** đi qua reverse proxy được.
+- Khuyến nghị chạy LiveKit với `network_mode: host` để nắm dải cổng UDP hiệu quả.
+
+### Giới hạn / lưu ý
+
+- **Cổng UDP + TURN**: WebRTC cần media UDP; máy trạm sau NAT/tường lửa chặt phải có TURN (LiveKit Cloud lo sẵn; self-host bật `turn.enabled`).
+- **WSS bắt buộc**: trình duyệt chỉ cho camera/micro trên ngữ cảnh bảo mật (HTTPS/WSS) — dùng domain có TLS.
+- **Bản demo nhúng (sandbox/iframe) vẫn là mô phỏng**: môi trường phát triển nhúng chặn `getUserMedia`; do đó video đa điểm cầu **không** kiểm thử được trong sandbox — chỉ chạy thật khi triển khai có LiveKit + trình duyệt cho phép camera.
+- Backend **không thêm dependency npm**: access token LiveKit được tự ký (JWT HS256) bằng `node:crypto` trong `server/src/rtc.js`.
+
+## 7. PWA (cài như ứng dụng)
 
 Truy cập bằng Chrome/Edge → biểu tượng **Cài đặt** trên thanh địa chỉ → app chạy cửa sổ riêng trên máy tính/máy tính bảng. (`manifest.webmanifest` + `sw.js`; service worker chỉ kích hoạt khi chạy HTTPS.)
 
-## 7. Lộ trình tiếp theo (đề xuất)
+## 8. Lộ trình tiếp theo (đề xuất)
 
 | Hạng mục | Giải pháp đề xuất |
 |---|---|
@@ -185,15 +254,16 @@ Truy cập bằng Chrome/Edge → biểu tượng **Cài đặt** trên thanh đ
 | Lưu trữ tài liệu lớn | MinIO (S3-compatible), virus scan, streaming (thay base64 trong JSONB) |
 | Đăng nhập nâng cao | Refresh token, SSO/LDAP cơ quan, 2FA |
 | Ký số thật | VNPT SmartCA / USB token (plugin ký hash phía client), chữ ký chuẩn PAdES |
-| Họp trực tuyến | LiveKit hoặc Jitsi self-host (WebRTC SFU) |
+| ~~Họp trực tuyến~~ | ✅ **ĐÃ CÓ** — WebRTC thật qua LiveKit (SFU): camera/mic/chia sẻ màn hình, gated bằng cấu hình, fallback mô phỏng an toàn (xem mục 6) |
 | Thông báo đa kênh | Email (SMTP), SMS Brandname, Web Push |
 | Bảo mật | Phân quyền chi tiết theo tài liệu mật, mã hóa at-rest, nhật ký bất biến, rate-limit |
 
-## 8. Giới hạn hiện tại
+## 9. Giới hạn hiện tại
 
-- **Chế độ demo trình duyệt**: dữ liệu mỗi máy một bộ (localStorage), tệp ≤ 1,5MB, realtime giả lập
+- **Chế độ demo trình duyệt**: dữ liệu mỗi máy một bộ (localStorage), tệp ≤ 1,5MB, realtime giả lập; họp trực tuyến luôn là mô phỏng
 - **Chế độ máy chủ (GĐ2–GĐ4)**: dữ liệu tập trung PostgreSQL, JWT 1h + refresh token xoay vòng, phân quyền server-side + endpoint nghiệp vụ kiểm tra sâu + guard CRUD + rate-limit; **realtime WebSocket** (polling chỉ là dự phòng); tệp ≤ 15MB (base64 trong JSONB)
-- Ký số/QR/video vẫn là mô phỏng ở cả hai chế độ (GĐ3)
+- **Họp trực tuyến WebRTC (LiveKit)**: hoạt động thật khi đã cấu hình `LIVEKIT_*` + trình duyệt cho phép camera/micro (xem mục 6). Chưa cấu hình / bị chặn quyền → tự dùng giao diện mô phỏng.
+- Ký số/QR vẫn là mô phỏng ở cả hai chế độ (GĐ3)
 
 ---
 
