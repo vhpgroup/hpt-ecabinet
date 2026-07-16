@@ -7,7 +7,9 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --no-audit --no-fund
+# Repo chưa commit package-lock.json nên dùng `npm install` (npm ci bắt buộc có lock file).
+# Khi nào commit package-lock.json thì đổi lại `npm ci` để build tái lập 100%.
+RUN npm install --no-audit --no-fund
 COPY . .
 ARG VITE_API_URL=/api
 ENV VITE_API_URL=$VITE_API_URL
