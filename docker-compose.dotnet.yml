@@ -2,18 +2,33 @@
 # eCabinet — Triển khai full-stack biến thể .NET 8 + SQL Server 2022
 # (đáp ứng nền tảng E-HSMT: nền tảng .NET + MS SQL Server 2022 + Windows Server)
 #
-#   web : frontend React build sẵn (Y HỆT bản Node), phục vụ qua nginx + proxy /api
-#   api : backend ASP.NET Core 8 (server-dotnet) — API contract Y HỆT bản Node
-#   db  : Microsoft SQL Server 2022 (Express) + volume dữ liệu
+#   web   : frontend React build sẵn (Y HỆT bản Node), phục vụ qua nginx + proxy /api
+#   api   : backend ASP.NET Core 8 (server-dotnet) — API contract Y HỆT bản Node
+#   db    : Microsoft SQL Server 2022 (Express) + volume dữ liệu
+#   caddy : (TÙY CHỌN, profile "tls") reverse proxy HTTPS tự động trước `web`
 #
 # KHÁC với docker-compose.yml (bản Node + PostgreSQL): file NÀY dùng .NET + SQL Server.
 # Hai backend độc lập; chọn 1 để chạy. Frontend & API contract giống hệt nhau.
 #
-# Chạy:      DB_PASSWORD='Ecabinet#2026' docker compose -f docker-compose.dotnet.yml up -d --build
-# Truy cập:  http://localhost:8081   (đăng nhập: chutich / 123456)
+# Chạy (mặc định, KHÔNG TLS — giữ nguyên hành vi cũ, cổng 8081 HTTP thuần):
+#   DB_PASSWORD='Ecabinet#2026' docker compose -f docker-compose.dotnet.yml up -d --build
+#   Truy cập:  http://localhost:8081   (đăng nhập: chutich / 123456)
+#
+# Chạy CÓ TLS (bật thêm service `caddy` qua Docker Compose profile — xem README
+# mục 11 "TLS cho biến thể .NET"):
+#   DOMAIN=ecabinet.example.gov.vn ACME_EMAIL=cntt@example.gov.vn \
+#     DB_PASSWORD='Ecabinet#2026' \
+#     docker compose -f docker-compose.dotnet.yml --profile tls up -d --build
+#   Truy cập:  https://<DOMAIN>   (Caddy tự xin chứng chỉ Let's Encrypt)
+#   (Cổng 8081 HTTP thuần trên `web` vẫn còn mở song song để debug — không ảnh
+#    hưởng TLS; muốn chặn truy cập trực tiếp bỏ HTTP thì gỡ khối `ports:` của
+#    `web` sau khi xác nhận Caddy hoạt động.)
+#
 # LƯU Ý:
 #   - MSSQL_SA_PASSWORD BẮT BUỘC (mật khẩu mạnh: ≥8 ký tự, đủ hoa/thường/số/ký tự đặc biệt).
 #   - SQL Server 2022 cần ~2GB RAM tối thiểu cho container db.
+#   - Không truyền `--profile tls` (hoặc không đặt DOMAIN) -> service `caddy`
+#     KHÔNG được tạo, hành vi & cổng giữ NGUYÊN như trước (không có TLS).
 # ============================================================
 services:
   web:
@@ -76,5 +91,59 @@ services:
       start_period: 40s
     restart: unless-stopped
 
+  # ============================================================
+  # CADDY — TLS termination cho biến thể .NET (TÙY CHỌN, profile "tls").
+  # Mô phỏng đúng cơ chế của deploy/Caddyfile (bản pilot Node): reverse proxy
+  # vào `web:80`, Caddy tự xin/gia hạn chứng chỉ Let's Encrypt khi có DOMAIN
+  # công khai trỏ về máy chủ, hỗ trợ nâng cấp WebSocket (nginx trong `web` đã
+  # có location /api/realtime — xem nginx.conf) vì Caddy reverse_proxy chuyển
+  # tiếp header Upgrade/Connection mặc định, không cần khai báo thêm.
+  #
+  # BẬT bằng: docker compose -f docker-compose.dotnet.yml --profile tls up -d
+  #           (không truyền --profile tls -> service này KHÔNG được tạo,
+  #            hành vi mặc định giữ nguyên như trước khi thêm service này)
+  #
+  # Biến môi trường cần đặt khi bật profile tls:
+  #   DOMAIN      — tên miền công khai trỏ về IP máy chủ (bản ghi A), BẮT BUỘC
+  #                 để Caddy xin được chứng chỉ Let's Encrypt qua HTTP-01.
+  #   ACME_EMAIL  — email nhận cảnh báo gia hạn chứng chỉ (tùy chọn nhưng nên đặt).
+  #
+  # Mạng nội bộ / air-gapped (không có Internet để xin Let's Encrypt): đặt
+  # CADDY_TLS_MODE=internal — Caddy dùng CA nội bộ tự ký (giống deploy/Caddyfile.internal
+  # của bản pilot); trình duyệt sẽ cảnh báo chứng chỉ lần đầu, cần cài CA nội bộ
+  # (/data/caddy/pki/authorities/local/root.crt) vào máy trạm để hết cảnh báo.
+  caddy:
+    image: caddy:2-alpine
+    container_name: ecabinet-dotnet-caddy
+    profiles: ["tls"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN:?Chưa đặt DOMAIN (bắt buộc khi bật profile tls, vd DOMAIN=ecabinet.example.gov.vn)}"
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      CADDY_TLS_MODE: ${CADDY_TLS_MODE:-letsencrypt}
+    # Caddyfile inline qua command (không cần file .Caddyfile riêng cho biến thể
+    # này — nếu CADDY_TLS_MODE=internal thì dùng `tls internal` thay vì ACME).
+    # Literal block scalar (|) giữ nguyên xuống dòng cho script sh nhiều dòng.
+    command:
+      - sh
+      - -c
+      - |
+        if [ "$$CADDY_TLS_MODE" = "internal" ]; then
+          printf '{\n\temail %s\n}\n%s {\n\ttls internal\n\tencode zstd gzip\n\treverse_proxy web:80\n}\n' "$$ACME_EMAIL" "$$DOMAIN" > /etc/caddy/Caddyfile
+        else
+          printf '{\n\temail %s\n}\n%s {\n\tencode zstd gzip\n\treverse_proxy web:80\n}\n' "$$ACME_EMAIL" "$$DOMAIN" > /etc/caddy/Caddyfile
+        fi
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    volumes:
+      - ecabinet_dotnet_caddy_data:/data       # lưu chứng chỉ TLS (đừng xóa)
+      - ecabinet_dotnet_caddy_config:/config
+    depends_on:
+      - web
+
 volumes:
   ecabinet_mssql:
+  ecabinet_dotnet_caddy_data:
+  ecabinet_dotnet_caddy_config:

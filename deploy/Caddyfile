@@ -1,5 +1,7 @@
 # Caddy — HTTPS tự động qua Let's Encrypt (cần DOMAIN công khai trỏ về máy chủ).
 # Caddy tự xin và gia hạn chứng chỉ; tự chuyển HTTP->HTTPS; hỗ trợ WebSocket (/api/realtime).
+# IPv6-ready: không có chỉ định "bind" nào ép IPv4 — Caddy mặc định lắng nghe
+# dual-stack (mọi interface, gồm cả IPv6) khi site block không ghi rõ host.
 {
 	email {$ACME_EMAIL}
 }

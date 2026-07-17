@@ -178,7 +178,7 @@ DB_PASSWORD='mat-khau-manh' JWT_SECRET='chuoi-bi-mat-dai' docker compose up -d -
 - `api` — backend Node.js (JWT, ACL, REST) — tự tạo bảng + nạp seed lần đầu chạy
 - `db` — PostgreSQL 16 + volume `ecabinet_pgdata` + healthcheck
 
-Sao lưu: `docker compose exec db pg_dump -U ecabinet ecabinet > backup.sql`
+Sao lưu: `docker compose exec db pg_dump -U ecabinet ecabinet > backup.sql` (hoặc dùng script có sẵn `./deploy/backup.sh` — tự nén, xoay vòng; `./deploy/restore.sh` để khôi phục). Biến thể SQL Server (mục 11) dùng `deploy/backup-mssql.sh`/`restore-mssql.sh`. Diễn tập khôi phục đo RTO thật + quy trình DR đầy đủ: **[`docs/dr-runbook.md`](docs/dr-runbook.md)**. Kiểm tra tải theo SLA 500 user/90 CCU: **[`docs/loadtest.md`](docs/loadtest.md)** (`node scripts/loadtest.mjs`).
 Khôi phục dữ liệu mẫu: nút ↻ trong app (chỉ quản trị viên) hoặc `POST /api/admin/reset`.
 
 ### Triển khai bằng Coolify (VPS đã có Coolify + Traefik)
@@ -197,6 +197,8 @@ WebSocket realtime đi qua Traefik tự động. Muốn bật họp video thật
 ## 6. Họp trực tuyến WebRTC (LiveKit)
 
 Trang **Họp trực tuyến** hỗ trợ WebRTC thật (âm thanh + hình ảnh + chia sẻ màn hình) qua [LiveKit](https://livekit.io) — một SFU (Selective Forwarding Unit) mã nguồn mở.
+
+> **Đối chiếu HSMT "không chia sẻ dữ liệu cho bên thứ 3"**: LiveKit Cloud (Cách 1 dưới đây) cho media đi qua hạ tầng bên thứ 3 — chỉ dùng cho pilot/demo. Self-host (Cách 2) là phương án khuyến nghị khi vận hành chính thức. Đối chiếu chi tiết + khuyến nghị hành động: **[`docs/livekit-va-du-lieu.md`](docs/livekit-va-du-lieu.md)**.
 
 **Cơ chế bật/tắt (GATED bằng cấu hình):**
 - **Chưa cấu hình LiveKit** (mặc định) → trang giữ **giao diện mô phỏng** như cũ. Demo trình duyệt (localStorage) **luôn** là mô phỏng.
@@ -276,6 +278,16 @@ Truy cập bằng Chrome/Edge → biểu tượng **Cài đặt** trên thanh đ
 - Ký số/QR vẫn là mô phỏng ở cả hai chế độ (GĐ3)
 - **API công bố cho bên thứ 3**: hoạt động ở **chế độ máy chủ** (cần `VITE_API_URL`); chế độ demo trình duyệt chỉ minh họa quản lý khóa cục bộ, không phục vụ endpoint mở
 
+### Sẵn sàng IPv6
+
+| Tầng | Trạng thái | Ghi chú |
+|---|---|---|
+| `nginx.conf` (frontend + proxy `/api`) | ✅ Dual-stack | Đã thêm `listen [::]:80;` cạnh `listen 80;`. |
+| Caddy (`deploy/Caddyfile`, `deploy/Caddyfile.internal`, và service `caddy` mới trong `docker-compose.dotnet.yml` mục 11) | ✅ Dual-stack (mặc định) | Caddy tự lắng nghe mọi interface (gồm IPv6) khi site block không chỉ định host cụ thể — không cần cấu hình thêm. |
+| API Node (`server/src/index.js`, `server.listen(PORT)`) | ✅ Dual-stack (mặc định Node) | Không truyền host cụ thể → Node bind `::` theo mặc định trên hầu hết hệ điều hành. |
+| **API .NET (`server-dotnet/ECabinet.Api/Program.cs`)** | 🔴 **IPv4-only tường minh** | `Environment.SetEnvironmentVariable("ASPNETCORE_URLS", $"http://0.0.0.0:{port}")` ép Kestrel chỉ bind IPv4 — **không tự động dual-stack**. Vì `api` thường chỉ được `web`/nginx hoặc Caddy gọi nội bộ (không expose thẳng ra ngoài trong cấu hình mặc định), tác động tới client bên ngoài là thấp, nhưng đây là gap thật cần khắc phục trong `server-dotnet/` (ngoài phạm vi sửa của cập nhật này) trước khi công bố "IPv6-ready toàn hệ thống" — thay `0.0.0.0` bằng `[::]` hoặc bỏ trống `ASPNETCORE_URLS` cụ thể hostbind để Kestrel tự dual-stack. |
+| Cổng publish Docker (`ports: "8080:80"` v.v.) | 🟡 Phụ thuộc Docker daemon | Docker publish cổng ra cả IPv4 và IPv6 chỉ khi daemon có bật IPv6 (`ipv6: true` trong `/etc/docker/daemon.json`) — đây là cấu hình hạ tầng máy chủ, không phải thứ compose file tự quyết định được. |
+
 ---
 
 ## 10. API công bố cho bên thứ 3 (LGSP-ready)
@@ -328,7 +340,15 @@ curl "https://<host>/api/open/v1/spec"
 
 ## 11. Backend .NET 8 + SQL Server (đáp ứng nền tảng E-HSMT)
 
-Bên cạnh backend Node.js (`server/`), dự án có **backend thứ hai viết bằng ASP.NET Core 8 + Microsoft SQL Server** tại thư mục **`server-dotnet/`**, port **1:1** từ bản Node để đáp ứng yêu cầu nền tảng của E-HSMT (**.NET + SQL Server 2022 + Windows Server**).
+Bên cạnh backend Node.js (`server/`), dự án có **backend thứ hai viết bằng ASP.NET Core 8 + Microsoft SQL Server** tại thư mục **`server-dotnet/`**, port **1:1** từ bản Node hướng tới đáp ứng yêu cầu nền tảng của E-HSMT (**.NET + SQL Server 2022 + Windows Server**). Ba yêu cầu nền tảng này đang ở **3 mức kiểm chứng khác nhau** — trình bày tách riêng để tránh gộp chung thành một câu khẳng định:
+
+| Nền tảng yêu cầu (E-HSMT) | Trạng thái | Bằng chứng / việc cần làm thêm |
+|---|---|---|
+| **.NET 8** | ✅ **Đã có, đã kiểm chứng** | Build 0 lỗi + **72/72 test PASS** qua `Microsoft.AspNetCore.TestHost` (in-memory, không mở socket) — xem mục "Kiểm thử" dưới đây. |
+| **MS SQL Server 2022** | 🟡 **Mã sẵn sàng, CHƯA kiểm thử trên instance MSSQL thật** | `SqlServerDocStore.cs` viết đúng cú pháp `Microsoft.Data.SqlClient`, `docker-compose.dotnet.yml` có image `mcr.microsoft.com/mssql/server:2022-latest`. 72/72 test hiện chỉ chạy qua `InMemoryDocStore`. **Cần chạy** `DB_PASSWORD='...' docker compose -f docker-compose.dotnet.yml up -d --build` trên máy có Docker để xác nhận `SqlServerDocStore` hoạt động đúng với SQL Server thật (tạo bảng, CAS, seed) — chưa làm được trong môi trường sandbox phát triển (không có Docker/MSSQL instance). |
+| **Windows Server + IIS** | 🔴 **Mới có outline hướng dẫn, chưa kiểm chứng thực tế** | Mục "Triển khai Windows Server + IIS" dưới đây là **6 bước dạng văn bản mô tả**, chưa có `web.config`/publish profile/PowerShell script nào được build/test trên Windows thật. `server-dotnet/Dockerfile` build trên image Linux (`mcr.microsoft.com/dotnet/aspnet:8.0`). Cần triển khai thử nghiệm thật trên Windows Server + IIS để biến outline thành bằng chứng. |
+
+**Cách đọc bảng trên:** ".NET ✅" là phần đã có bằng chứng thực thi mạnh nhất (build + test tự động). "MSSQL 🟡" và "Windows Server 🔴" là phần **framework/code đã viết đúng theo tài liệu kỹ thuật** nhưng **chưa có lần chạy thành công nào được ghi nhận** trên đúng hạ tầng đó — đây là khoảng cách giữa "code tương thích" và "đã triển khai/kiểm thử" cần làm rõ với chủ đầu tư trước khi coi là "đáp ứng đầy đủ".
 
 ### Vì sao có 2 backend?
 - **`server/` (Node.js + PostgreSQL/PGlite)** — bản gốc, dùng làm **nguồn chân lý** hợp đồng API.
@@ -383,7 +403,26 @@ DATABASE_URL="Server=localhost,1433;Database=ecabinet;User Id=sa;Password=<mật
 DB_PASSWORD='Ecabinet#2026' docker compose -f docker-compose.dotnet.yml up -d --build
 # → http://localhost:8081   (đăng nhập chutich / 123456)
 ```
-3 service: `web` (frontend build `VITE_API_URL=/api`, nginx proxy `/api` → `api:3000`, cổng **8081**), `api` (ASP.NET Core 8), `db` (**mcr.microsoft.com/mssql/server:2022-latest**, Express, volume `ecabinet_mssql`, healthcheck `sqlcmd -C`). **Lưu ý: SQL Server 2022 cần ~2GB RAM cho container `db`.**
+3 service mặc định (không đổi so với trước): `web` (frontend build `VITE_API_URL=/api`, nginx proxy `/api` → `api:3000`, cổng **8081**), `api` (ASP.NET Core 8), `db` (**mcr.microsoft.com/mssql/server:2022-latest**, Express, volume `ecabinet_mssql`, healthcheck `sqlcmd -C`). **Lưu ý: SQL Server 2022 cần ~2GB RAM cho container `db`.**
+
+### TLS cho biến thể .NET (tùy chọn — service `caddy`, profile `tls`)
+
+Mặc định `docker-compose.dotnet.yml` phục vụ **HTTP thuần** qua cổng 8081 (phù hợp dev/demo nội bộ). Để bật **HTTPS tự động** (Let's Encrypt hoặc TLS tự ký nội bộ) cho môi trường production, file compose có thêm service `caddy` mô phỏng đúng cơ chế của `deploy/Caddyfile` (bản pilot Node) — **tắt theo mặc định** qua [Docker Compose profile](https://docs.docker.com/compose/how-tos/profiles/) `tls`, không ảnh hưởng gì khi không bật:
+
+```bash
+# Bật TLS (Let's Encrypt — cần DOMAIN công khai trỏ về máy chủ, mở cổng 80/443):
+DOMAIN=ecabinet.example.gov.vn ACME_EMAIL=cntt@example.gov.vn \
+  DB_PASSWORD='Ecabinet#2026' \
+  docker compose -f docker-compose.dotnet.yml --profile tls up -d --build
+# → https://ecabinet.example.gov.vn (Caddy tự xin/gia hạn chứng chỉ)
+
+# Mạng nội bộ / air-gapped (không có Internet để xin Let's Encrypt) — TLS tự ký:
+DOMAIN=ecabinet.noi-bo.local CADDY_TLS_MODE=internal \
+  DB_PASSWORD='Ecabinet#2026' \
+  docker compose -f docker-compose.dotnet.yml --profile tls up -d --build
+```
+
+Caddy reverse proxy vào `web:80`, hỗ trợ nâng cấp **WebSocket** (`/api/realtime`) mặc định (không cần khai báo thêm — nginx trong `web` đã có location xử lý header `Upgrade`, xem `nginx.conf`). Không truyền `--profile tls` → service `caddy` **không được tạo**, hành vi & cổng 8081 HTTP thuần giữ **nguyên như trước**.
 
 ### Bảng parity (Node ⇄ .NET)
 | Thành phần | `server/` (Node) | `server-dotnet/` (.NET) |
@@ -420,6 +459,48 @@ Test chạy **in-memory bằng Microsoft.AspNetCore.TestHost** (KHÔNG mở sock
 4. Tạo IIS **Site/App Pool** (No Managed Code) trỏ vào thư mục publish; đặt biến môi trường `DATABASE_URL`, `JWT_SECRET`, `LIVEKIT_*` (Configuration Editor hoặc `web.config`/`environmentVariables`).
 5. Reverse proxy: IIS phục vụ frontend build (`dist/`) + proxy `/api` (kể cả nâng cấp **WebSocket** — bật tính năng *WebSocket Protocol* của IIS) sang site API.
 6. Sản xuất: cấp **chứng thư TLS hợp lệ** (bỏ `TrustServerCertificate` nếu dùng CA nội bộ tin cậy), bật sao lưu SQL định kỳ, chạy API dưới tài khoản dịch vụ tối thiểu quyền.
+
+### Sao lưu / phục hồi SQL Server (biến thể .NET)
+
+Đối tác của `deploy/backup.sh`/`restore.sh` (PostgreSQL, mục 5) cho biến thể MSSQL — vá gap "sao lưu/phục hồi chỉ có cho PostgreSQL":
+
+```bash
+# Sao lưu (BACKUP DATABASE qua sqlcmd trong container `db`, copy .bak ra host, nén,
+# xoay vòng giữ KEEP bản — mặc định 14):
+DB_PASSWORD='Ecabinet#2026' ./deploy/backup-mssql.sh
+# → deploy/backups-mssql/ecabinet-YYYYmmdd-HHMMSS.bak.gz
+
+# Khôi phục (RESTORE DATABASE ... WITH REPLACE — CẢNH BÁO ghi đè toàn bộ dữ liệu hiện tại):
+DB_PASSWORD='Ecabinet#2026' ./deploy/restore-mssql.sh deploy/backups-mssql/ecabinet-YYYYmmdd-HHMMSS.bak.gz
+```
+
+Biến môi trường: `DB_PASSWORD` (mật khẩu SA, bắt buộc), `KEEP` (số bản giữ lại, mặc định 14), `DB_NAME` (mặc định `ecabinet`), `COMPOSE_FILE` (mặc định `docker-compose.dotnet.yml`). Cài cron sao lưu tự động tương tự bản Postgres (xem `deploy/pilot.sh`):
+```bash
+(crontab -l 2>/dev/null; echo "0 2 * * * DB_PASSWORD='Ecabinet#2026' $(pwd)/deploy/backup-mssql.sh >> $(pwd)/deploy/backups-mssql/backup.log 2>&1") | crontab -
+```
+
+**Diễn tập khôi phục (DR drill) — chứng minh RTO ≤24h bằng số liệu:** `deploy/test-restore.sh mssql` (hoặc `postgres` cho bản Node) tự sao lưu → khôi phục vào database TẠM riêng (không đụng DB đang chạy) → đối chiếu số bản ghi từng bảng → in PASS/FAIL kèm thời gian từng bước. Quy trình DR đầy đủ (phát hiện → phân tích ≤8h → khôi phục ≤24h → báo cáo) và lịch diễn tập định kỳ: xem **[`docs/dr-runbook.md`](docs/dr-runbook.md)**.
+
+> **Chưa chạy thử trong sandbox** (không có Docker daemon) — cả 2 script mới (`backup-mssql.sh`, `restore-mssql.sh`) và `test-restore.sh` chỉ đã kiểm `bash -n` (cú pháp hợp lệ). Cần chạy thật trên máy có Docker + SQL Server để xác nhận logic T-SQL (`RESTORE FILELISTONLY`, `WITH MOVE`) — xem `docs/dr-runbook.md` mục "Chưa kiểm chứng".
+
+### Giới hạn HA hiện tại
+
+Hai cơ chế sau đang dùng **state tĩnh trong 1 tiến trình** (per-process), KHÔNG chia sẻ giữa nhiều instance:
+
+- **Rate-limit** (`RateLimit.cs` bản .NET / `ratelimit.js` bản Node): đếm request theo IP bằng cấu trúc trong bộ nhớ (`ConcurrentDictionary`/`Map`), không qua DB/cache chia sẻ.
+- **WebSocket realtime** (`Ws.cs` / `ws.js`): danh sách client đang kết nối lưu trong bộ nhớ của đúng tiến trình đó.
+
+**Hệ quả khi triển khai nhiều instance Web/App-Server sau load balancer** (đúng mô hình HA mà HSMT đề xuất — "Web-Server ×2", "App-Server ×2"):
+1. Rate-limit theo IP không đồng bộ giữa các instance — giảm hiệu quả chống brute-force (không phải lỗi nghiệp vụ, chỉ giảm mức bảo vệ khi client bị load-balance sang các instance khác nhau).
+2. **Client A kết nối WebSocket vào instance 1 sẽ không nhận được broadcast từ một ghi CRUD xảy ra ở instance 2** — tính năng realtime "đẩy sự kiện" hoạt động không đầy đủ trong cấu hình multi-instance.
+
+Refresh-token/session (`Sessions.cs`/`sessions.js`) **không có gap này** vì đã lưu qua CSDL (`IDocStore`/`c_sessions`), không phải state trong bộ nhớ.
+
+**Đường nâng cấp đề xuất (chưa triển khai — cần thực hiện trước khi chạy đa instance thật):**
+- Chuyển rate-limit sang lưu đếm trong **Redis** (hoặc cache chia sẻ tương đương) thay cho bộ nhớ tiến trình.
+- Chuyển WebSocket broadcast sang **Redis Pub/Sub** (mỗi instance subscribe kênh chung, publish khi có thay đổi) — hoặc dùng **sticky session** ở load balancer làm giải pháp tạm (đơn giản hơn nhưng không giải quyết tận gốc: client vẫn chỉ nhận realtime từ đúng 1 instance, các ghi từ instance khác cần cơ chế đồng bộ riêng nếu không dùng Pub/Sub).
+
+*(Mục này chỉ ghi nhận hiện trạng và đường nâng cấp — không sửa code trong lần cập nhật này.)*
 
 ---
 
