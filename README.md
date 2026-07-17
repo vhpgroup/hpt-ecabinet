@@ -39,10 +39,14 @@ Hệ thống phòng họp không giấy đầy đủ chức năng theo mô hình
 - Quản lý **người dùng** + phân quyền **5 vai trò**: Quản trị hệ thống / Chủ trì / Thư ký / Thành viên dự họp / **Quản trị đơn vị**
 - **Quản trị đơn vị** (unit_admin): quản lý người dùng **trong phạm vi đơn vị mình** (tạo/sửa/khóa – mở), không xóa tài khoản, không đụng vai trò/tài khoản Quản trị hệ thống, không đổi đơn vị của mình — siết chặt phía máy chủ (đọc đơn vị từ CSDL, không tin dữ liệu gửi lên)
 - Quản lý **đơn vị**, **phòng họp** (thiết bị, sức chứa, **sơ đồ phòng họp** cấu hình được)
-- **Nhật ký hệ thống** (audit log) lưu vết mọi thao tác
+- **Quản trị danh mục** (E-HSMT mục 6, 7, 10): danh mục **chức vụ / loại phiên họp / cơ quan ban hành** — CRUD, bật-tắt, sắp thứ tự; gắn thẳng vào nghiệp vụ (chức vụ người dùng, loại phiên họp trên lịch/danh sách, cơ quan ban hành trên tài liệu)
+- **Tài liệu hướng dẫn sử dụng** (E-HSMT mục 4): admin soạn nội dung/tải tệp, giới hạn theo vai trò; người dùng xem HDSD dành cho vai trò mình tại menu **Hướng dẫn sử dụng**
+- **Nhật ký hệ thống** (audit log) lưu vết mọi thao tác — lọc theo **tài khoản** + **khoảng thời gian**, admin **xóa nhật ký** (E-HSMT mục 3)
 - **Báo cáo thống kê**: số phiên họp theo tháng, tỷ lệ tham dự, lượt biểu quyết, nhiệm vụ, ước tính giấy/chi phí tiết kiệm
 
 ### Khác
+- **Thư mục tài liệu cá nhân** (E-HSMT mục 14); view **"Đơn vị tôi chuẩn bị tài liệu"** kèm trạng thái duyệt (mục 23)
+- Trong phòng họp: **đếm ngược thời gian còn lại** của mục chương trình (mục 27); chủ tọa xem **đại biểu đã/chưa biểu quyết** (mục 42); **xuất CSV** danh sách điểm danh (mục 36) và ý kiến tài liệu (mục 31)
 - Trung tâm **thông báo** trong ứng dụng (giấy mời, biểu quyết, nhiệm vụ, tài liệu chia sẻ)
 - **PWA**: cài biểu tượng lên máy tính/máy tính bảng, service worker cache
 - **Mô phỏng thời gian thực**: khi vào phòng họp trực tiếp, các đại biểu khác tự động điểm danh, biểu quyết, nhắn tin (demo sinh động; giai đoạn 2 thay bằng WebSocket)

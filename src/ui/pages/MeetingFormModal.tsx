@@ -6,6 +6,7 @@ import type { AgendaItem, Meeting } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
 import { Field, Icon, Modal } from '../components';
 import * as meetingService from '../../services/meetingService';
+import { catalogNames } from '../../services/catalogService';
 import { fromLocalInput, toLocalInput } from '../format';
 
 interface Props { initial?: Meeting; onClose: () => void; onSaved: (id: string) => void }
@@ -17,7 +18,9 @@ export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
   const defStart = new Date(Date.now() + 24 * 3600e3); defStart.setHours(8, 0, 0, 0);
   const defEnd = new Date(defStart); defEnd.setHours(11, 30);
 
+  const meetingTypes = catalogNames(s.catalogs, 'meetingType');
   const [title, setTitle] = useState(initial?.title ?? '');
+  const [meetingType, setMeetingType] = useState(initial?.meetingType ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
   const [start, setStart] = useState(toLocalInput(initial?.startTime ?? defStart.toISOString()));
   const [end, setEnd] = useState(toLocalInput(initial?.endTime ?? defEnd.toISOString()));
@@ -61,6 +64,7 @@ export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
         title: title.trim(), description: description.trim(),
         startTime: fromLocalInput(start), endTime: fromLocalInput(end),
         roomId, isOnline, chairId, secretaryId, memberIds, guestIds, agenda: cleanAgenda,
+        meetingType: meetingType.trim() || undefined,
       });
       await refresh();
       toast(initial ? 'Đã cập nhật phiên họp' : 'Đã tạo phiên họp (bản nháp)');
@@ -77,9 +81,23 @@ export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
         <button className="btn outline" onClick={onClose}>Hủy</button>
         <button className="btn" onClick={save}><Icon name="check" size={15} />{initial ? 'Lưu thay đổi' : 'Tạo phiên họp'}</button>
       </>}>
-      <Field label="Tên phiên họp" required>
-        <input className="inp" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="VD: Phiên họp thường kỳ UBND tỉnh tháng 8/2026" />
-      </Field>
+      <div className="form-row">
+        <Field label="Tên phiên họp" required>
+          <input className="inp" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="VD: Phiên họp thường kỳ UBND tỉnh tháng 8/2026" />
+        </Field>
+        <Field label="Loại phiên họp">
+          {meetingTypes.length > 0 ? (
+            <select className="sel" value={meetingType} onChange={(e) => setMeetingType(e.target.value)}>
+              <option value="">— Chưa phân loại —</option>
+              {/* giữ giá trị cũ nếu không còn trong danh mục (tương thích) */}
+              {meetingType && !meetingTypes.includes(meetingType) && <option value={meetingType}>{meetingType}</option>}
+              {meetingTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          ) : (
+            <input className="inp" placeholder="Nhập loại (danh mục trống)" value={meetingType} onChange={(e) => setMeetingType(e.target.value)} />
+          )}
+        </Field>
+      </div>
       <Field label="Mô tả / nội dung chính">
         <textarea className="ta" value={description} onChange={(e) => setDescription(e.target.value)} />
       </Field>

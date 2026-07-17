@@ -39,7 +39,7 @@ async function notifyNewMeetingDoc(actor: User, doc: DocFile) {
 
 export async function addTextDocument(
   actor: User, name: string, content: string, kind: DocKind,
-  opts: { meetingId?: string | null; agendaItemId?: string | null; secret?: boolean } = {},
+  opts: { meetingId?: string | null; agendaItemId?: string | null; secret?: boolean; issuingBody?: string; folder?: string } = {},
 ): Promise<DocFile> {
   const doc: DocFile = {
     id: uid(), name: name.endsWith('.pdf') || name.includes('.') ? name : name + '.pdf',
@@ -47,6 +47,7 @@ export async function addTextDocument(
     ownerId: actor.id, sharedWith: [], size: content.length * 2, mime: 'application/pdf',
     content, uploadedAt: nowIso(), secret: opts.secret ?? false, version: 1,
     reviewStatus: defaultReviewStatus(actor, kind),
+    issuingBody: opts.issuingBody, folder: opts.folder,
   };
   await db.documents.create(doc);
   await audit(actor, 'Thêm tài liệu', `Thêm "${doc.name}"`);
@@ -57,7 +58,7 @@ export async function addTextDocument(
 
 export async function addFileDocument(
   actor: User, file: File, kind: DocKind,
-  opts: { meetingId?: string | null; agendaItemId?: string | null; secret?: boolean } = {},
+  opts: { meetingId?: string | null; agendaItemId?: string | null; secret?: boolean; issuingBody?: string; folder?: string } = {},
 ): Promise<DocFile> {
   if (file.size > MAX_UPLOAD) {
     throw new Error(`Tệp vượt giới hạn ${MAX_UPLOAD_LABEL}`);
@@ -74,11 +75,21 @@ export async function addFileDocument(
     ownerId: actor.id, sharedWith: [], size: file.size, mime: file.type || 'application/octet-stream',
     dataUrl, uploadedAt: nowIso(), secret: opts.secret ?? false, version: 1,
     reviewStatus: defaultReviewStatus(actor, kind),
+    issuingBody: opts.issuingBody, folder: opts.folder,
   };
   await db.documents.create(doc);
   await audit(actor, 'Tải lên tài liệu', `Tải lên "${doc.name}" (${Math.round(file.size / 1024)} KB)`);
   if (doc.reviewStatus === 'approved') await notifyNewMeetingDoc(actor, doc);
   return doc;
+}
+
+/**
+ * Đặt/đổi thư mục cho tài liệu cá nhân (E-HSMT mục 14). folder trống = bỏ khỏi thư mục.
+ * Chỉ chủ sở hữu thao tác (ACL server: documents update 'ownerOrManage').
+ */
+export async function setDocFolder(actor: User, docId: string, folder: string) {
+  await db.documents.update(docId, { folder: folder.trim() || undefined });
+  await audit(actor, 'Cập nhật thư mục tài liệu', `Chuyển tài liệu vào thư mục "${folder.trim() || '(bỏ thư mục)'}"`);
 }
 
 export async function shareDocument(actor: User, docId: string, userIds: string[]) {

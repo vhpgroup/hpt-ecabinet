@@ -26,6 +26,7 @@ interface AppCtxType {
 const emptySnapshot: Snapshot = {
   users: [], units: [], rooms: [], meetings: [], documents: [], annotations: [],
   votes: [], speakRequests: [], questions: [], messages: [], tasks: [], notifications: [], audit: [],
+  catalogs: [], guides: [], // ĐỢT 3
 };
 
 const Ctx = createContext<AppCtxType>(null as unknown as AppCtxType);
@@ -40,13 +41,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const tid = useRef(1);
 
   const refresh = useCallback(async () => {
-    const [users, units, rooms, meetings, documents, annotations, votes, speakRequests, questions, messages, tasks, notifications, audit] =
+    const [users, units, rooms, meetings, documents, annotations, votes, speakRequests, questions, messages, tasks, notifications, audit, catalogs, guides] =
       await Promise.all([
         db.users.list(), db.units.list(), db.rooms.list(), db.meetings.list(),
         db.documents.list(), db.annotations.list(), db.votes.list(), db.speakRequests.list(),
         db.questions.list(), db.messages.list(), db.tasks.list(), db.notifications.list(), db.audit.list(),
+        db.catalogs.list(), db.guides.list(), // ĐỢT 3
       ]);
-    setS({ users, units, rooms, meetings, documents, annotations, votes, speakRequests, questions, messages, tasks, notifications, audit });
+    setS({ users, units, rooms, meetings, documents, annotations, votes, speakRequests, questions, messages, tasks, notifications, audit, catalogs, guides });
   }, []);
 
   useEffect(() => {

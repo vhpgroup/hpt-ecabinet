@@ -12,8 +12,9 @@ import { can } from '../../services/authService';
 import * as meetingService from '../../services/meetingService';
 import * as voteService from '../../services/voteService';
 import * as documentService from '../../services/documentService';
+import * as catalogService from '../../services/catalogService';
 import * as taskService from '../../services/taskService';
-import { fmtDate, fmtDT, fmtTime, indexBy, initials, timeAgo, toLocalInput, fromLocalInput } from '../format';
+import { downloadTextFile, fmtDate, fmtDT, fmtTime, indexBy, initials, timeAgo, toCsv, toLocalInput, fromLocalInput } from '../format';
 import MeetingFormModal from './MeetingFormModal';
 import { DocReviewControls, DocRow, DocViewerModal } from './shared';
 
@@ -166,6 +167,7 @@ function InfoTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
   const docById = indexBy(s.documents);
   const rows: [string, React.ReactNode][] = [
     ['Thời gian', `${fmtDT(m.startTime)} → ${fmtTime(m.endTime)}`],
+    ['Loại phiên họp', m.meetingType ? <Badge color="blue">{m.meetingType}</Badge> : '—'],
     ['Địa điểm', `${rooms.get(m.roomId)?.name ?? '—'} — ${rooms.get(m.roomId)?.location ?? ''}`],
     ['Hình thức', m.isOnline ? 'Trực tiếp kết hợp trực tuyến' : 'Trực tiếp'],
     ['Chủ trì', `${users.get(m.chairId)?.fullName ?? '—'} — ${users.get(m.chairId)?.title ?? ''}`],
@@ -221,9 +223,18 @@ function InfoTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
 
 // ---------------- Tab: Đại biểu ----------------
 function PeopleTab({ m, onQr }: { m: Meeting; onQr: () => void }) {
-  const { s } = useApp();
+  const { s, toast } = useApp();
   const users = indexBy(s.users);
   const units = indexBy(s.units);
+
+  // E-HSMT mục 36: xuất danh sách điểm danh ra CSV (client-side)
+  const exportAttendance = () => {
+    const { headers, rows } = meetingService.buildAttendanceRows(m, users, units);
+    const csv = toCsv(headers, rows);
+    downloadTextFile(`diemdanh_${m.code.replace(/[^\p{L}\p{N}._-]+/gu, '_')}.csv`, csv);
+    toast('Đã xuất danh sách điểm danh (CSV)');
+  };
+
   const stats = {
     accepted: m.participants.filter((p) => p.attendStatus === 'accepted').length,
     declined: m.participants.filter((p) => p.attendStatus === 'declined').length,
@@ -240,6 +251,7 @@ function PeopleTab({ m, onQr }: { m: Meeting; onQr: () => void }) {
         <Badge color="amber">Chờ xác nhận: {stats.pending}</Badge>
         <Badge color="navy">Đã điểm danh: {stats.present}/{m.participants.length}</Badge>
         <span style={{ flex: 1 }} />
+        <button className="btn outline sm" onClick={exportAttendance}><Icon name="download" size={14} />Xuất DS điểm danh</button>
         <button className="btn outline sm" onClick={onQr}><Icon name="qr" size={14} />Mã QR điểm danh</button>
       </div>
       <div className="tbl-wrap">
@@ -429,7 +441,8 @@ function DocsTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
 }
 
 function UploadModal({ m, onClose, onDone }: { m: Meeting; onClose: () => void; onDone: () => void }) {
-  const { user } = useApp();
+  const { user, s } = useApp();
+  const issuingBodies = catalogService.catalogNames(s.catalogs, 'issuingBody');
   const [kind, setKind] = useState<'main' | 'reference'>('main');
   const [agendaItemId, setAgendaItemId] = useState(m.agenda[0]?.id ?? '');
   const [mode, setMode] = useState<'file' | 'text'>('file');
@@ -437,6 +450,7 @@ function UploadModal({ m, onClose, onDone }: { m: Meeting; onClose: () => void; 
   const [content, setContent] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [secret, setSecret] = useState(false);
+  const [issuingBody, setIssuingBody] = useState('');
   const [err, setErr] = useState('');
 
   const submit = async () => {
@@ -444,7 +458,7 @@ function UploadModal({ m, onClose, onDone }: { m: Meeting; onClose: () => void; 
     setErr('');
     try {
       let doc: DocFile;
-      const opts = { meetingId: m.id, agendaItemId: kind === 'main' ? agendaItemId : null, secret };
+      const opts = { meetingId: m.id, agendaItemId: kind === 'main' ? agendaItemId : null, secret, issuingBody: issuingBody.trim() || undefined };
       if (mode === 'file') {
         if (!file) return setErr('Chọn tệp cần tải lên');
         doc = await documentService.addFileDocument(user, file, kind, opts);
@@ -495,6 +509,17 @@ function UploadModal({ m, onClose, onDone }: { m: Meeting; onClose: () => void; 
           <Field label="Nội dung"><textarea className="ta" style={{ minHeight: 140 }} value={content} onChange={(e) => setContent(e.target.value)} /></Field>
         </>
       )}
+      <Field label="Cơ quan ban hành">
+        {issuingBodies.length > 0 ? (
+          <select className="sel" value={issuingBody} onChange={(e) => setIssuingBody(e.target.value)}>
+            <option value="">— Không xác định —</option>
+            {issuingBody && !issuingBodies.includes(issuingBody) && <option value={issuingBody}>{issuingBody}</option>}
+            {issuingBodies.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+        ) : (
+          <input className="inp" placeholder="Nhập cơ quan ban hành (danh mục trống)" value={issuingBody} onChange={(e) => setIssuingBody(e.target.value)} />
+        )}
+      </Field>
       <label className="checkline"><input type="checkbox" checked={secret} onChange={(e) => setSecret(e.target.checked)} />Tài liệu mật (chỉ đại biểu phiên họp)</label>
     </Modal>
   );
@@ -550,6 +575,22 @@ export function VoteCard({ v, chairCtl, act, onViewDoc, usersMap, compact }: {
   const isPoll = v.kind === 'poll';
   const outcome = voteService.voteOutcome(v);
 
+  // E-HSMT mục 42: "Xem đại biểu sẵn sàng biểu quyết" — khi đang mở & là chủ tọa,
+  // hiển thị AI ĐÃ / CHƯA biểu quyết (KHÔNG lộ chọn gì). Với phiếu kín: chỉ dựa vào
+  // việc có bỏ phiếu hay không (userId của ballot), không đọc optionId -> không lộ nội dung.
+  const readyPanel = chairCtl && v.status === 'open' ? (() => {
+    // tập userId đã bỏ phiếu (một số ballot phiếu kín có thể bị ẩn userId với người thường,
+    // nhưng chủ tọa/quản lý vẫn thấy userId theo access.js projectVote)
+    const votedIds = new Set(v.ballots.map((b) => b.userId).filter(Boolean) as string[]);
+    const votedCount = votedIds.size;
+    // nếu số ballot > số userId thấy được (phiếu kín ẩn danh với người xem) -> dùng số ballot
+    const doneCount = Math.max(votedCount, v.ballots.length);
+    const notYet = v.eligibleIds.filter((id) => !votedIds.has(id));
+    // chỉ liệt kê tên khi biết chắc ai chưa bỏ (votedIds phản ánh đúng số ballot)
+    const canListNames = votedCount === v.ballots.length;
+    return { doneCount, total: v.eligibleIds.length, notYet, canListNames };
+  })() : null;
+
   return (
     <div className="card card-pad">
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -599,6 +640,31 @@ export function VoteCard({ v, chairCtl, act, onViewDoc, usersMap, compact }: {
         <p style={{ fontSize: 12.5, marginTop: 10, color: 'var(--green)', fontWeight: 600 }}>
           ✓ Bạn đã biểu quyết: {v.options.find((o) => o.id === myBallot.optionId)?.label} · {fmtTime(myBallot.castAt)}
         </p>
+      )}
+
+      {/* E-HSMT mục 42 — trạng thái sẵn sàng biểu quyết (chỉ chủ tọa, khi đang mở) */}
+      {readyPanel && (
+        <div style={{ marginTop: 12, background: '#f4f8fd', border: '1px solid #d7e5f5', borderRadius: 11, padding: '10px 14px' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Icon name="check" size={15} />
+            <b style={{ fontSize: 13 }}>Đã biểu quyết {readyPanel.doneCount}/{readyPanel.total}</b>
+            {v.secret && <Badge color="gold">Phiếu kín — chỉ hiện đã/chưa</Badge>}
+          </div>
+          {readyPanel.notYet.length > 0 ? (
+            readyPanel.canListNames ? (
+              <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6 }}>
+                Chưa biểu quyết ({readyPanel.notYet.length}):{' '}
+                {readyPanel.notYet.map((id) => usersMap.get(id)?.fullName ?? id).join(', ')}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6 }}>
+                Còn {readyPanel.notYet.length} đại biểu chưa biểu quyết.
+              </div>
+            )
+          ) : (
+            <div style={{ fontSize: 12.5, color: 'var(--green)', marginTop: 6 }}>Tất cả đại biểu đã biểu quyết.</div>
+          )}
+        </div>
       )}
 
       {showResults && (

@@ -14,9 +14,12 @@ import DocumentsPage from './ui/pages/DocumentsPage';
 import PollsPage from './ui/pages/PollsPage';
 import TasksPage from './ui/pages/TasksPage';
 import NotificationsPage from './ui/pages/NotificationsPage';
+import HelpPage from './ui/pages/HelpPage';
 import UsersAdminPage from './ui/pages/admin/UsersAdminPage';
 import UnitsAdminPage from './ui/pages/admin/UnitsAdminPage';
 import RoomsAdminPage from './ui/pages/admin/RoomsAdminPage';
+import CatalogsAdminPage from './ui/pages/admin/CatalogsAdminPage';
+import GuidesAdminPage from './ui/pages/admin/GuidesAdminPage';
 import AuditLogPage from './ui/pages/admin/AuditLogPage';
 import ReportsPage from './ui/pages/admin/ReportsPage';
 
@@ -73,9 +76,12 @@ export default function App() {
         <Route path="/polls" element={<PollsPage />} />
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
+        <Route path="/help" element={<HelpPage />} />
         <Route path="/admin/users" element={<RequireUserAdmin><UsersAdminPage /></RequireUserAdmin>} />
         <Route path="/admin/units" element={<RequireAdmin><UnitsAdminPage /></RequireAdmin>} />
         <Route path="/admin/rooms" element={<RequireAdmin><RoomsAdminPage /></RequireAdmin>} />
+        <Route path="/admin/catalogs" element={<RequireAdmin><CatalogsAdminPage /></RequireAdmin>} />
+        <Route path="/admin/guides" element={<RequireAdmin><GuidesAdminPage /></RequireAdmin>} />
         <Route path="/admin/audit" element={<RequireAdmin><AuditLogPage /></RequireAdmin>} />
         <Route path="/admin/reports" element={<RequireAdmin><ReportsPage /></RequireAdmin>} />
       </Route>

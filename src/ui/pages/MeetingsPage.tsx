@@ -83,6 +83,7 @@ export default function MeetingsPage() {
                 </div>
               </div>
               <div className="m-side">
+                {m.meetingType && <Badge color="blue">{m.meetingType}</Badge>}
                 <Badge color={st.color}>{st.label}</Badge>
                 {m.status === 'live' && (
                   <button className="btn success sm" onClick={(e) => { e.stopPropagation(); nav(`/meetings/${m.id}/live`); }}>

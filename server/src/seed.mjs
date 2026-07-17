@@ -23,10 +23,10 @@ function buildSeed() {
   const P = "123456";
   const users = [
     { id: "u-admin", username: "quantri", password: P, fullName: "\u0110\u1ED7 Quang Tr\u1ECB", title: "Chuy\xEAn vi\xEAn CNTT \u2014 Qu\u1EA3n tr\u1ECB h\u1EC7 th\u1ED1ng", unitId: "un-vp", role: "admin", email: "quantri@tinh.gov.vn", phone: "0912 000 001", avatarColor: "#334155", status: "active" },
-    { id: "u-ct", username: "chutich", password: P, fullName: "Tr\u1EA7n \u0110\u1EA1i Ngh\u0129a", title: "Ch\u1EE7 t\u1ECBch UBND t\u1EC9nh", unitId: "un-vp", role: "chairman", email: "chutich@tinh.gov.vn", phone: "0912 000 002", avatarColor: "#0f4c92", status: "active" },
-    { id: "u-pct", username: "phochutich", password: P, fullName: "L\xEA Minh Khu\xEA", title: "Ph\xF3 Ch\u1EE7 t\u1ECBch UBND t\u1EC9nh", unitId: "un-vp", role: "chairman", email: "phochutich@tinh.gov.vn", phone: "0912 000 003", avatarColor: "#0e7490", status: "active" },
-    { id: "u-tk", username: "thuky", password: P, fullName: "Ph\u1EA1m V\u0103n Th\u01B0", title: "Ch\xE1nh V\u0103n ph\xF2ng UBND t\u1EC9nh", unitId: "un-vp", role: "secretary", email: "thuky@tinh.gov.vn", phone: "0912 000 004", avatarColor: "#7c3aed", status: "active" },
-    { id: "u-khdt", username: "sokhdt", password: P, fullName: "Nguy\u1EC5n Ho\xE0i An", title: "Gi\xE1m \u0111\u1ED1c S\u1EDF K\u1EBF ho\u1EA1ch v\xE0 \u0110\u1EA7u t\u01B0", unitId: "un-khdt", role: "delegate", email: "an.nh@tinh.gov.vn", phone: "0912 000 005", avatarColor: "#1d9e5f", status: "active" },
+    { id: "u-ct", username: "chutich", password: P, fullName: "Tr\u1EA7n \u0110\u1EA1i Ngh\u0129a", title: "Ch\u1EE7 t\u1ECBch UBND t\u1EC9nh", unitId: "un-vp", role: "chairman", email: "chutich@tinh.gov.vn", phone: "0912 000 002", avatarColor: "#0f4c92", status: "active", position: "Ch\u1EE7 t\u1ECBch" },
+    { id: "u-pct", username: "phochutich", password: P, fullName: "L\xEA Minh Khu\xEA", title: "Ph\xF3 Ch\u1EE7 t\u1ECBch UBND t\u1EC9nh", unitId: "un-vp", role: "chairman", email: "phochutich@tinh.gov.vn", phone: "0912 000 003", avatarColor: "#0e7490", status: "active", position: "Ph\xF3 Ch\u1EE7 t\u1ECBch" },
+    { id: "u-tk", username: "thuky", password: P, fullName: "Ph\u1EA1m V\u0103n Th\u01B0", title: "Ch\xE1nh V\u0103n ph\xF2ng UBND t\u1EC9nh", unitId: "un-vp", role: "secretary", email: "thuky@tinh.gov.vn", phone: "0912 000 004", avatarColor: "#7c3aed", status: "active", position: "Ch\xE1nh V\u0103n ph\xF2ng" },
+    { id: "u-khdt", username: "sokhdt", password: P, fullName: "Nguy\u1EC5n Ho\xE0i An", title: "Gi\xE1m \u0111\u1ED1c S\u1EDF K\u1EBF ho\u1EA1ch v\xE0 \u0110\u1EA7u t\u01B0", unitId: "un-khdt", role: "delegate", email: "an.nh@tinh.gov.vn", phone: "0912 000 005", avatarColor: "#1d9e5f", status: "active", position: "Gi\xE1m \u0111\u1ED1c S\u1EDF" },
     { id: "u-tc", username: "sotc", password: P, fullName: "V\u0169 Th\u1ECB H\u1ED3ng", title: "Gi\xE1m \u0111\u1ED1c S\u1EDF T\xE0i ch\xEDnh", unitId: "un-tc", role: "delegate", email: "hong.vt@tinh.gov.vn", phone: "0912 000 006", avatarColor: "#d97706", status: "active" },
     { id: "u-xd", username: "soxd", password: P, fullName: "\u0110\u1EB7ng Qu\u1ED1c B\u1EA3o", title: "Gi\xE1m \u0111\u1ED1c S\u1EDF X\xE2y d\u1EF1ng", unitId: "un-xd", role: "delegate", email: "bao.dq@tinh.gov.vn", phone: "0912 000 007", avatarColor: "#b45309", status: "active" },
     { id: "u-pxd", username: "phosoxd", password: P, fullName: "Tr\u1EA7n Th\u1ECB Lan Anh", title: "Ph\xF3 Gi\xE1m \u0111\u1ED1c S\u1EDF X\xE2y d\u1EF1ng", unitId: "un-xd", role: "delegate", email: "lananh.tt@tinh.gov.vn", phone: "0912 000 008", avatarColor: "#be185d", status: "active" },
@@ -184,11 +184,11 @@ Ch\u01B0\u01A1ng IV. Tr\xE1ch nhi\u1EC7m c\u1EE7a th\u1EE7 tr\u01B0\u1EDFng c\u0
     ...opts
   });
   const documents = [
-    D("d1", "B\xE1o c\xE1o KT-XH 6 th\xE1ng \u0111\u1EA7u n\u0103m 2026.pdf", "main", "u-khdt", docText.ktxh, { meetingId: "m1", agendaItemId: "a1" }),
-    D("d2", "Ph\u1EE5 l\u1EE5c s\u1ED1 li\u1EC7u KT-XH.pdf", "main", "u-khdt", docText.phuluc, { meetingId: "m1", agendaItemId: "a1" }),
-    D("d3", "T\u1EDD tr\xECnh ph\xE2n b\u1ED5 v\u1ED1n \u0111\u1EA7u t\u01B0 c\xF4ng \u0111\u1EE3t 2.pdf", "main", "u-tc", docText.totrinh, { meetingId: "m1", agendaItemId: "a2" }),
+    D("d1", "B\xE1o c\xE1o KT-XH 6 th\xE1ng \u0111\u1EA7u n\u0103m 2026.pdf", "main", "u-khdt", docText.ktxh, { meetingId: "m1", agendaItemId: "a1", issuingBody: "S\u1EDF K\u1EBF ho\u1EA1ch v\xE0 \u0110\u1EA7u t\u01B0" }),
+    D("d2", "Ph\u1EE5 l\u1EE5c s\u1ED1 li\u1EC7u KT-XH.pdf", "main", "u-khdt", docText.phuluc, { meetingId: "m1", agendaItemId: "a1", issuingBody: "S\u1EDF K\u1EBF ho\u1EA1ch v\xE0 \u0110\u1EA7u t\u01B0" }),
+    D("d3", "T\u1EDD tr\xECnh ph\xE2n b\u1ED5 v\u1ED1n \u0111\u1EA7u t\u01B0 c\xF4ng \u0111\u1EE3t 2.pdf", "main", "u-tc", docText.totrinh, { meetingId: "m1", agendaItemId: "a2", issuingBody: "S\u1EDF T\xE0i ch\xEDnh" }),
     D("d4", "B\xE1o c\xE1o ti\u1EBFn \u0111\u1ED9 \u0111\u01B0\u1EDDng v\xE0nh \u0111ai ph\xEDa \u0110\xF4ng.pdf", "main", "u-gtvt", docText.vanhdai, { meetingId: "m1", agendaItemId: "a3" }),
-    D("d5", "D\u1EF1 th\u1EA3o Ngh\u1ECB quy\u1EBFt phi\xEAn h\u1ECDp th\xE1ng 7.pdf", "main", "u-tk", docText.nghiquyet, { meetingId: "m1", agendaItemId: "a4", version: 2 }),
+    D("d5", "D\u1EF1 th\u1EA3o Ngh\u1ECB quy\u1EBFt phi\xEAn h\u1ECDp th\xE1ng 7.pdf", "main", "u-tk", docText.nghiquyet, { meetingId: "m1", agendaItemId: "a4", version: 2, issuingBody: "V\u0103n ph\xF2ng UBND" }),
     D("d-ref1", "Quy ch\u1EBF l\xE0m vi\u1EC7c c\u1EE7a UBND t\u1EC9nh.pdf", "reference", "u-tk", docText.quyche, { meetingId: "m1" }),
     D("d-ref2", "Ch\u1EC9 th\u1ECB 05/CT-TTg v\u1EC1 gi\u1EA3i ng\xE2n \u0110TC.pdf", "reference", "u-tk", docText.chithi, { meetingId: "m1", secret: true }),
     D("d6", "B\xE1o c\xE1o gi\u1EA3i ng\xE2n v\u1ED1n \u0111\u1EA7u t\u01B0 c\xF4ng.pdf", "main", "u-khdt", docText.giaingan, { meetingId: "m2", agendaItemId: "a2-1" }),
@@ -201,8 +201,8 @@ Ch\u01B0\u01A1ng IV. Tr\xE1ch nhi\u1EC7m c\u1EE7a th\u1EE7 tr\u01B0\u1EDFng c\u0
     D("d11", "T\u1EDD tr\xECnh ph\u01B0\u01A1ng \xE1n \u0111i\u1EC1u chuy\u1EC3n 120 t\u1EF7 v\u1ED1n \u0111\u1EA7u t\u01B0 c\xF4ng.pdf", "main", "u-tc", docText.totrinh, { meetingId: "m2", agendaItemId: "a2-2", reviewStatus: "pending" }),
     // 1 tài liệu BỊ TỪ CHỐI (yêu cầu làm lại) — kèm lý do
     D("d12", "B\xE1o c\xE1o b\u1ED5 sung ti\u1EBFn \u0111\u1ED9 gi\u1EA3i ng\xE2n (b\u1EA3n 1).pdf", "main", "u-gtvt", docText.giaingan, { meetingId: "m2", agendaItemId: "a2-1", reviewStatus: "rejected", reviewNote: "Thi\u1EBFu s\u1ED1 li\u1EC7u gi\u1EA3i ng\xE2n chi ti\u1EBFt theo t\u1EEBng ch\u1EE7 \u0111\u1EA7u t\u01B0; \u0111\u1EC1 ngh\u1ECB b\u1ED5 sung ph\u1EE5 l\u1EE5c v\xE0 tr\xECnh l\u1EA1i.", reviewedById: "u-tk", reviewedAt: iso(minAgo(60 * 3)) }),
-    D("d-p1", "Ghi ch\xFA chu\u1EA9n b\u1ECB \xFD ki\u1EBFn ch\u1EC9 \u0111\u1EA1o.docx", "personal", "u-ct", docText.ghichu, { sharedWith: ["u-tk"], mime: "application/msword" }),
-    D("d-p2", "Danh s\xE1ch c\xF4ng vi\u1EC7c chu\u1EA9n b\u1ECB phi\xEAn h\u1ECDp.docx", "personal", "u-tk", docText.dscv, { mime: "application/msword" })
+    D("d-p1", "Ghi ch\xFA chu\u1EA9n b\u1ECB \xFD ki\u1EBFn ch\u1EC9 \u0111\u1EA1o.docx", "personal", "u-ct", docText.ghichu, { sharedWith: ["u-tk"], mime: "application/msword", folder: "Ch\u1EC9 \u0111\u1EA1o \u0111i\u1EC1u h\xE0nh" }),
+    D("d-p2", "Danh s\xE1ch c\xF4ng vi\u1EC7c chu\u1EA9n b\u1ECB phi\xEAn h\u1ECDp.docx", "personal", "u-tk", docText.dscv, { mime: "application/msword", folder: "Chu\u1EA9n b\u1ECB h\u1ECDp" })
   ];
   const pAccepted = (userId, meetingRole, seat, checkedIn = true) => ({
     userId,
@@ -217,6 +217,7 @@ Ch\u01B0\u01A1ng IV. Tr\xE1ch nhi\u1EC7m c\u1EE7a th\u1EE7 tr\u01B0\u1EDFng c\u0
       code: "PH-2026/07-01",
       title: "Phi\xEAn h\u1ECDp th\u01B0\u1EDDng k\u1EF3 UBND t\u1EC9nh th\xE1ng 7/2026",
       description: "\u0110\xE1nh gi\xE1 t\xECnh h\xECnh KT-XH 6 th\xE1ng \u0111\u1EA7u n\u0103m 2026; ph\xE2n b\u1ED5 v\u1ED1n \u0111\u1EA7u t\u01B0 c\xF4ng \u0111\u1EE3t 2; ti\u1EBFn \u0111\u1ED9 d\u1EF1 \xE1n tr\u1ECDng \u0111i\u1EC3m; th\xF4ng qua Ngh\u1ECB quy\u1EBFt phi\xEAn h\u1ECDp.",
+      meetingType: "H\u1ECDp th\u01B0\u1EDDng k\u1EF3",
       startTime: iso(minAgo(30)),
       endTime: iso(minFromNow(90)),
       roomId: "r1",
@@ -255,6 +256,8 @@ Ch\u01B0\u01A1ng IV. Tr\xE1ch nhi\u1EC7m c\u1EE7a th\u1EE7 tr\u01B0\u1EDFng c\u0
         { id: "a4", order: 4, title: "Th\u1EA3o lu\u1EADn, bi\u1EC3u quy\u1EBFt th\xF4ng qua d\u1EF1 th\u1EA3o Ngh\u1ECB quy\u1EBFt phi\xEAn h\u1ECDp", presenterId: "u-tk", durationMinutes: 15, documentIds: ["d5"] }
       ],
       currentAgendaItemId: "a2",
+      // Mốc bắt đầu mục a2 (E-HSMT mục 27): 10 phút trước -> đếm ngược còn ~20 phút / 30 phút
+      currentItemStartedAt: iso(minAgo(10)),
       // Phiên chất vấn đang mở để demo nghiệp vụ (E-HSMT mục 34/45/46)
       questionSession: "open",
       conclusions: [
@@ -270,6 +273,7 @@ Ch\u01B0\u01A1ng IV. Tr\xE1ch nhi\u1EC7m c\u1EE7a th\u1EE7 tr\u01B0\u1EDFng c\u0
       code: "PH-2026/07-02",
       title: "H\u1ECDp chuy\xEAn \u0111\u1EC1 v\u1EC1 gi\u1EA3i ng\xE2n v\u1ED1n \u0111\u1EA7u t\u01B0 c\xF4ng n\u0103m 2026",
       description: "R\xE0 so\xE1t ti\u1EBFn \u0111\u1ED9 gi\u1EA3i ng\xE2n c\u1EE7a c\xE1c ch\u1EE7 \u0111\u1EA7u t\u01B0; ph\u01B0\u01A1ng \xE1n \u0111i\u1EC1u chuy\u1EC3n v\u1ED1n c\xE1c d\u1EF1 \xE1n ch\u1EADm ti\u1EBFn \u0111\u1ED9.",
+      meetingType: "H\u1ECDp chuy\xEAn \u0111\u1EC1",
       startTime: iso(dayAt(2, 8, 0)),
       endTime: iso(dayAt(2, 11, 30)),
       roomId: "r1",
@@ -642,12 +646,67 @@ Bi\xEAn b\u1EA3n \u0111\u01B0\u1EE3c l\u1EADp v\xE0 k\xFD s\u1ED1 tr\xEAn H\u1EC
     { id: "au6", userId: "u-ct", userName: "Tr\u1EA7n \u0110\u1EA1i Ngh\u0129a", action: "K\xFD s\u1ED1 bi\xEAn b\u1EA3n", detail: "K\xFD s\u1ED1 bi\xEAn b\u1EA3n phi\xEAn h\u1ECDp th\xE1ng 6/2026 (serial VN-DEMO-CA:5402)", at: iso(dayAt(-18, 11, 28)) },
     { id: "au7", userId: "u-admin", userName: "\u0110\u1ED7 Quang Tr\u1ECB", action: "\u0110\u0103ng nh\u1EADp", detail: "\u0110\u0103ng nh\u1EADp h\u1EC7 th\u1ED1ng t\u1EEB \u0111\u1ECBa ch\u1EC9 10.0.12.5", at: iso(minAgo(60 * 2)) }
   ];
+  const cat = (id, type, name, order, description = "") => ({
+    id,
+    type,
+    name,
+    order,
+    active: true,
+    description,
+    createdAt: iso(minAgo(60 * 24 * 20))
+  });
+  const catalogs = [
+    // Chức vụ (mục 6)
+    cat("cat-pos-1", "position", "Ch\u1EE7 t\u1ECBch", 1),
+    cat("cat-pos-2", "position", "Ph\xF3 Ch\u1EE7 t\u1ECBch", 2),
+    cat("cat-pos-3", "position", "Ch\xE1nh V\u0103n ph\xF2ng", 3),
+    cat("cat-pos-4", "position", "Gi\xE1m \u0111\u1ED1c S\u1EDF", 4),
+    cat("cat-pos-5", "position", "Chuy\xEAn vi\xEAn", 5),
+    // Loại phiên họp (mục 7)
+    cat("cat-mt-1", "meetingType", "H\u1ECDp th\u01B0\u1EDDng k\u1EF3", 1),
+    cat("cat-mt-2", "meetingType", "H\u1ECDp chuy\xEAn \u0111\u1EC1", 2),
+    cat("cat-mt-3", "meetingType", "H\u1ECDp \u0111\u1ED9t xu\u1EA5t", 3),
+    cat("cat-mt-4", "meetingType", "H\u1ECDp tr\u1EF1c tuy\u1EBFn", 4),
+    // Cơ quan ban hành (mục 10)
+    cat("cat-ib-1", "issuingBody", "UBND t\u1EC9nh", 1),
+    cat("cat-ib-2", "issuingBody", "V\u0103n ph\xF2ng UBND", 2),
+    cat("cat-ib-3", "issuingBody", "S\u1EDF K\u1EBF ho\u1EA1ch v\xE0 \u0110\u1EA7u t\u01B0", 3),
+    cat("cat-ib-4", "issuingBody", "S\u1EDF T\xE0i ch\xEDnh", 4)
+  ];
+  const guides = [
+    {
+      id: "g1",
+      title: "HDSD d\xE0nh cho \u0110\u1EA1i bi\u1EC3u",
+      content: 'H\u01AF\u1EDANG D\u1EAAN S\u1EEC D\u1EE4NG D\xC0NH CHO \u0110\u1EA0I BI\u1EC2U D\u1EF0 H\u1ECCP\n\n1. \u0110\u0103ng nh\u1EADp h\u1EC7 th\u1ED1ng b\u1EB1ng t\xE0i kho\u1EA3n \u0111\u01B0\u1EE3c c\u1EA5p; \u0111\u1ED5i m\u1EADt kh\u1EA9u l\u1EA7n \u0111\u1EA7u.\n2. Xem gi\u1EA5y m\u1EDDi v\xE0 x\xE1c nh\u1EADn tham d\u1EF1 / b\xE1o v\u1EAFng / \u1EE7y quy\u1EC1n t\u1EA1i m\u1EE5c "Phi\xEAn h\u1ECDp".\n3. Nghi\xEAn c\u1EE9u t\xE0i li\u1EC7u trong ph\u1EA7n "T\xE0i li\u1EC7u"; c\xF3 th\u1EC3 ghi ch\xFA c\xE1 nh\xE2n ho\u1EB7c g\u1EEDi g\xF3p \xFD c\xF4ng khai.\n4. Khi v\xE0o ph\xF2ng h\u1ECDp: \u0111i\u1EC3m danh (b\u1EA5m n\xFAt ho\u1EB7c qu\xE9t m\xE3 QR), theo d\xF5i ch\u01B0\u01A1ng tr\xECnh v\xE0 th\u1EDDi gian c\xF2n l\u1EA1i c\u1EE7a m\u1EE5c \u0111ang h\u1ECDp.\n5. \u0110\u0103ng k\xFD ph\xE1t bi\u1EC3u / ch\u1EA5t v\u1EA5n khi \u0111\u01B0\u1EE3c ch\u1EE7 t\u1ECDa cho ph\xE9p; th\u1EF1c hi\u1EC7n bi\u1EC3u quy\u1EBFt c\xE1c n\u1ED9i dung.\n6. Cho \xFD ki\u1EBFn c\xE1c v\u0103n b\u1EA3n l\u1EA5y \xFD ki\u1EBFn t\u1EA1i m\u1EE5c "L\u1EA5y \xFD ki\u1EBFn".',
+      roleScope: ["delegate"],
+      createdAt: iso(minAgo(60 * 24 * 18)),
+      updatedAt: iso(minAgo(60 * 24 * 4))
+    },
+    {
+      id: "g2",
+      title: "HDSD Ch\u1EE7 t\u1ECDa & Th\u01B0 k\xFD",
+      content: "H\u01AF\u1EDANG D\u1EAAN S\u1EEC D\u1EE4NG D\xC0NH CHO CH\u1EE6 T\u1ECCA V\xC0 TH\u01AF K\xDD\n\n1. T\u1EA1o/ch\u1EC9nh s\u1EEDa phi\xEAn h\u1ECDp: nh\u1EADp th\xF4ng tin, th\xE0nh ph\u1EA7n, ch\u01B0\u01A1ng tr\xECnh; g\u1EEDi gi\u1EA5y m\u1EDDi.\n2. Chu\u1EA9n b\u1ECB v\xE0 duy\u1EC7t t\xE0i li\u1EC7u h\u1ECDp (duy\u1EC7t/kh\xF4ng duy\u1EC7t t\xE0i li\u1EC7u do \u0111\u01A1n v\u1ECB tr\xECnh).\n3. \u0110i\u1EC1u h\xE0nh phi\xEAn h\u1ECDp: khai m\u1EA1c, chuy\u1EC3n m\u1EE5c ch\u01B0\u01A1ng tr\xECnh (\u0111\u1EBFm ng\u01B0\u1EE3c th\u1EDDi l\u01B0\u1EE3ng), \u0111i\u1EC1u h\xE0nh ph\xE1t bi\u1EC3u/ch\u1EA5t v\u1EA5n.\n4. M\u1EDF/\u0111\xF3ng bi\u1EC3u quy\u1EBFt; theo d\xF5i \u0111\u1EA1i bi\u1EC3u \u0111\xE3/ch\u01B0a bi\u1EC3u quy\u1EBFt (tr\u1EA1ng th\xE1i s\u1EB5n s\xE0ng).\n5. Ghi k\u1EBFt lu\u1EADn; l\u1EADp bi\xEAn b\u1EA3n theo Ngh\u1ECB \u0111\u1ECBnh 30/2020 v\xE0 k\xFD s\u1ED1.\n6. Xu\u1EA5t danh s\xE1ch \u0111i\u1EC3m danh, xu\u1EA5t \xFD ki\u1EBFn t\xE0i li\u1EC7u ph\u1EE5c v\u1EE5 t\u1ED5ng h\u1EE3p.",
+      roleScope: ["chairman", "secretary"],
+      createdAt: iso(minAgo(60 * 24 * 18)),
+      updatedAt: iso(minAgo(60 * 24 * 6))
+    },
+    {
+      id: "g3",
+      title: "Gi\u1EDBi thi\u1EC7u chung h\u1EC7 th\u1ED1ng eCabinet",
+      content: "GI\u1EDAI THI\u1EC6U H\u1EC6 TH\u1ED0NG PH\xD2NG H\u1ECCP KH\xD4NG GI\u1EA4Y (eCabinet)\n\nH\u1EC7 th\u1ED1ng h\u1ED7 tr\u1EE3 t\u1ED5 ch\u1EE9c cu\u1ED9c h\u1ECDp kh\xF4ng gi\u1EA5y t\u1EDD: qu\u1EA3n l\xFD cu\u1ED9c h\u1ECDp, t\xE0i li\u1EC7u, bi\u1EC3u quy\u1EBFt \u0111i\u1EC7n t\u1EED, ch\u1EA5t v\u1EA5n, bi\xEAn b\u1EA3n v\xE0 k\xFD s\u1ED1. T\xE0i li\u1EC7u h\u01B0\u1EDBng d\u1EABn chi ti\u1EBFt theo t\u1EEBng vai tr\xF2 \u0111\u01B0\u1EE3c cung c\u1EA5p trong m\u1EE5c n\xE0y. M\u1ECDi th\u1EAFc m\u1EAFc li\xEAn h\u1EC7 Qu\u1EA3n tr\u1ECB h\u1EC7 th\u1ED1ng.",
+      roleScope: [],
+      createdAt: iso(minAgo(60 * 24 * 18)),
+      updatedAt: iso(minAgo(60 * 24 * 18))
+    }
+  ];
   return {
     users,
     units,
     rooms,
     meetings,
     documents,
+    catalogs,
+    guides,
     annotations: [
       { id: "an1", docId: "d3", userId: "u-ct", content: "L\u01B0u \xFD: c\xE2n nh\u1EAFc t\u0103ng t\u1EF7 tr\u1ECDng cho y t\u1EBF c\u01A1 s\u1EDF theo ki\u1EBFn ngh\u1ECB S\u1EDF Y t\u1EBF.", createdAt: iso(minAgo(7)) },
       { id: "an2", docId: "d1", userId: "u-ct", content: "S\u1ED1 li\u1EC7u thu h\xFAt \u0111\u1EA7u t\u01B0 t\u1ED1t \u2014 bi\u1EC3u d\u01B0\u01A1ng t\u1EA1i ph\u1EA7n k\u1EBFt lu\u1EADn.", createdAt: iso(minAgo(20)) },

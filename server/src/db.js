@@ -25,6 +25,8 @@ export const COLLECTIONS = {
   tasks: 'c_tasks',
   notifications: 'c_notifications',
   audit: 'c_audit',
+  catalogs: 'c_catalogs', // ĐỢT 3: danh mục chung (E-HSMT mục 6, 7, 10)
+  guides: 'c_guides',     // ĐỢT 3: tài liệu hướng dẫn sử dụng (E-HSMT mục 4)
 };
 
 let _query = null;

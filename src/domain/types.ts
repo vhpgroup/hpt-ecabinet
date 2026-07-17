@@ -27,6 +27,11 @@ export interface User {
   phone: string;
   avatarColor: string;
   status: 'active' | 'inactive';
+  /**
+   * Chức vụ chọn từ danh mục chức vụ (E-HSMT mục 6). OPTIONAL — lưu tên chức vụ
+   * (cho phép nhập tự do khi danh mục trống). Khác với `title` (chức danh mô tả).
+   */
+  position?: string;
 }
 
 /**
@@ -63,6 +68,47 @@ export interface AgendaItem {
   presenterId?: string;
   durationMinutes: number;
   documentIds: string[];
+}
+
+// ---------------- Danh mục dùng chung (E-HSMT mục 6, 7, 10) ----------------
+/**
+ * Một mục danh mục: chức vụ / loại phiên họp / cơ quan ban hành.
+ * Dùng chung 1 collection `catalogs`, phân biệt bằng `type`.
+ * OPTIONAL các trường phụ để tương thích ngược + round-trip JSONB.
+ */
+export type CatalogType = 'position' | 'meetingType' | 'issuingBody';
+
+export interface CatalogItem {
+  id: string;
+  type: CatalogType;
+  name: string;
+  description?: string;
+  /** thứ tự hiển thị (nhỏ trước); mặc định 99 khi trống */
+  order?: number;
+  /** bật/tắt sử dụng; undefined coi như đang bật (tương thích dữ liệu cũ) */
+  active?: boolean;
+  createdAt: string;
+}
+
+// ---------------- Tài liệu hướng dẫn sử dụng (E-HSMT mục 4) ----------------
+/**
+ * Tài liệu HDSD: soạn nội dung trực tiếp HOẶC tải tệp (data URL, giống DocFile).
+ * roleScope: giới hạn vai trò được xem (trống/undefined = mọi người dùng đăng nhập).
+ * OPTIONAL các trường phụ để tương thích ngược + round-trip JSONB.
+ */
+export interface GuideDoc {
+  id: string;
+  title: string;
+  /** nội dung soạn trực tiếp (văn bản) */
+  content?: string;
+  /** tên tệp khi tải lên */
+  fileName?: string;
+  /** dữ liệu tệp dạng data URL (base64) — lưu giống DocFile.dataUrl */
+  fileData?: string;
+  /** áp dụng cho vai trò nào; trống = tất cả */
+  roleScope?: Role[];
+  updatedAt: string;
+  createdAt: string;
 }
 
 export type AttendStatus = 'pending' | 'accepted' | 'declined' | 'delegated';
@@ -141,6 +187,18 @@ export interface Meeting {
    * OPTIONAL để tương thích ngược dữ liệu cũ + round-trip JSONB.
    */
   seatAssignments?: Record<string, string>;
+  /**
+   * Loại phiên họp chọn từ danh mục loại phiên họp (E-HSMT mục 7). OPTIONAL —
+   * lưu tên loại (vd "Họp thường kỳ"). Trống = chưa phân loại.
+   */
+  meetingType?: string;
+  /**
+   * Thời điểm chủ tọa CHUYỂN sang mục chương trình hiện tại (E-HSMT mục 27 —
+   * "Xem thời gian còn lại"). Dùng làm mốc đếm ngược thời lượng mục đang họp.
+   * CHỈ chủ trì/thư ký/admin đặt (server guard chặn đại biểu thường).
+   * OPTIONAL để tương thích ngược dữ liệu cũ + round-trip JSONB.
+   */
+  currentItemStartedAt?: string;
 }
 
 // ---------------- Tài liệu ----------------
@@ -177,6 +235,16 @@ export interface DocFile {
   reviewedById?: string;
   /** Thời điểm duyệt/từ chối gần nhất. */
   reviewedAt?: string;
+  /**
+   * Cơ quan ban hành chọn từ danh mục cơ quan ban hành (E-HSMT mục 10).
+   * OPTIONAL — lưu tên cơ quan (vd "UBND tỉnh"). Trống = không rõ.
+   */
+  issuingBody?: string;
+  /**
+   * Thư mục tài liệu cá nhân (E-HSMT mục 14). OPTIONAL — chỉ là nhãn phân loại
+   * do người dùng đặt trên tài liệu cá nhân của mình; trống = "Chưa phân thư mục".
+   */
+  folder?: string;
 }
 
 export interface Annotation {
@@ -334,6 +402,9 @@ export interface Snapshot {
   tasks: TaskItem[];
   notifications: Notification[];
   audit: AuditEntry[];
+  // ĐỢT 3 — OPTIONAL trong tương thích ngược nhưng luôn có ở snapshot mới:
+  catalogs: CatalogItem[];   // danh mục chức vụ / loại phiên họp / cơ quan ban hành
+  guides: GuideDoc[];        // tài liệu hướng dẫn sử dụng
 }
 
 export const uid = (): string =>

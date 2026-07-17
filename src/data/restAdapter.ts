@@ -153,6 +153,8 @@ export function createRestDataSource(baseUrl: string): DataSource {
     tasks: new RestRepo('tasks'),
     notifications: new RestRepo('notifications'),
     audit: new RestRepo('audit'),
+    catalogs: new RestRepo('catalogs'), // ĐỢT 3: danh mục chung
+    guides: new RestRepo('guides'),     // ĐỢT 3: tài liệu HDSD
 
     async reset() {
       await call('POST', '/admin/reset', {});

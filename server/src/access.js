@@ -18,6 +18,7 @@ const SENSITIVE = new Set([
   'documents', 'votes', 'messages', 'notifications', 'annotations',
   'meetings', 'tasks', 'speakRequests', // GĐ8 (vá P0): chống rò biên bản/kết luận & dữ liệu ngoài phiên
   'questions', // chất vấn: chỉ thành phần phiên họp (hoặc quản lý) mới đọc được
+  'guides',    // ĐỢT 3: tài liệu HDSD lọc theo roleScope (vai trò người đọc)
 ]);
 
 export const needsAccessFilter = (collection) => SENSITIVE.has(collection);
@@ -120,6 +121,16 @@ export function canReadQuestion(q, user, ctx) {
   return ctx.myMeetingIds.has(q.meetingId);
 }
 
+/**
+ * Tài liệu HDSD (E-HSMT mục 4): nếu đặt roleScope thì CHỈ vai trò trong danh sách
+ * mới đọc được; trống/undefined = mọi người đăng nhập. Admin luôn đọc được (quản trị).
+ */
+export function canReadGuide(g, user) {
+  if (user.role === 'admin') return true;
+  if (!Array.isArray(g.roleScope) || g.roleScope.length === 0) return true;
+  return g.roleScope.includes(user.role);
+}
+
 // ---------------- Bộ lọc chung ----------------
 
 /** Lọc danh sách theo quyền đọc (async vì cần ctx). Trả về mảng đã lọc/chiếu. */
@@ -157,6 +168,8 @@ function applyFilter(collection, rows, user, ctx) {
       return rows.filter((s) => canReadSpeak(s, user, ctx));
     case 'questions':
       return rows.filter((q) => canReadQuestion(q, user, ctx));
+    case 'guides':
+      return rows.filter((g) => canReadGuide(g, user));
     default:
       return rows;
   }

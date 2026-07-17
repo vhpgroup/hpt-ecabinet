@@ -60,6 +60,7 @@ class LocalRepo<T extends { id: string }> implements Repo<T> {
 const COLLECTIONS = [
   'users', 'units', 'rooms', 'meetings', 'documents', 'annotations',
   'votes', 'speakRequests', 'questions', 'messages', 'tasks', 'notifications', 'audit',
+  'catalogs', 'guides', // ĐỢT 3: danh mục chung + tài liệu HDSD
 ] as const;
 
 function seedIfEmpty(force = false) {
@@ -87,6 +88,8 @@ export function createDataSource(): DataSource {
     tasks: new LocalRepo('tasks'),
     notifications: new LocalRepo('notifications'),
     audit: new LocalRepo('audit'),
+    catalogs: new LocalRepo('catalogs'),
+    guides: new LocalRepo('guides'),
     async reset() {
       seedIfEmpty(true);
     },

@@ -120,7 +120,10 @@ export default function CalendarPage() {
                   <span><Icon name="users" size={13} />{m.participants.length} đại biểu</span>
                 </div>
               </div>
-              <div className="m-side"><Badge color={st.color}>{st.label}</Badge></div>
+              <div className="m-side">
+                {m.meetingType && <Badge color="blue">{m.meetingType}</Badge>}
+                <Badge color={st.color}>{st.label}</Badge>
+              </div>
             </div>
           );
         })}

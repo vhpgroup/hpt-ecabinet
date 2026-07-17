@@ -81,3 +81,18 @@ export async function removeRoom(actor: User, id: string) {
 export async function resetAllData() {
   await db.reset();
 }
+
+// ----- Nhật ký hệ thống (E-HSMT mục 3) -----
+/**
+ * Xóa các bản ghi nhật ký theo danh sách id (kết quả đang lọc trên UI).
+ * CHỈ admin (ACL server 'remove: [admin]'); local demo xóa trực tiếp.
+ * Ghi 1 dòng nhật ký tổng kết SAU khi xóa (không tự xóa dòng này).
+ */
+export async function clearAuditLogs(actor: User, ids: string[]): Promise<number> {
+  let n = 0;
+  for (const id of ids) {
+    try { await db.audit.remove(id); n++; } catch { /* bỏ qua bản ghi lỗi/không quyền */ }
+  }
+  if (n > 0) await audit(actor, 'Xóa nhật ký', `Xóa ${n} bản ghi nhật ký hệ thống`);
+  return n;
+}

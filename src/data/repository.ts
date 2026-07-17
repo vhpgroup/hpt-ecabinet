@@ -6,7 +6,7 @@
 // services & UI giữ nguyên.
 // ============================================================
 import type {
-  Annotation, AuditEntry, ChatMessage, DocFile, Meeting, Notification,
+  Annotation, AuditEntry, CatalogItem, ChatMessage, DocFile, GuideDoc, Meeting, Notification,
   QuestionRequest, Room, SpeakRequest, TaskItem, Unit, User, Vote,
 } from '../domain/types';
 
@@ -56,6 +56,8 @@ export interface DataSource {
   tasks: Repo<TaskItem>;
   notifications: Repo<Notification>;
   audit: Repo<AuditEntry>;
+  catalogs: Repo<CatalogItem>; // danh mục chung (E-HSMT mục 6, 7, 10)
+  guides: Repo<GuideDoc>;      // tài liệu hướng dẫn sử dụng (E-HSMT mục 4)
   /** Xóa toàn bộ và nạp lại dữ liệu mẫu */
   reset(): Promise<void>;
   /** Khóa/giá trị phiên đăng nhập (giai đoạn 2: token JWT) */

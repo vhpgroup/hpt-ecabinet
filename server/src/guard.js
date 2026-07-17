@@ -20,23 +20,32 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 // giá trị không phải mảng). Sai kiểu -> 400, KHÔNG lưu.
 // ============================================================
 const SCHEMA = {
-  meetings: { code: 'string', title: 'string', description: 'string', startTime: 'string', endTime: 'string', roomId: 'string', isOnline: 'boolean', status: 'string', chairId: 'string', secretaryId: 'string', participants: 'array', agenda: 'array', currentAgendaItemId: 'string|null', conclusions: 'array', minutes: 'object|null', invitedAt: 'string', questionSession: 'string', seatAssignments: 'object' },
+  // + meetingType (mục 7), currentItemStartedAt (mục 27) — đều string, OPTIONAL
+  meetings: { code: 'string', title: 'string', description: 'string', startTime: 'string', endTime: 'string', roomId: 'string', isOnline: 'boolean', status: 'string', chairId: 'string', secretaryId: 'string', participants: 'array', agenda: 'array', currentAgendaItemId: 'string|null', conclusions: 'array', minutes: 'object|null', invitedAt: 'string', questionSession: 'string', seatAssignments: 'object', meetingType: 'string', currentItemStartedAt: 'string' },
   votes: { kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', title: 'string', description: 'string', options: 'array', ballots: 'array', eligibleIds: 'array', documentIds: 'array', secret: 'boolean', status: 'string', deadline: 'string|null' },
-  documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string', reviewStatus: 'string', reviewNote: 'string', reviewedById: 'string', reviewedAt: 'string' },
+  // + issuingBody (mục 10), folder (mục 14) — đều string, OPTIONAL
+  documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string', reviewStatus: 'string', reviewNote: 'string', reviewedById: 'string', reviewedAt: 'string', issuingBody: 'string', folder: 'string' },
   annotations: { docId: 'string', content: 'string', isPublic: 'boolean' },
   tasks: { title: 'string', description: 'string', assigneeId: 'string', deadline: 'string', status: 'string', progress: 'number', meetingId: 'string|null' },
   notifications: { read: 'boolean', title: 'string', body: 'string', type: 'string' },
-  users: { fullName: 'string', title: 'string', unitId: 'string', role: 'string', email: 'string', phone: 'string', status: 'string', avatarColor: 'string', username: 'string' },
+  // + position (mục 6) — string, OPTIONAL
+  users: { fullName: 'string', title: 'string', unitId: 'string', role: 'string', email: 'string', phone: 'string', status: 'string', avatarColor: 'string', username: 'string', position: 'string' },
   units: { name: 'string', short: 'string', order: 'number' },
   rooms: { name: 'string', location: 'string', capacity: 'number', equipment: 'array', supportsOnline: 'boolean', status: 'string', layout: 'object|null' },
   speakRequests: { meetingId: 'string', topic: 'string', status: 'string' },
   questions: { meetingId: 'string', userId: 'string', targetName: 'string', topic: 'string', content: 'string', status: 'string', order: 'number', calledAt: 'string', endedAt: 'string' },
   messages: { meetingId: 'string', content: 'string', toId: 'string|null' },
+  // ĐỢT 3 — Danh mục chung (E-HSMT mục 6, 7, 10)
+  catalogs: { type: 'string', name: 'string', description: 'string', order: 'number', active: 'boolean' },
+  // ĐỢT 3 — Tài liệu HDSD (E-HSMT mục 4)
+  guides: { title: 'string', content: 'string', fileName: 'string', fileData: 'string', roleScope: 'array', updatedAt: 'string' },
 };
 
 // Vai trò hợp lệ + trạng thái duyệt tài liệu hợp lệ (chống ghi giá trị rác vào enum)
 const VALID_ROLES = ['admin', 'chairman', 'secretary', 'delegate', 'unit_admin'];
 const VALID_REVIEW = ['draft', 'pending', 'approved', 'rejected'];
+// ĐỢT 3 — loại danh mục hợp lệ (E-HSMT mục 6, 7, 10)
+const VALID_CATALOG_TYPES = ['position', 'meetingType', 'issuingBody'];
 /** Khóa ghế hợp lệ: chuỗi "số-số" (vd "10-3"). */
 const isSeatKey = (v) => typeof v === 'string' && /^\d+-\d+$/.test(v);
 
@@ -133,6 +142,36 @@ export function validatePatch(col, body) {
   // Vai trò người dùng: chỉ nhận 5 vai trò hợp lệ
   if (col === 'users' && body.role !== undefined && !VALID_ROLES.includes(body.role)) {
     throw httpError(400, 'Vai trò người dùng không hợp lệ');
+  }
+  // Chương trình họp (E-HSMT mục 27): thời lượng mỗi mục phải là số ≥ 0 (chống giá trị rác/âm)
+  if (col === 'meetings' && Array.isArray(body.agenda)) {
+    for (const a of body.agenda) {
+      if (a && a.durationMinutes !== undefined
+          && (typeof a.durationMinutes !== 'number' || !Number.isFinite(a.durationMinutes) || a.durationMinutes < 0)) {
+        throw httpError(400, 'Thời lượng mục chương trình phải là số phút không âm');
+      }
+    }
+  }
+  // ĐỢT 3 — Danh mục chung (E-HSMT mục 6, 7, 10)
+  if (col === 'catalogs') {
+    if (body.type !== undefined && !VALID_CATALOG_TYPES.includes(body.type)) {
+      throw httpError(400, 'Loại danh mục không hợp lệ (chỉ chức vụ / loại phiên họp / cơ quan ban hành)');
+    }
+    // tên danh mục: khi có mặt PHẢI là chuỗi không rỗng
+    if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim())) {
+      throw httpError(400, 'Tên danh mục không được để trống');
+    }
+  }
+  // ĐỢT 3 — Tài liệu HDSD (E-HSMT mục 4)
+  if (col === 'guides') {
+    // tiêu đề: khi có mặt PHẢI là chuỗi không rỗng
+    if (body.title !== undefined && (typeof body.title !== 'string' || !body.title.trim())) {
+      throw httpError(400, 'Tiêu đề tài liệu hướng dẫn không được để trống');
+    }
+    // roleScope (nếu có): mảng vai trò hợp lệ
+    if (Array.isArray(body.roleScope) && body.roleScope.some((r) => !VALID_ROLES.includes(r))) {
+      throw httpError(400, 'Phạm vi vai trò của tài liệu hướng dẫn không hợp lệ');
+    }
   }
 }
 
@@ -255,6 +294,12 @@ function guardMeetings(existing, patch, user) {
   // Đại biểu thường gửi lên -> chặn thẳng.
   if (p.seatAssignments !== undefined && !isManage) {
     throw httpError(403, 'Chỉ chủ tọa/thư ký được gán vị trí chỗ ngồi cho đại biểu');
+  }
+
+  // Mốc bắt đầu mục chương trình (E-HSMT mục 27 — đếm ngược thời gian còn lại):
+  // CHỈ chủ trì/thư ký/admin đặt (khi chuyển mục). Đại biểu thường -> chặn thẳng.
+  if (p.currentItemStartedAt !== undefined && !isManage) {
+    throw httpError(403, 'Chỉ chủ tọa/thư ký được cập nhật tiến trình mục chương trình');
   }
 
   // biên bản: chữ ký & khóa chỉ qua /actions/sign; đã khóa là bất biến

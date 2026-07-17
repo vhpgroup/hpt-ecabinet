@@ -1,5 +1,12 @@
 // Nhãn tiếng Việt + màu trạng thái dùng chung toàn hệ thống
-import type { AttendStatus, MeetingStatus, QuestionStatus, Role, VoteStatus } from './types';
+import type { AttendStatus, CatalogType, MeetingStatus, QuestionStatus, Role, VoteStatus } from './types';
+
+// Nhãn 3 loại danh mục chung (E-HSMT mục 6, 7, 10)
+export const CATALOG_TYPE: Record<CatalogType, { label: string; labelPlural: string }> = {
+  position: { label: 'Chức vụ', labelPlural: 'Danh mục chức vụ' },
+  meetingType: { label: 'Loại phiên họp', labelPlural: 'Danh mục loại phiên họp' },
+  issuingBody: { label: 'Cơ quan ban hành', labelPlural: 'Danh mục cơ quan ban hành' },
+};
 
 export const ROLE_LABEL: Record<Role, string> = {
   admin: 'Quản trị viên',

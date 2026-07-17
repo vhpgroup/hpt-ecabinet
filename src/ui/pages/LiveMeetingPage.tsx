@@ -16,7 +16,7 @@ import * as questionService from '../../services/questionService';
 import { simulateLiveTick } from '../../services/sim';
 import { db } from '../../data/db';
 import { realtime } from '../../data/realtime';
-import { fmtTime, indexBy, initials, timeAgo } from '../format';
+import { downloadTextFile, fmtTime, indexBy, initials, timeAgo, toCsv } from '../format';
 import { DocViewerModal } from './shared';
 import { VoteCard } from './MeetingDetailPage';
 
@@ -29,7 +29,10 @@ export default function LiveMeetingPage() {
   const [viewDoc, setViewDoc] = useState<DocFile | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [clock, setClock] = useState('');
+  // E-HSMT mục 27: đếm ngược "thời gian còn lại" của MỤC đang họp
+  const [remain, setRemain] = useState<{ text: string; over: boolean } | null>(null);
   const users = useMemo(() => indexBy(s.users), [s.users]);
+  const units = useMemo(() => indexBy(s.units), [s.units]);
   const docById = useMemo(() => indexBy(s.documents), [s.documents]);
 
   // đồng hồ thời gian họp
@@ -45,6 +48,30 @@ export default function LiveMeetingPage() {
     }, 1000);
     return () => clearInterval(t);
   }, [m?.startTime, m]);
+
+  // E-HSMT mục 27: đếm ngược thời lượng mục chương trình đang họp.
+  // Mốc bắt đầu = currentItemStartedAt (chủ tọa đặt khi chuyển mục); nếu chưa có
+  // (dữ liệu cũ / mục đầu chưa chuyển) thì dùng startTime của phiên (chỉ mục đầu).
+  useEffect(() => {
+    const item = m?.agenda.find((a) => a.id === m?.currentAgendaItemId) ?? m?.agenda[0];
+    if (!m || m.status !== 'live' || !item || !item.durationMinutes) { setRemain(null); return; }
+    const isFirst = item.id === m.agenda[0]?.id;
+    const startedIso = m.currentItemStartedAt ?? (isFirst ? m.startTime : undefined);
+    if (!startedIso) { setRemain(null); return; }
+    const started = new Date(startedIso).getTime();
+    const totalMs = item.durationMinutes * 60000;
+    const tick = () => {
+      const left = started + totalMs - Date.now();
+      const over = left < 0;
+      const s = Math.floor(Math.abs(left) / 1000);
+      const mm = String(Math.floor(s / 60)).padStart(2, '0');
+      const ss = String(s % 60).padStart(2, '0');
+      setRemain({ text: (over ? '+' : '') + `${mm}:${ss}`, over });
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [m?.currentAgendaItemId, m?.currentItemStartedAt, m?.status, m?.startTime, m]);
 
   // Realtime:
   // - Chế độ máy chủ + WebSocket đang kết nối: sự kiện tự đẩy về (AppContext) — không poll
@@ -89,6 +116,13 @@ export default function LiveMeetingPage() {
   const act = async (fn: () => Promise<unknown>, msg?: string) => {
     try { await fn(); await refresh(); if (msg) toast(msg); }
     catch (ex) { toast((ex as Error).message, 'error'); }
+  };
+
+  // E-HSMT mục 36: xuất danh sách điểm danh (CSV) ngay trong phòng họp
+  const exportAttendance = () => {
+    const { headers, rows } = meetingService.buildAttendanceRows(m, users, units);
+    downloadTextFile(`diemdanh_${m.code.replace(/[^\p{L}\p{N}._-]+/gu, '_')}.csv`, toCsv(headers, rows));
+    toast('Đã xuất danh sách điểm danh (CSV)');
   };
 
   if (m.status !== 'live') {
@@ -137,7 +171,16 @@ export default function LiveMeetingPage() {
         {/* ---------- CỘT TRÁI ---------- */}
         <div className="live-left">
           <div className="live-panel">
-            <div className="live-panel-h"><Icon name="list" size={15} />Chương trình phiên họp</div>
+            <div className="live-panel-h">
+              <Icon name="list" size={15} />Chương trình phiên họp
+              {/* Đếm ngược thời gian còn lại của mục đang họp (E-HSMT mục 27) */}
+              {remain && currentItem && (
+                <span className={'agenda-countdown' + (remain.over ? ' over' : '')} title={`Thời lượng dự kiến mục ${currentItem.order}: ${currentItem.durationMinutes} phút`}>
+                  <Icon name="clock" size={13} />
+                  {remain.over ? 'Quá giờ ' : 'Còn lại '}{remain.text}
+                </span>
+              )}
+            </div>
             <div style={{ padding: '10px 15px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {m.agenda.map((a) => (
                 <button key={a.id}
@@ -221,9 +264,16 @@ export default function LiveMeetingPage() {
                     <Icon name="check" size={16} />Điểm danh tham dự
                   </button>
                 )}
-                <button className="btn outline sm" style={{ marginBottom: 12 }} onClick={() => setQrOpen(true)}>
-                  <Icon name="qr" size={14} />Mã QR điểm danh
-                </button>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <button className="btn outline sm" onClick={() => setQrOpen(true)}>
+                    <Icon name="qr" size={14} />Mã QR điểm danh
+                  </button>
+                  {chairCtl && (
+                    <button className="btn outline sm" onClick={exportAttendance} title="Xuất danh sách điểm danh ra CSV">
+                      <Icon name="download" size={14} />Xuất DS điểm danh
+                    </button>
+                  )}
+                </div>
                 {m.participants.map((p) => {
                   const u = users.get(p.userId);
                   return (

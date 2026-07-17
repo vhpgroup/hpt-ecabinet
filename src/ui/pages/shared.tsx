@@ -8,7 +8,7 @@ import { Badge, Field, Icon, Modal } from '../components';
 import { DOC_REVIEW } from '../../domain/labels';
 import { can } from '../../services/authService';
 import * as documentService from '../../services/documentService';
-import { fmtSize, indexBy, timeAgo } from '../format';
+import { downloadTextFile, fmtDT, fmtSize, indexBy, timeAgo, toCsv } from '../format';
 
 export function DocViewerModal({ doc, onClose }: { doc: DocFile; onClose: () => void }) {
   const { user, s, refresh, toast } = useApp();
@@ -45,12 +45,25 @@ export function DocViewerModal({ doc, onClose }: { doc: DocFile; onClose: () => 
     a.click();
   };
 
+  // E-HSMT mục 31: "Xuất ý kiến tài liệu" — xuất góp ý công khai ra CSV (client-side)
+  const exportComments = () => {
+    if (!publicAnnos.length) { toast('Tài liệu chưa có góp ý công khai để xuất', 'info'); return; }
+    const rows = [...publicAnnos]
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map((a, i) => [i + 1, users.get(a.userId)?.fullName ?? '—', fmtDT(a.createdAt), a.content]);
+    const csv = toCsv(['STT', 'Người góp ý', 'Thời gian', 'Nội dung góp ý'], rows);
+    const safe = doc.name.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 60);
+    downloadTextFile(`gopy_${safe}.csv`, csv);
+    toast('Đã xuất ý kiến tài liệu (CSV)');
+  };
+
   return (
     <Modal title={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{doc.name}{doc.secret && <Badge color="red">Mật</Badge>}</span>}
       onClose={onClose} width={860}>
       <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>
           Người tải lên: <b>{users.get(doc.ownerId)?.fullName ?? '—'}</b> · {timeAgo(doc.uploadedAt)} · {fmtSize(doc.size)} · phiên bản {doc.version}
+          {doc.issuingBody && <> · Cơ quan ban hành: <b>{doc.issuingBody}</b></>}
         </span>
         <span style={{ flex: 1 }} />
         <button className="btn outline sm" onClick={download}><Icon name="download" size={14} />Tải xuống</button>
@@ -84,6 +97,11 @@ export function DocViewerModal({ doc, onClose }: { doc: DocFile; onClose: () => 
 
         <h4 style={{ fontSize: 13.5, marginBottom: 8, display: 'flex', gap: 7, alignItems: 'center' }}>
           <Icon name="chat" size={15} />Góp ý công khai ({publicAnnos.length})
+          {publicAnnos.length > 0 && (
+            <button className="btn outline sm" style={{ marginLeft: 'auto' }} onClick={exportComments} title="Xuất góp ý ra tệp CSV">
+              <Icon name="download" size={13} />Xuất ý kiến
+            </button>
+          )}
         </h4>
         {publicAnnos.map((a) => (
           <div className="anno" key={a.id} style={{ borderLeftColor: 'var(--primary)', background: '#f0f6fd' }}>

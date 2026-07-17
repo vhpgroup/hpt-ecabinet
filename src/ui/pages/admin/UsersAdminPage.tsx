@@ -8,6 +8,7 @@ import { Avatar, Badge, Field, Icon, Modal, PageHeader } from '../../components'
 import { ROLE_LABEL } from '../../../domain/labels';
 import { can } from '../../../services/authService';
 import * as adminService from '../../../services/adminService';
+import { catalogNames } from '../../../services/catalogService';
 import { indexBy } from '../../format';
 
 const ROLE_COLOR: Record<Role, string> = { admin: 'navy', chairman: 'blue', secretary: 'purple', delegate: 'gray', unit_admin: 'blue' };
@@ -64,7 +65,7 @@ export default function UsersAdminPage() {
                   <td>
                     <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                       <Avatar user={u} size={32} />
-                      <div><div className="t-title">{u.fullName}</div><div className="t-sub">{u.title}</div></div>
+                      <div><div className="t-title">{u.fullName}</div><div className="t-sub">{u.position ? `${u.position} · ` : ''}{u.title}</div></div>
                     </div>
                   </td>
                   <td><code style={{ fontSize: 12.5 }}>{u.username}</code></td>
@@ -99,7 +100,7 @@ export default function UsersAdminPage() {
       </div>
 
       {editing && (
-        <UserFormModal initial={editing} units={s.units}
+        <UserFormModal initial={editing} units={s.units} positions={catalogNames(s.catalogs, 'position')}
           unitAdmin={unitAdmin} lockedUnitId={unitAdmin ? user?.unitId : undefined}
           onClose={() => setEditing(null)} onSave={save} />
       )}
@@ -107,8 +108,8 @@ export default function UsersAdminPage() {
   );
 }
 
-function UserFormModal({ initial, units, unitAdmin, lockedUnitId, onClose, onSave }: {
-  initial: Partial<User>; units: { id: string; name: string }[];
+function UserFormModal({ initial, units, positions, unitAdmin, lockedUnitId, onClose, onSave }: {
+  initial: Partial<User>; units: { id: string; name: string }[]; positions: string[];
   unitAdmin?: boolean; lockedUnitId?: string;
   onClose: () => void; onSave: (d: Partial<User>) => void;
 }) {
@@ -135,6 +136,21 @@ function UserFormModal({ initial, units, unitAdmin, lockedUnitId, onClose, onSav
         <Field label="Tên đăng nhập" required><input className="inp" value={f.username ?? ''} onChange={(e) => set('username', e.target.value.toLowerCase())} /></Field>
       </div>
       <Field label="Chức danh"><input className="inp" value={f.title ?? ''} onChange={(e) => set('title', e.target.value)} /></Field>
+      <Field label="Chức vụ (danh mục)">
+        {positions.length > 0 ? (
+          <>
+            {/* Dropdown từ danh mục chức vụ + cho phép nhập tự do (datalist native) */}
+            <input className="inp" list="pos-list" placeholder="Chọn từ danh mục hoặc nhập tự do…"
+              value={f.position ?? ''} onChange={(e) => set('position', e.target.value)} />
+            <datalist id="pos-list">
+              {positions.map((p) => <option key={p} value={p} />)}
+            </datalist>
+          </>
+        ) : (
+          <input className="inp" placeholder="Nhập chức vụ (danh mục chức vụ đang trống)"
+            value={f.position ?? ''} onChange={(e) => set('position', e.target.value)} />
+        )}
+      </Field>
       <div className="form-row">
         <Field label="Đơn vị">
           <select className="sel" value={f.unitId} onChange={(e) => set('unitId', e.target.value)} disabled={unitAdmin}>

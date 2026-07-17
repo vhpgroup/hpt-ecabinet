@@ -26,6 +26,8 @@ export interface MeetingDraft {
   /** khách mời — tham dự nhưng không thuộc thành phần biểu quyết */
   guestIds?: string[];
   agenda: AgendaItem[];
+  /** Loại phiên họp (E-HSMT mục 7) — tên chọn từ danh mục; OPTIONAL */
+  meetingType?: string;
 }
 
 export async function saveMeeting(actor: User, draft: MeetingDraft): Promise<Meeting> {
@@ -40,6 +42,7 @@ export async function saveMeeting(actor: User, draft: MeetingDraft): Promise<Mee
       roomId: draft.roomId, isOnline: draft.isOnline,
       chairId: draft.chairId, secretaryId: draft.secretaryId,
       participants, agenda: draft.agenda,
+      meetingType: draft.meetingType, // E-HSMT mục 7
     });
     await audit(actor, 'Cập nhật phiên họp', `Cập nhật "${updated.title}"`);
     return updated;
@@ -54,6 +57,7 @@ export async function saveMeeting(actor: User, draft: MeetingDraft): Promise<Mee
     chairId: draft.chairId, secretaryId: draft.secretaryId,
     participants: buildParticipants(draft),
     agenda: draft.agenda,
+    meetingType: draft.meetingType, // E-HSMT mục 7
     currentAgendaItemId: null,
     conclusions: [], minutes: null,
     createdBy: actor.id, createdAt: nowIso(),
@@ -79,6 +83,45 @@ function buildParticipants(draft: MeetingDraft, old: Participant[] = []): Partic
       ? { ...prev, meetingRole }
       : { userId, meetingRole, attendStatus: userId === draft.chairId || userId === draft.secretaryId ? 'accepted' : 'pending', checkedInAt: null };
   });
+}
+
+/**
+ * Dựng các dòng CSV danh sách điểm danh (E-HSMT mục 36 "Xuất danh sách điểm danh").
+ * Hàm THUẦN — nhận meeting + tra cứu user/unit, trả về { headers, rows } để UI ghép CSV.
+ * Cột: STT, Họ tên, Chức vụ, Đơn vị, Vai trò họp, Trạng thái, Thời gian điểm danh, Ủy quyền cho.
+ */
+export function buildAttendanceRows(
+  m: Meeting,
+  usersById: Map<string, User>,
+  unitsById: Map<string, Unit>,
+): { headers: string[]; rows: (string | number)[][] } {
+  const attLabel: Record<string, string> = {
+    accepted: 'Tham dự', declined: 'Vắng mặt', delegated: 'Ủy quyền', pending: 'Chờ xác nhận',
+  };
+  const roleLabel: Record<string, string> = {
+    chair: 'Chủ trì', secretary: 'Thư ký', member: 'Thành viên', guest: 'Khách mời',
+  };
+  const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString('vi-VN') : '');
+  const rows = m.participants.map((p, i) => {
+    const u = usersById.get(p.userId);
+    const present = p.checkedInAt ? 'Có mặt' : (attLabel[p.attendStatus] ?? p.attendStatus);
+    const reason = p.attendStatus === 'declined' && p.declineReason ? ` (${p.declineReason})` : '';
+    const delegateTo = p.delegateToId ? (usersById.get(p.delegateToId)?.fullName ?? p.delegateToId) : '';
+    return [
+      i + 1,
+      u?.fullName ?? p.userId,
+      u?.position ?? u?.title ?? '',
+      unitsById.get(u?.unitId ?? '')?.name ?? '',
+      roleLabel[p.meetingRole] ?? p.meetingRole,
+      present + reason,
+      fmt(p.checkedInAt),
+      delegateTo,
+    ];
+  });
+  return {
+    headers: ['STT', 'Họ và tên', 'Chức vụ', 'Đơn vị', 'Vai trò họp', 'Trạng thái', 'Thời gian điểm danh', 'Ủy quyền cho'],
+    rows,
+  };
 }
 
 export async function deleteMeeting(actor: User, id: string) {
@@ -180,7 +223,9 @@ export async function assignSeat(actor: User, meetingId: string, userId: string,
 }
 
 export async function setCurrentAgendaItem(actor: User, meetingId: string, agendaItemId: string) {
-  await db.meetings.update(meetingId, { currentAgendaItemId: agendaItemId });
+  // E-HSMT mục 27: đặt mốc bắt đầu mục để đếm ngược "thời gian còn lại".
+  // Server guard chỉ cho chủ trì/thư ký/admin ghi currentItemStartedAt.
+  await db.meetings.update(meetingId, { currentAgendaItemId: agendaItemId, currentItemStartedAt: nowIso() });
   const m = await db.meetings.get(meetingId);
   const item = m?.agenda.find((a) => a.id === agendaItemId);
   await audit(actor, 'Chuyển nội dung', `Chuyển sang mục "${item?.title ?? ''}"`);

@@ -73,12 +73,16 @@ export default function MainLayout() {
           <NavLink to="/documents" className={linkCls}><Icon name="file" />Tài liệu</NavLink>
           <NavLink to="/polls" className={linkCls}><Icon name="vote" />Lấy ý kiến</NavLink>
           <NavLink to="/tasks" className={linkCls}><Icon name="clipboard" />Nhiệm vụ sau họp</NavLink>
+          <div className="sb-group">Tiện ích</div>
+          <NavLink to="/help" className={linkCls}><Icon name="book" />Hướng dẫn sử dụng</NavLink>
           {user?.role === 'admin' && (
             <>
               <div className="sb-group">Quản trị hệ thống</div>
               <NavLink to="/admin/users" className={linkCls}><Icon name="settings" />Người dùng</NavLink>
               <NavLink to="/admin/units" className={linkCls}><Icon name="building" />Đơn vị</NavLink>
               <NavLink to="/admin/rooms" className={linkCls}><Icon name="room" />Phòng họp</NavLink>
+              <NavLink to="/admin/catalogs" className={linkCls}><Icon name="tag" />Danh mục</NavLink>
+              <NavLink to="/admin/guides" className={linkCls}><Icon name="book" />Tài liệu HDSD</NavLink>
               <NavLink to="/admin/audit" className={linkCls}><Icon name="list" />Nhật ký hệ thống</NavLink>
               <NavLink to="/admin/reports" className={linkCls}><Icon name="chart" />Báo cáo thống kê</NavLink>
             </>

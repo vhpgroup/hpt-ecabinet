@@ -35,10 +35,10 @@ export function buildSeed(): Snapshot {
   const P = '123456';
   const users = [
     { id: 'u-admin', username: 'quantri', password: P, fullName: 'Đỗ Quang Trị', title: 'Chuyên viên CNTT — Quản trị hệ thống', unitId: 'un-vp', role: 'admin', email: 'quantri@tinh.gov.vn', phone: '0912 000 001', avatarColor: '#334155', status: 'active' },
-    { id: 'u-ct', username: 'chutich', password: P, fullName: 'Trần Đại Nghĩa', title: 'Chủ tịch UBND tỉnh', unitId: 'un-vp', role: 'chairman', email: 'chutich@tinh.gov.vn', phone: '0912 000 002', avatarColor: '#0f4c92', status: 'active' },
-    { id: 'u-pct', username: 'phochutich', password: P, fullName: 'Lê Minh Khuê', title: 'Phó Chủ tịch UBND tỉnh', unitId: 'un-vp', role: 'chairman', email: 'phochutich@tinh.gov.vn', phone: '0912 000 003', avatarColor: '#0e7490', status: 'active' },
-    { id: 'u-tk', username: 'thuky', password: P, fullName: 'Phạm Văn Thư', title: 'Chánh Văn phòng UBND tỉnh', unitId: 'un-vp', role: 'secretary', email: 'thuky@tinh.gov.vn', phone: '0912 000 004', avatarColor: '#7c3aed', status: 'active' },
-    { id: 'u-khdt', username: 'sokhdt', password: P, fullName: 'Nguyễn Hoài An', title: 'Giám đốc Sở Kế hoạch và Đầu tư', unitId: 'un-khdt', role: 'delegate', email: 'an.nh@tinh.gov.vn', phone: '0912 000 005', avatarColor: '#1d9e5f', status: 'active' },
+    { id: 'u-ct', username: 'chutich', password: P, fullName: 'Trần Đại Nghĩa', title: 'Chủ tịch UBND tỉnh', unitId: 'un-vp', role: 'chairman', email: 'chutich@tinh.gov.vn', phone: '0912 000 002', avatarColor: '#0f4c92', status: 'active', position: 'Chủ tịch' },
+    { id: 'u-pct', username: 'phochutich', password: P, fullName: 'Lê Minh Khuê', title: 'Phó Chủ tịch UBND tỉnh', unitId: 'un-vp', role: 'chairman', email: 'phochutich@tinh.gov.vn', phone: '0912 000 003', avatarColor: '#0e7490', status: 'active', position: 'Phó Chủ tịch' },
+    { id: 'u-tk', username: 'thuky', password: P, fullName: 'Phạm Văn Thư', title: 'Chánh Văn phòng UBND tỉnh', unitId: 'un-vp', role: 'secretary', email: 'thuky@tinh.gov.vn', phone: '0912 000 004', avatarColor: '#7c3aed', status: 'active', position: 'Chánh Văn phòng' },
+    { id: 'u-khdt', username: 'sokhdt', password: P, fullName: 'Nguyễn Hoài An', title: 'Giám đốc Sở Kế hoạch và Đầu tư', unitId: 'un-khdt', role: 'delegate', email: 'an.nh@tinh.gov.vn', phone: '0912 000 005', avatarColor: '#1d9e5f', status: 'active', position: 'Giám đốc Sở' },
     { id: 'u-tc', username: 'sotc', password: P, fullName: 'Vũ Thị Hồng', title: 'Giám đốc Sở Tài chính', unitId: 'un-tc', role: 'delegate', email: 'hong.vt@tinh.gov.vn', phone: '0912 000 006', avatarColor: '#d97706', status: 'active' },
     { id: 'u-xd', username: 'soxd', password: P, fullName: 'Đặng Quốc Bảo', title: 'Giám đốc Sở Xây dựng', unitId: 'un-xd', role: 'delegate', email: 'bao.dq@tinh.gov.vn', phone: '0912 000 007', avatarColor: '#b45309', status: 'active' },
     { id: 'u-pxd', username: 'phosoxd', password: P, fullName: 'Trần Thị Lan Anh', title: 'Phó Giám đốc Sở Xây dựng', unitId: 'un-xd', role: 'delegate', email: 'lananh.tt@tinh.gov.vn', phone: '0912 000 008', avatarColor: '#be185d', status: 'active' },
@@ -85,11 +85,11 @@ export function buildSeed(): Snapshot {
   });
 
   const documents = [
-    D('d1', 'Báo cáo KT-XH 6 tháng đầu năm 2026.pdf', 'main', 'u-khdt', docText.ktxh, { meetingId: 'm1', agendaItemId: 'a1' }),
-    D('d2', 'Phụ lục số liệu KT-XH.pdf', 'main', 'u-khdt', docText.phuluc, { meetingId: 'm1', agendaItemId: 'a1' }),
-    D('d3', 'Tờ trình phân bổ vốn đầu tư công đợt 2.pdf', 'main', 'u-tc', docText.totrinh, { meetingId: 'm1', agendaItemId: 'a2' }),
+    D('d1', 'Báo cáo KT-XH 6 tháng đầu năm 2026.pdf', 'main', 'u-khdt', docText.ktxh, { meetingId: 'm1', agendaItemId: 'a1', issuingBody: 'Sở Kế hoạch và Đầu tư' }),
+    D('d2', 'Phụ lục số liệu KT-XH.pdf', 'main', 'u-khdt', docText.phuluc, { meetingId: 'm1', agendaItemId: 'a1', issuingBody: 'Sở Kế hoạch và Đầu tư' }),
+    D('d3', 'Tờ trình phân bổ vốn đầu tư công đợt 2.pdf', 'main', 'u-tc', docText.totrinh, { meetingId: 'm1', agendaItemId: 'a2', issuingBody: 'Sở Tài chính' }),
     D('d4', 'Báo cáo tiến độ đường vành đai phía Đông.pdf', 'main', 'u-gtvt', docText.vanhdai, { meetingId: 'm1', agendaItemId: 'a3' }),
-    D('d5', 'Dự thảo Nghị quyết phiên họp tháng 7.pdf', 'main', 'u-tk', docText.nghiquyet, { meetingId: 'm1', agendaItemId: 'a4', version: 2 }),
+    D('d5', 'Dự thảo Nghị quyết phiên họp tháng 7.pdf', 'main', 'u-tk', docText.nghiquyet, { meetingId: 'm1', agendaItemId: 'a4', version: 2, issuingBody: 'Văn phòng UBND' }),
     D('d-ref1', 'Quy chế làm việc của UBND tỉnh.pdf', 'reference', 'u-tk', docText.quyche, { meetingId: 'm1' }),
     D('d-ref2', 'Chỉ thị 05/CT-TTg về giải ngân ĐTC.pdf', 'reference', 'u-tk', docText.chithi, { meetingId: 'm1', secret: true }),
     D('d6', 'Báo cáo giải ngân vốn đầu tư công.pdf', 'main', 'u-khdt', docText.giaingan, { meetingId: 'm2', agendaItemId: 'a2-1' }),
@@ -102,8 +102,8 @@ export function buildSeed(): Snapshot {
     D('d11', 'Tờ trình phương án điều chuyển 120 tỷ vốn đầu tư công.pdf', 'main', 'u-tc', docText.totrinh, { meetingId: 'm2', agendaItemId: 'a2-2', reviewStatus: 'pending' }),
     // 1 tài liệu BỊ TỪ CHỐI (yêu cầu làm lại) — kèm lý do
     D('d12', 'Báo cáo bổ sung tiến độ giải ngân (bản 1).pdf', 'main', 'u-gtvt', docText.giaingan, { meetingId: 'm2', agendaItemId: 'a2-1', reviewStatus: 'rejected', reviewNote: 'Thiếu số liệu giải ngân chi tiết theo từng chủ đầu tư; đề nghị bổ sung phụ lục và trình lại.', reviewedById: 'u-tk', reviewedAt: iso(minAgo(60 * 3)) }),
-    D('d-p1', 'Ghi chú chuẩn bị ý kiến chỉ đạo.docx', 'personal', 'u-ct', docText.ghichu, { sharedWith: ['u-tk'], mime: 'application/msword' }),
-    D('d-p2', 'Danh sách công việc chuẩn bị phiên họp.docx', 'personal', 'u-tk', docText.dscv, { mime: 'application/msword' }),
+    D('d-p1', 'Ghi chú chuẩn bị ý kiến chỉ đạo.docx', 'personal', 'u-ct', docText.ghichu, { sharedWith: ['u-tk'], mime: 'application/msword', folder: 'Chỉ đạo điều hành' }),
+    D('d-p2', 'Danh sách công việc chuẩn bị phiên họp.docx', 'personal', 'u-tk', docText.dscv, { mime: 'application/msword', folder: 'Chuẩn bị họp' }),
   ] as Snapshot['documents'];
 
   // ---------------- Phiên họp ----------------
@@ -116,6 +116,7 @@ export function buildSeed(): Snapshot {
       id: 'm1', code: 'PH-2026/07-01',
       title: 'Phiên họp thường kỳ UBND tỉnh tháng 7/2026',
       description: 'Đánh giá tình hình KT-XH 6 tháng đầu năm 2026; phân bổ vốn đầu tư công đợt 2; tiến độ dự án trọng điểm; thông qua Nghị quyết phiên họp.',
+      meetingType: 'Họp thường kỳ',
       startTime: iso(minAgo(30)), endTime: iso(minFromNow(90)),
       roomId: 'r1', isOnline: true, status: 'live',
       chairId: 'u-ct', secretaryId: 'u-tk',
@@ -146,6 +147,8 @@ export function buildSeed(): Snapshot {
         { id: 'a4', order: 4, title: 'Thảo luận, biểu quyết thông qua dự thảo Nghị quyết phiên họp', presenterId: 'u-tk', durationMinutes: 15, documentIds: ['d5'] },
       ],
       currentAgendaItemId: 'a2',
+      // Mốc bắt đầu mục a2 (E-HSMT mục 27): 10 phút trước -> đếm ngược còn ~20 phút / 30 phút
+      currentItemStartedAt: iso(minAgo(10)),
       // Phiên chất vấn đang mở để demo nghiệp vụ (E-HSMT mục 34/45/46)
       questionSession: 'open',
       conclusions: [
@@ -158,6 +161,7 @@ export function buildSeed(): Snapshot {
       id: 'm2', code: 'PH-2026/07-02',
       title: 'Họp chuyên đề về giải ngân vốn đầu tư công năm 2026',
       description: 'Rà soát tiến độ giải ngân của các chủ đầu tư; phương án điều chuyển vốn các dự án chậm tiến độ.',
+      meetingType: 'Họp chuyên đề',
       startTime: iso(dayAt(2, 8, 0)), endTime: iso(dayAt(2, 11, 30)),
       roomId: 'r1', isOnline: true, status: 'invited',
       chairId: 'u-pct', secretaryId: 'u-tk',
@@ -436,8 +440,51 @@ export function buildSeed(): Snapshot {
     { id: 'au7', userId: 'u-admin', userName: 'Đỗ Quang Trị', action: 'Đăng nhập', detail: 'Đăng nhập hệ thống từ địa chỉ 10.0.12.5', at: iso(minAgo(60 * 2)) },
   ] as Snapshot['audit'];
 
+  // ---------------- Danh mục chung (E-HSMT mục 6, 7, 10) ----------------
+  const cat = (id: string, type: 'position' | 'meetingType' | 'issuingBody', name: string, order: number, description = '') => ({
+    id, type, name, order, active: true, description, createdAt: iso(minAgo(60 * 24 * 20)),
+  });
+  const catalogs = [
+    // Chức vụ (mục 6)
+    cat('cat-pos-1', 'position', 'Chủ tịch', 1),
+    cat('cat-pos-2', 'position', 'Phó Chủ tịch', 2),
+    cat('cat-pos-3', 'position', 'Chánh Văn phòng', 3),
+    cat('cat-pos-4', 'position', 'Giám đốc Sở', 4),
+    cat('cat-pos-5', 'position', 'Chuyên viên', 5),
+    // Loại phiên họp (mục 7)
+    cat('cat-mt-1', 'meetingType', 'Họp thường kỳ', 1),
+    cat('cat-mt-2', 'meetingType', 'Họp chuyên đề', 2),
+    cat('cat-mt-3', 'meetingType', 'Họp đột xuất', 3),
+    cat('cat-mt-4', 'meetingType', 'Họp trực tuyến', 4),
+    // Cơ quan ban hành (mục 10)
+    cat('cat-ib-1', 'issuingBody', 'UBND tỉnh', 1),
+    cat('cat-ib-2', 'issuingBody', 'Văn phòng UBND', 2),
+    cat('cat-ib-3', 'issuingBody', 'Sở Kế hoạch và Đầu tư', 3),
+    cat('cat-ib-4', 'issuingBody', 'Sở Tài chính', 4),
+  ] as Snapshot['catalogs'];
+
+  // ---------------- Tài liệu hướng dẫn sử dụng (E-HSMT mục 4) ----------------
+  const guides = [
+    {
+      id: 'g1', title: 'HDSD dành cho Đại biểu',
+      content: 'HƯỚNG DẪN SỬ DỤNG DÀNH CHO ĐẠI BIỂU DỰ HỌP\n\n1. Đăng nhập hệ thống bằng tài khoản được cấp; đổi mật khẩu lần đầu.\n2. Xem giấy mời và xác nhận tham dự / báo vắng / ủy quyền tại mục "Phiên họp".\n3. Nghiên cứu tài liệu trong phần "Tài liệu"; có thể ghi chú cá nhân hoặc gửi góp ý công khai.\n4. Khi vào phòng họp: điểm danh (bấm nút hoặc quét mã QR), theo dõi chương trình và thời gian còn lại của mục đang họp.\n5. Đăng ký phát biểu / chất vấn khi được chủ tọa cho phép; thực hiện biểu quyết các nội dung.\n6. Cho ý kiến các văn bản lấy ý kiến tại mục "Lấy ý kiến".',
+      roleScope: ['delegate'], createdAt: iso(minAgo(60 * 24 * 18)), updatedAt: iso(minAgo(60 * 24 * 4)),
+    },
+    {
+      id: 'g2', title: 'HDSD Chủ tọa & Thư ký',
+      content: 'HƯỚNG DẪN SỬ DỤNG DÀNH CHO CHỦ TỌA VÀ THƯ KÝ\n\n1. Tạo/chỉnh sửa phiên họp: nhập thông tin, thành phần, chương trình; gửi giấy mời.\n2. Chuẩn bị và duyệt tài liệu họp (duyệt/không duyệt tài liệu do đơn vị trình).\n3. Điều hành phiên họp: khai mạc, chuyển mục chương trình (đếm ngược thời lượng), điều hành phát biểu/chất vấn.\n4. Mở/đóng biểu quyết; theo dõi đại biểu đã/chưa biểu quyết (trạng thái sẵn sàng).\n5. Ghi kết luận; lập biên bản theo Nghị định 30/2020 và ký số.\n6. Xuất danh sách điểm danh, xuất ý kiến tài liệu phục vụ tổng hợp.',
+      roleScope: ['chairman', 'secretary'], createdAt: iso(minAgo(60 * 24 * 18)), updatedAt: iso(minAgo(60 * 24 * 6)),
+    },
+    {
+      id: 'g3', title: 'Giới thiệu chung hệ thống eCabinet',
+      content: 'GIỚI THIỆU HỆ THỐNG PHÒNG HỌP KHÔNG GIẤY (eCabinet)\n\nHệ thống hỗ trợ tổ chức cuộc họp không giấy tờ: quản lý cuộc họp, tài liệu, biểu quyết điện tử, chất vấn, biên bản và ký số. Tài liệu hướng dẫn chi tiết theo từng vai trò được cung cấp trong mục này. Mọi thắc mắc liên hệ Quản trị hệ thống.',
+      roleScope: [], createdAt: iso(minAgo(60 * 24 * 18)), updatedAt: iso(minAgo(60 * 24 * 18)),
+    },
+  ] as Snapshot['guides'];
+
   return {
     users, units, rooms, meetings, documents,
+    catalogs, guides,
     annotations: [
       { id: 'an1', docId: 'd3', userId: 'u-ct', content: 'Lưu ý: cân nhắc tăng tỷ trọng cho y tế cơ sở theo kiến nghị Sở Y tế.', createdAt: iso(minAgo(7)) },
       { id: 'an2', docId: 'd1', userId: 'u-ct', content: 'Số liệu thu hút đầu tư tốt — biểu dương tại phần kết luận.', createdAt: iso(minAgo(20)) },

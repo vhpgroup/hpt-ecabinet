@@ -70,7 +70,15 @@ const ACL = {
   messages:      { create: 'self:fromId', update: 'none', remove: 'none' },
   tasks:         { create: MANAGE, update: 'assigneeOrManage', remove: MANAGE },
   notifications: { create: 'any', update: 'owner:userId', remove: 'owner:userId' },
-  audit:         { create: 'any', update: 'none', remove: 'none' },
+  // Nhật ký (E-HSMT mục 3): ai cũng ghi được (server tự ghi khi thao tác); KHÔNG sửa;
+  // GIỜ CHO admin XÓA (trước là 'none') để "Xóa nhật ký đăng nhập hệ thống".
+  audit:         { create: 'any', update: 'none', remove: ['admin'] },
+  // ĐỢT 3 — Danh mục chung (E-HSMT mục 6, 7, 10): đọc = mọi người đăng nhập;
+  // tạo/sửa/xóa CHỈ admin (Quản trị hệ thống quản trị danh mục).
+  catalogs:      { create: ['admin'], update: ['admin'], remove: ['admin'] },
+  // ĐỢT 3 — Tài liệu HDSD (E-HSMT mục 4): đọc = mọi người (access.js lọc theo roleScope);
+  // tạo/sửa/xóa CHỈ admin.
+  guides:        { create: ['admin'], update: ['admin'], remove: ['admin'] },
 };
 
 const sanitizeUser = (u) => { const { password, ...rest } = u ?? {}; return { ...rest, password: '' }; };
