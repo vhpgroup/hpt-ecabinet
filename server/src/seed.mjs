@@ -34,10 +34,13 @@ function buildSeed() {
     { id: "u-gtvt", username: "sogtvt", password: P, fullName: "B\xF9i \u0110\u1EE9c Long", title: "Gi\xE1m \u0111\u1ED1c S\u1EDF Giao th\xF4ng v\u1EADn t\u1EA3i", unitId: "un-gtvt", role: "delegate", email: "long.bd@tinh.gov.vn", phone: "0912 000 010", avatarColor: "#4338ca", status: "active" },
     { id: "u-yt", username: "soyt", password: P, fullName: "L\u01B0\u01A1ng Th\u1ECB Mai", title: "Gi\xE1m \u0111\u1ED1c S\u1EDF Y t\u1EBF", unitId: "un-yt", role: "delegate", email: "mai.lt@tinh.gov.vn", phone: "0912 000 011", avatarColor: "#d64545", status: "active" },
     { id: "u-gd", username: "sogddt", password: P, fullName: "Tr\u1ECBnh V\u0103n S\xE1ng", title: "Gi\xE1m \u0111\u1ED1c S\u1EDF Gi\xE1o d\u1EE5c v\xE0 \u0110\xE0o t\u1EA1o", unitId: "un-gd", role: "delegate", email: "sang.tv@tinh.gov.vn", phone: "0912 000 012", avatarColor: "#65a30d", status: "active" },
-    { id: "u-tt", username: "sotttt", password: P, fullName: "Ng\xF4 Gia Huy", title: "Gi\xE1m \u0111\u1ED1c S\u1EDF Th\xF4ng tin v\xE0 Truy\u1EC1n th\xF4ng", unitId: "un-tt", role: "delegate", email: "huy.ng@tinh.gov.vn", phone: "0912 000 013", avatarColor: "#0369a1", status: "active" }
+    { id: "u-tt", username: "sotttt", password: P, fullName: "Ng\xF4 Gia Huy", title: "Gi\xE1m \u0111\u1ED1c S\u1EDF Th\xF4ng tin v\xE0 Truy\u1EC1n th\xF4ng", unitId: "un-tt", role: "delegate", email: "huy.ng@tinh.gov.vn", phone: "0912 000 013", avatarColor: "#0369a1", status: "active" },
+    // Quản trị đơn vị (E-HSMT vai trò thứ 5) — quản lý người dùng trong Sở KH&ĐT (cùng đơn vị với sokhdt)
+    { id: "u-qtdv", username: "qtdonvi", password: P, fullName: "Nguy\u1EC5n Qu\u1EA3n Tr\u1ECB", title: "Chuy\xEAn vi\xEAn \u2014 Qu\u1EA3n tr\u1ECB \u0111\u01A1n v\u1ECB S\u1EDF KH&\u0110T", unitId: "un-khdt", role: "unit_admin", email: "qtdv.khdt@tinh.gov.vn", phone: "0912 000 014", avatarColor: "#0d9488", status: "active" }
   ];
   const rooms = [
-    { id: "r1", name: "Ph\xF2ng h\u1ECDp s\u1ED1 1", location: "T\u1EA7ng 3, Tr\u1EE5 s\u1EDF UBND t\u1EC9nh", capacity: 40, equipment: ['M\xE0n h\xECnh LED 85"', "\xC2m thanh h\u1ED9i ngh\u1ECB", "Camera PTZ", "M\xE1y qu\xE9t QR \u0111i\u1EC3m danh"], supportsOnline: true, status: "active" },
+    // Sơ đồ phòng họp số 1: lưới 5 hàng x 6 cột; cột giữa (index 2,3) hàng 2,3 để trống làm lối đi
+    { id: "r1", name: "Ph\xF2ng h\u1ECDp s\u1ED1 1", location: "T\u1EA7ng 3, Tr\u1EE5 s\u1EDF UBND t\u1EC9nh", capacity: 40, equipment: ['M\xE0n h\xECnh LED 85"', "\xC2m thanh h\u1ED9i ngh\u1ECB", "Camera PTZ", "M\xE1y qu\xE9t QR \u0111i\u1EC3m danh"], supportsOnline: true, status: "active", layout: { rows: 5, cols: 6, disabled: ["2-2", "2-3", "3-2", "3-3"] } },
     { id: "r2", name: "H\u1ED9i tr\u01B0\u1EDDng A", location: "T\u1EA7ng 1, Tr\u1EE5 s\u1EDF UBND t\u1EC9nh", capacity: 120, equipment: ["S\xE2n kh\u1EA5u", "M\xE1y chi\u1EBFu 4K", "H\u1EC7 th\u1ED1ng \xE2m thanh l\u1EDBn"], supportsOnline: false, status: "active" },
     { id: "r3", name: "Ph\xF2ng h\u1ECDp tr\u1EF1c tuy\u1EBFn", location: "T\u1EA7ng 5, Tr\u1EE5 s\u1EDF UBND t\u1EC9nh", capacity: 20, equipment: ["Thi\u1EBFt b\u1ECB h\u1ED9i ngh\u1ECB truy\u1EC1n h\xECnh", "Micro \u0111a h\u01B0\u1EDBng"], supportsOnline: true, status: "active" }
   ];
@@ -193,6 +196,11 @@ Ch\u01B0\u01A1ng IV. Tr\xE1ch nhi\u1EC7m c\u1EE7a th\u1EE7 tr\u01B0\u1EDFng c\u0
     D("d8", "B\xE1o c\xE1o KT-XH th\xE1ng 6.2026.pdf", "main", "u-khdt", docText.kt6, { meetingId: "m4", agendaItemId: "a4-1" }),
     D("d9", "D\u1EF1 th\u1EA3o Ngh\u1ECB quy\u1EBFt phi\xEAn h\u1ECDp th\xE1ng 6.pdf", "main", "u-tk", docText.nghiquyet.replace(/THÁNG 7/g, "TH\xC1NG 6"), { meetingId: "m4", agendaItemId: "a4-3" }),
     D("d10", "D\u1EF1 th\u1EA3o Quy ch\u1EBF qu\u1EA3n l\xFD t\xE0i s\u1EA3n c\xF4ng.pdf", "reference", "u-tc", docText.tsc, {}),
+    // E-HSMT mục 24 — demo quy trình trình–duyệt tài liệu (trong phiên m2 sắp diễn ra):
+    // 1 tài liệu ĐANG CHỜ DUYỆT do Sở Tài chính trình lên
+    D("d11", "T\u1EDD tr\xECnh ph\u01B0\u01A1ng \xE1n \u0111i\u1EC1u chuy\u1EC3n 120 t\u1EF7 v\u1ED1n \u0111\u1EA7u t\u01B0 c\xF4ng.pdf", "main", "u-tc", docText.totrinh, { meetingId: "m2", agendaItemId: "a2-2", reviewStatus: "pending" }),
+    // 1 tài liệu BỊ TỪ CHỐI (yêu cầu làm lại) — kèm lý do
+    D("d12", "B\xE1o c\xE1o b\u1ED5 sung ti\u1EBFn \u0111\u1ED9 gi\u1EA3i ng\xE2n (b\u1EA3n 1).pdf", "main", "u-gtvt", docText.giaingan, { meetingId: "m2", agendaItemId: "a2-1", reviewStatus: "rejected", reviewNote: "Thi\u1EBFu s\u1ED1 li\u1EC7u gi\u1EA3i ng\xE2n chi ti\u1EBFt theo t\u1EEBng ch\u1EE7 \u0111\u1EA7u t\u01B0; \u0111\u1EC1 ngh\u1ECB b\u1ED5 sung ph\u1EE5 l\u1EE5c v\xE0 tr\xECnh l\u1EA1i.", reviewedById: "u-tk", reviewedAt: iso(minAgo(60 * 3)) }),
     D("d-p1", "Ghi ch\xFA chu\u1EA9n b\u1ECB \xFD ki\u1EBFn ch\u1EC9 \u0111\u1EA1o.docx", "personal", "u-ct", docText.ghichu, { sharedWith: ["u-tk"], mime: "application/msword" }),
     D("d-p2", "Danh s\xE1ch c\xF4ng vi\u1EC7c chu\u1EA9n b\u1ECB phi\xEAn h\u1ECDp.docx", "personal", "u-tk", docText.dscv, { mime: "application/msword" })
   ];
@@ -230,6 +238,16 @@ Ch\u01B0\u01A1ng IV. Tr\xE1ch nhi\u1EC7m c\u1EE7a th\u1EE7 tr\u01B0\u1EDFng c\u0
         pAccepted("u-gd", "member", "B4", false),
         pAccepted("u-tt", "member", "B5")
       ],
+      // Gán sẵn vị trí đại biểu trên sơ đồ (khóa "hàng-cột" 0-based; tránh ô lối đi)
+      seatAssignments: {
+        "u-ct": "0-2",
+        "u-tk": "0-3",
+        "u-pct": "1-0",
+        "u-khdt": "1-1",
+        "u-tc": "1-4",
+        "u-tnmt": "3-0",
+        "u-gtvt": "3-1"
+      },
       agenda: [
         { id: "a1", order: 1, title: "B\xE1o c\xE1o t\xECnh h\xECnh kinh t\u1EBF \u2013 x\xE3 h\u1ED9i 6 th\xE1ng \u0111\u1EA7u n\u0103m 2026, nhi\u1EC7m v\u1EE5 tr\u1ECDng t\xE2m 6 th\xE1ng cu\u1ED1i n\u0103m", presenterId: "u-khdt", durationMinutes: 45, documentIds: ["d1", "d2"] },
         { id: "a2", order: 2, title: "T\u1EDD tr\xECnh ph\xE2n b\u1ED5 k\u1EBF ho\u1EA1ch v\u1ED1n \u0111\u1EA7u t\u01B0 c\xF4ng \u0111\u1EE3t 2 n\u0103m 2026", presenterId: "u-tc", durationMinutes: 30, documentIds: ["d3"] },

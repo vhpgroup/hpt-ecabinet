@@ -52,7 +52,10 @@ const MANAGE = ['admin', 'secretary', 'chairman'];
 // 'assigneeOrManage': người được giao (assigneeId) hoặc quản lý
 // 'none'           : cấm qua API chung
 const ACL = {
-  users:         { create: ['admin'], update: 'adminOrSelf', remove: ['admin'] },
+  // Quản trị đơn vị (unit_admin) được tạo/sửa người dùng TRONG đơn vị mình.
+  // Kiểm tra sâu (cùng đơn vị, không đụng admin, không tự đổi unitId) nằm ở
+  // enforceUserWrite() — đọc unitId từ DB, KHÔNG tin body. Xóa vẫn CHỈ admin.
+  users:         { create: ['admin', 'unit_admin'], update: 'adminOrSelfOrUnitAdmin', remove: ['admin'] },
   units:         { create: ['admin'], update: ['admin'], remove: ['admin'] },
   rooms:         { create: ['admin'], update: ['admin'], remove: ['admin'] },
   meetings:      { create: MANAGE, update: 'any', remove: MANAGE },
@@ -78,6 +81,8 @@ function allowed(rule, req, existing, body) {
   if (rule === 'none') return false;
   if (Array.isArray(rule)) return rule.includes(role);
   if (rule === 'adminOrSelf') return role === 'admin' || existing?.id === sub;
+  // Quản trị đơn vị: admin | chính chủ | unit_admin (phạm vi đơn vị kiểm sâu ở enforceUserWrite)
+  if (rule === 'adminOrSelfOrUnitAdmin') return role === 'admin' || existing?.id === sub || role === 'unit_admin';
   if (rule === 'ownerOrManage') return MANAGE.includes(role) || existing?.ownerId === sub;
   if (rule === 'assigneeOrManage') return MANAGE.includes(role) || existing?.assigneeId === sub;
   if (rule.startsWith('ownerOrManage:')) return MANAGE.includes(role) || existing?.[rule.slice(14)] === sub;
@@ -95,6 +100,64 @@ function tableOf(req, res) {
 async function getExisting(table, id) {
   const r = await query(`SELECT data FROM ${table} WHERE id = $1`, [id]);
   return r.rows[0]?.data;
+}
+
+/**
+ * KIỂM TRA SÂU thao tác trên bộ dữ liệu users cho QUẢN TRỊ ĐƠN VỊ (unit_admin).
+ * An ninh: JWT chỉ mang { sub, role, name } — unitId của unit_admin phải ĐỌC TỪ DB,
+ * KHÔNG tin body. Trả về { ok:true } nếu hợp lệ, hoặc { status, error } để chặn.
+ *
+ * op = 'create' | 'update'. existing = bản ghi hiện có (update). body = dữ liệu gửi lên.
+ * Quy tắc unit_admin (E-HSMT: quản lý người dùng phạm vi đơn vị mình):
+ *  (a) đơn vị của đối tượng (existing.unitId khi sửa, body.unitId khi tạo) PHẢI === unitId của unit_admin;
+ *  (b) KHÔNG được đặt role 'admin' cho bất kỳ ai; KHÔNG được sửa user đang có role 'admin';
+ *  (c) KHÔNG tự hạ/đổi unitId của chính mình (không thao tác trên chính mình qua đường này);
+ *  (d) khi tạo/sửa, unitId đích (nếu có trong body) cũng phải trùng đơn vị mình (không "chuyển" người sang đơn vị khác).
+ * admin: bỏ qua (toàn quyền như cũ). Vai trò khác đã bị ACL chặn từ trước.
+ */
+async function enforceUserWrite(req, op, existing, body) {
+  if (req.user.role !== 'unit_admin') return { ok: true };
+  // đọc đơn vị của CHÍNH unit_admin từ DB (nguồn tin cậy duy nhất)
+  const self = await getExisting('c_users', req.user.sub);
+  const myUnit = self?.unitId;
+  if (!myUnit) return { status: 403, error: 'Không xác định được đơn vị của bạn' };
+
+  // (b) không được gán vai trò admin cho bất kỳ ai
+  if (body && body.role === 'admin') {
+    return { status: 403, error: 'Quản trị đơn vị không được cấp vai trò Quản trị hệ thống' };
+  }
+
+  if (op === 'update') {
+    // (c) TỰ SỬA hồ sơ của chính mình: cho phép như đại biểu thường NHƯNG
+    // KHÔNG được tự đổi đơn vị (unitId) hay tự nâng vai trò (role) của mình.
+    if (existing?.id === req.user.sub) {
+      if (body.unitId !== undefined && body.unitId !== myUnit) {
+        return { status: 403, error: 'Không được tự đổi đơn vị của mình' };
+      }
+      if (body.role !== undefined && body.role !== existing.role) {
+        return { status: 403, error: 'Không được tự đổi vai trò của mình' };
+      }
+      return { ok: true };
+    }
+    // (b) không sửa tài khoản đang là admin
+    if (existing?.role === 'admin') {
+      return { status: 403, error: 'Không được sửa tài khoản Quản trị hệ thống' };
+    }
+    // (a) đối tượng phải thuộc đơn vị mình
+    if (existing?.unitId !== myUnit) {
+      return { status: 403, error: 'Bạn chỉ quản lý người dùng trong đơn vị của mình' };
+    }
+    // (d) nếu body cố đổi unitId sang đơn vị khác -> chặn
+    if (body.unitId !== undefined && body.unitId !== myUnit) {
+      return { status: 403, error: 'Không được chuyển người dùng sang đơn vị khác' };
+    }
+  } else { // create
+    // (a)(d) người dùng mới phải thuộc đơn vị mình (đọc từ body nhưng ràng buộc === myUnit)
+    if (body.unitId !== myUnit) {
+      return { status: 403, error: 'Chỉ được tạo người dùng trong đơn vị của mình' };
+    }
+  }
+  return { ok: true };
 }
 
 const app = new Router();
@@ -252,6 +315,11 @@ app.add('POST', '/api/:collection', requireAuth, async (req, res) => {
   if (!allowed(ACL[col].create, req, null, body)) {
     return send(res, 403, { error: 'Bạn không có quyền tạo dữ liệu này' });
   }
+  // Quản trị đơn vị: kiểm tra sâu phạm vi đơn vị khi tạo người dùng
+  if (col === 'users') {
+    const chk = await enforceUserWrite(req, 'create', null, body);
+    if (!chk.ok) return send(res, chk.status, { error: chk.error });
+  }
   validatePatch(col, body); // GĐ6 (P0-2): chặn kiểu sai ngay khi tạo
   try {
     if (col === 'users') {
@@ -284,13 +352,19 @@ app.add('PATCH', '/api/:collection/:id', requireAuth, async (req, res) => {
   if (!allowed(ACL[col].update, req, existing, patch)) {
     return send(res, 403, { error: 'Bạn không có quyền cập nhật bản ghi này' });
   }
+  // Quản trị đơn vị: kiểm tra sâu phạm vi đơn vị khi sửa người dùng (đọc unitId từ DB)
+  if (col === 'users') {
+    const chk = await enforceUserWrite(req, 'update', existing, patch);
+    if (!chk.ok) return send(res, chk.status, { error: chk.error });
+  }
   validatePatch(col, patch); // GĐ6 (P0-2): chặn kiểu sai trước khi ghi (tránh hỏng bản ghi + sập 500)
   // GĐ4: khóa cứng trường nhạy cảm — chỉ đổi được qua /api/actions
   patch = guardPatch(col, existing, patch, req.user);
 
   if (col === 'users') {
-    // không phải admin: không được tự đổi vai trò/trạng thái/tên đăng nhập
-    if (req.user.role !== 'admin') {
+    // đại biểu thường tự sửa hồ sơ: KHÔNG được đổi vai trò/trạng thái/tên đăng nhập.
+    // admin + quản trị đơn vị (đã qua enforceUserWrite) được đổi các trường này.
+    if (req.user.role !== 'admin' && req.user.role !== 'unit_admin') {
       delete patch.role; delete patch.status; delete patch.username;
     }
     let passwordHash = null;

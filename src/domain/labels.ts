@@ -6,6 +6,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   chairman: 'Chủ trì',
   secretary: 'Thư ký',
   delegate: 'Đại biểu',
+  unit_admin: 'Quản trị đơn vị',
 };
 
 export const MEETING_STATUS: Record<MeetingStatus, { label: string; color: string }> = {
@@ -54,6 +55,14 @@ export const DOC_KIND: Record<string, string> = {
   main: 'Tài liệu chính',
   reference: 'Tài liệu tham khảo',
   personal: 'Tài liệu cá nhân',
+};
+
+// Trạng thái duyệt tài liệu (E-HSMT mục 24). undefined coi như 'approved'.
+export const DOC_REVIEW: Record<string, { label: string; color: string }> = {
+  draft: { label: 'Nháp', color: 'gray' },
+  pending: { label: 'Chờ duyệt', color: 'amber' },
+  approved: { label: 'Đã duyệt', color: 'green' },
+  rejected: { label: 'Từ chối', color: 'red' },
 };
 
 export const MEETING_ROLE: Record<string, string> = {

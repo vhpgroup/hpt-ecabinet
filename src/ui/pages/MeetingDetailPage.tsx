@@ -6,16 +6,16 @@ import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { DocFile, Meeting, User, Vote } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
-import { Avatar, Badge, EmptyState, Field, Icon, Modal, PageHeader, ProgressBar, QRSvg, VoteOutcomePanel, VoteResultBars } from '../components';
-import { ATTEND_STATUS, MEETING_ROLE, MEETING_STATUS, TASK_STATUS } from '../../domain/labels';
+import { Avatar, Badge, EmptyState, Field, Icon, Modal, PageHeader, ProgressBar, QRSvg, SeatGrid, VoteOutcomePanel, VoteResultBars, defaultLayout, seatKey } from '../components';
+import { ATTEND_STATUS, DOC_REVIEW, MEETING_ROLE, MEETING_STATUS, TASK_STATUS } from '../../domain/labels';
 import { can } from '../../services/authService';
 import * as meetingService from '../../services/meetingService';
 import * as voteService from '../../services/voteService';
 import * as documentService from '../../services/documentService';
 import * as taskService from '../../services/taskService';
-import { fmtDate, fmtDT, fmtTime, indexBy, timeAgo, toLocalInput, fromLocalInput } from '../format';
+import { fmtDate, fmtDT, fmtTime, indexBy, initials, timeAgo, toLocalInput, fromLocalInput } from '../format';
 import MeetingFormModal from './MeetingFormModal';
-import { DocRow, DocViewerModal } from './shared';
+import { DocReviewControls, DocRow, DocViewerModal } from './shared';
 
 export default function MeetingDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -118,6 +118,7 @@ export default function MeetingDetailPage() {
       <div className="tabs">
         <button className={'tab' + (tab === 'info' ? ' active' : '')} onClick={() => setTab('info')}><Icon name="info" size={15} />Thông tin & Chương trình</button>
         <button className={'tab' + (tab === 'people' ? ' active' : '')} onClick={() => setTab('people')}><Icon name="users" size={15} />Đại biểu<Badge color="gray">{m.participants.length}</Badge></button>
+        <button className={'tab' + (tab === 'seating' ? ' active' : '')} onClick={() => setTab('seating')}><Icon name="room" size={15} />Sơ đồ chỗ ngồi</button>
         <button className={'tab' + (tab === 'docs' ? ' active' : '')} onClick={() => setTab('docs')}><Icon name="file" size={15} />Tài liệu<Badge color="gray">{meetingDocs.length}</Badge></button>
         <button className={'tab' + (tab === 'votes' ? ' active' : '')} onClick={() => setTab('votes')}><Icon name="vote" size={15} />Biểu quyết<Badge color="gray">{meetingVotes.length}</Badge></button>
         <button className={'tab' + (tab === 'minutes' ? ' active' : '')} onClick={() => setTab('minutes')}><Icon name="pen" size={15} />Kết luận & Biên bản</button>
@@ -126,6 +127,7 @@ export default function MeetingDetailPage() {
 
       {tab === 'info' && <InfoTab m={m} onViewDoc={setViewDoc} />}
       {tab === 'people' && <PeopleTab m={m} onQr={() => setQrOpen(true)} />}
+      {tab === 'seating' && <SeatingTab m={m} />}
       {tab === 'docs' && <DocsTab m={m} onViewDoc={setViewDoc} />}
       {tab === 'votes' && <VotesTab m={m} votes={meetingVotes} onViewDoc={setViewDoc} />}
       {tab === 'minutes' && <MinutesTab m={m} votes={meetingVotes} />}
@@ -281,13 +283,111 @@ function PeopleTab({ m, onQr }: { m: Meeting; onQr: () => void }) {
   );
 }
 
+// ---------------- Tab: Sơ đồ chỗ ngồi (E-HSMT mục 38) ----------------
+function SeatingTab({ m }: { m: Meeting }) {
+  const { user, s, refresh, toast } = useApp();
+  const users = useMemo(() => indexBy(s.users), [s.users]);
+  const room = s.rooms.find((r) => r.id === m.roomId);
+  const layout = room?.layout ?? defaultLayout(room?.capacity ?? 24);
+  const manage = can.manageMeetings(user);
+  // đại biểu đang được chọn để gán ghế (chỉ manage)
+  const [selectedUser, setSelectedUser] = useState<string>('');
+
+  const assignments = m.seatAssignments ?? {};
+  // bản đồ ngược: khóa ghế -> userId
+  const bySeat = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const [uidX, sk] of Object.entries(assignments)) map.set(sk, uidX);
+    return map;
+  }, [assignments]);
+
+  const act = async (fn: () => Promise<unknown>, msg?: string) => {
+    try { await fn(); await refresh(); if (msg) toast(msg); }
+    catch (ex) { toast((ex as Error).message, 'error'); }
+  };
+
+  const onCell = (r: number, c: number) => {
+    if (!manage) return;
+    const key = seatKey(r, c);
+    const occupant = bySeat.get(key);
+    if (occupant) {
+      // bấm vào ghế đã có người: bỏ gán
+      act(() => meetingService.assignSeat(user!, m.id, occupant, null), 'Đã bỏ gán vị trí');
+      return;
+    }
+    if (!selectedUser) { toast('Chọn một đại biểu trong danh sách bên trái trước', 'info'); return; }
+    act(() => meetingService.assignSeat(user!, m.id, selectedUser, key), 'Đã gán vị trí đại biểu');
+  };
+
+  const unassigned = m.participants.filter((p) => !assignments[p.userId]);
+
+  return (
+    <div className="grid" style={{ gridTemplateColumns: manage ? '300px 1fr' : '1fr' }}>
+      {manage && (
+        <div className="card card-pad">
+          <h3 className="card-title"><Icon name="users" size={16} />Thành phần dự họp</h3>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 10 }}>
+            Chọn đại biểu rồi bấm vào ghế để gán. Bấm ghế đã có người để bỏ gán.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: '52vh', overflowY: 'auto' }}>
+            {m.participants.map((p) => {
+              const u = users.get(p.userId);
+              const seat = assignments[p.userId];
+              return (
+                <button key={p.userId}
+                  className={'btn sm' + (selectedUser === p.userId ? '' : ' outline')}
+                  style={{ justifyContent: 'flex-start', gap: 8 }}
+                  onClick={() => setSelectedUser(selectedUser === p.userId ? '' : p.userId)}>
+                  <Avatar user={u} size={22} />
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'left' }}>{u?.fullName}</span>
+                  {seat
+                    ? <Badge color="green">{seat.split('-').map((n) => Number(n) + 1).join('-')}</Badge>
+                    : <span style={{ fontSize: 11, color: 'var(--muted)' }}>chưa xếp</span>}
+                </button>
+              );
+            })}
+          </div>
+          {unassigned.length > 0 && (
+            <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>Còn {unassigned.length} đại biểu chưa xếp chỗ.</p>
+          )}
+        </div>
+      )}
+      <div className="card card-pad">
+        <h3 className="card-title"><Icon name="room" size={16} />Sơ đồ {room?.name ?? 'phòng họp'}</h3>
+        <SeatGrid layout={layout} onCellClick={manage ? onCell : undefined}
+          render={(r, c) => {
+            const key = seatKey(r, c);
+            const occupant = bySeat.get(key);
+            if (!occupant) return { label: <span className="seat-code">{r + 1}-{c + 1}</span> };
+            const u = users.get(occupant);
+            return {
+              cls: 'assigned',
+              label: <span>{u ? initials(u.fullName) : '?'}</span>,
+              title: `${u?.fullName ?? ''}${u?.title ? ` — ${u.title}` : ''}`,
+            };
+          }} />
+        <div className="seatmap-legend">
+          <span><span className="dot" style={{ background: 'var(--primary-soft)', borderColor: 'var(--primary)' }} />Đã gán đại biểu</span>
+          <span><span className="dot" style={{ background: '#fff', borderColor: 'var(--line-2)' }} />Ghế trống</span>
+          {!manage && <span style={{ color: 'var(--muted)' }}>· Chỉ chủ trì/thư ký được gán vị trí</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- Tab: Tài liệu ----------------
 function DocsTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void }) {
   const { user, s, refresh, toast } = useApp();
   const [upOpen, setUpOpen] = useState(false);
   const manage = can.manageMeetings(user);
   const docById = indexBy(s.documents);
-  const refDocs = s.documents.filter((d) => d.meetingId === m.id && d.kind === 'reference');
+  // E-HSMT mục 24: đại biểu thường chỉ thấy tài liệu ĐÃ DUYỆT (owner/manage thấy mọi trạng thái)
+  const canSee = (d: DocFile) =>
+    manage || d.ownerId === user?.id || documentService.isApproved(d);
+  const refDocs = s.documents.filter((d) => d.meetingId === m.id && d.kind === 'reference' && canSee(d));
+  // hàng đợi duyệt trong phiên họp (chỉ quản lý)
+  const pendingDocs = s.documents.filter((d) => d.meetingId === m.id && d.reviewStatus === 'pending');
 
   return (
     <div>
@@ -296,16 +396,23 @@ function DocsTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
           <button className="btn" onClick={() => setUpOpen(true)}><Icon name="paperclip" size={15} />Thêm tài liệu vào phiên họp</button>
         </div>
       )}
+      {/* Hàng đợi duyệt trong phiên họp */}
+      {manage && pendingDocs.length > 0 && (
+        <div className="card card-pad" style={{ marginBottom: 14, borderColor: '#f3ddb3', background: '#fffaf0' }}>
+          <h3 className="card-title" style={{ marginBottom: 10 }}><Icon name="clock" size={16} />Tài liệu chờ duyệt <Badge color="amber">{pendingDocs.length}</Badge></h3>
+          {pendingDocs.map((d) => <DocRow key={d.id} doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} />} />)}
+        </div>
+      )}
       <div className="grid grid-2">
         <div className="card card-pad">
           <h3 className="card-title"><Icon name="file" size={16} />Tài liệu chính theo chương trình</h3>
           {m.agenda.map((a) => (
             <div key={a.id} style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Mục {a.order}. {a.title}</div>
-              {a.documentIds.length === 0 && <p style={{ fontSize: 12.5, color: '#9aabc0', marginLeft: 4 }}>Chưa có tài liệu</p>}
+              {a.documentIds.filter((did) => { const d = docById.get(did); return d && canSee(d); }).length === 0 && <p style={{ fontSize: 12.5, color: '#9aabc0', marginLeft: 4 }}>Chưa có tài liệu</p>}
               {a.documentIds.map((did) => {
                 const d = docById.get(did);
-                return d ? <DocRow key={did} doc={d} onView={onViewDoc} /> : null;
+                return d && canSee(d) ? <DocRow key={did} doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} />} /> : null;
               })}
             </div>
           ))}
@@ -313,7 +420,7 @@ function DocsTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
         <div className="card card-pad">
           <h3 className="card-title"><Icon name="paperclip" size={16} />Tài liệu tham khảo</h3>
           {refDocs.length === 0 && <p style={{ fontSize: 13, color: 'var(--muted)' }}>Không có tài liệu tham khảo.</p>}
-          {refDocs.map((d) => <DocRow key={d.id} doc={d} onView={onViewDoc} />)}
+          {refDocs.map((d) => <DocRow key={d.id} doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} />} />)}
         </div>
       </div>
       {upOpen && <UploadModal m={m} onClose={() => setUpOpen(false)} onDone={async () => { setUpOpen(false); await refresh(); toast('Đã thêm tài liệu'); }} />}

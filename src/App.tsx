@@ -37,6 +37,14 @@ function RequireAdmin({ children }: { children: React.ReactElement }) {
   return children;
 }
 
+// Cho phép cả Quản trị hệ thống (admin) và Quản trị đơn vị (unit_admin)
+// vào phân hệ quản lý người dùng (unit_admin bị giới hạn phạm vi bên trong trang).
+function RequireUserAdmin({ children }: { children: React.ReactElement }) {
+  const { user } = useApp();
+  if (user?.role !== 'admin' && user?.role !== 'unit_admin') return <Navigate to="/" replace />;
+  return children;
+}
+
 function ToastHost() {
   const { toasts } = useApp();
   return (
@@ -65,7 +73,7 @@ export default function App() {
         <Route path="/polls" element={<PollsPage />} />
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
-        <Route path="/admin/users" element={<RequireAdmin><UsersAdminPage /></RequireAdmin>} />
+        <Route path="/admin/users" element={<RequireUserAdmin><UsersAdminPage /></RequireUserAdmin>} />
         <Route path="/admin/units" element={<RequireAdmin><UnitsAdminPage /></RequireAdmin>} />
         <Route path="/admin/rooms" element={<RequireAdmin><RoomsAdminPage /></RequireAdmin>} />
         <Route path="/admin/audit" element={<RequireAdmin><AuditLogPage /></RequireAdmin>} />

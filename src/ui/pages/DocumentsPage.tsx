@@ -5,9 +5,10 @@ import React, { useMemo, useState } from 'react';
 import type { DocFile } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
 import { Badge, EmptyState, Field, Icon, Modal, PageHeader } from '../components';
+import { can } from '../../services/authService';
 import * as documentService from '../../services/documentService';
 import { indexBy } from '../format';
-import { DocRow, DocViewerModal } from './shared';
+import { DocReviewControls, DocRow, DocViewerModal } from './shared';
 
 export default function DocumentsPage() {
   const { user, s, refresh, toast } = useApp();
@@ -17,6 +18,7 @@ export default function DocumentsPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [shareDoc, setShareDoc] = useState<DocFile | null>(null);
   const meetings = indexBy(s.meetings);
+  const manage = can.manageMeetings(user);
 
   const myMeetingIds = useMemo(
     () => new Set(s.meetings.filter((m) => m.participants.some((p) => p.userId === user?.id)).map((m) => m.id)),
@@ -26,10 +28,19 @@ export default function DocumentsPage() {
   const list = useMemo(() => {
     let arr = tab === 'personal'
       ? s.documents.filter((d) => d.kind === 'personal' && (d.ownerId === user?.id || d.sharedWith.includes(user?.id ?? '')))
-      : s.documents.filter((d) => d.kind !== 'personal' && (!d.meetingId || myMeetingIds.has(d.meetingId)));
+      // E-HSMT mục 24: tài liệu phiên họp lọc theo trạng thái duyệt (owner/manage thấy mọi trạng thái)
+      : documentService.visibleDocs(
+          s.documents.filter((d) => d.kind !== 'personal'), myMeetingIds, user?.id ?? '', manage,
+        );
     if (q.trim()) arr = arr.filter((d) => d.name.toLowerCase().includes(q.trim().toLowerCase()));
     return arr.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-  }, [s.documents, tab, q, user, myMeetingIds]);
+  }, [s.documents, tab, q, user, myMeetingIds, manage]);
+
+  // Hàng đợi duyệt (chỉ quản lý): tài liệu phiên họp đang chờ duyệt
+  const reviewQueue = useMemo(
+    () => (manage ? s.documents.filter((d) => d.kind !== 'personal' && d.reviewStatus === 'pending') : []),
+    [s.documents, manage],
+  );
 
   const del = async (d: DocFile) => {
     if (!window.confirm(`Xóa tài liệu "${d.name}"?`)) return;
@@ -57,6 +68,25 @@ export default function DocumentsPage() {
         <input className="inp" placeholder="Tìm tài liệu…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
 
+      {/* Hàng đợi duyệt tài liệu (E-HSMT mục 24) — chỉ chủ trì/thư ký/admin */}
+      {tab === 'meeting' && manage && reviewQueue.length > 0 && (
+        <div className="card card-pad" style={{ marginBottom: 14, borderColor: '#f3ddb3', background: '#fffaf0' }}>
+          <h3 className="card-title" style={{ marginBottom: 10 }}>
+            <Icon name="clock" size={16} />Tài liệu chờ duyệt <Badge color="amber">{reviewQueue.length}</Badge>
+          </h3>
+          {reviewQueue.map((d) => (
+            <div key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ flex: 1 }}>
+                <DocRow doc={d} onView={setViewDoc} extra={<DocReviewControls doc={d} />} />
+              </div>
+              <div style={{ flex: 'none', width: 200, fontSize: 12, color: 'var(--muted)' }}>
+                {d.meetingId ? meetings.get(d.meetingId)?.title : 'Dùng chung'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="card card-pad">
         {list.length === 0 && <EmptyState icon="file" text="Không có tài liệu nào" />}
         {list.map((d) => (
@@ -65,6 +95,7 @@ export default function DocumentsPage() {
               <DocRow doc={d} onView={setViewDoc}
                 extra={
                   <>
+                    <DocReviewControls doc={d} />
                     {d.ownerId === user?.id && d.kind === 'personal' && (
                       <button className="icon-btn" title="Chia sẻ" onClick={() => setShareDoc(d)}><Icon name="share" size={16} /></button>
                     )}

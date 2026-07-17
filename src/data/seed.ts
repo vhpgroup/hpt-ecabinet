@@ -47,11 +47,14 @@ export function buildSeed(): Snapshot {
     { id: 'u-yt', username: 'soyt', password: P, fullName: 'Lương Thị Mai', title: 'Giám đốc Sở Y tế', unitId: 'un-yt', role: 'delegate', email: 'mai.lt@tinh.gov.vn', phone: '0912 000 011', avatarColor: '#d64545', status: 'active' },
     { id: 'u-gd', username: 'sogddt', password: P, fullName: 'Trịnh Văn Sáng', title: 'Giám đốc Sở Giáo dục và Đào tạo', unitId: 'un-gd', role: 'delegate', email: 'sang.tv@tinh.gov.vn', phone: '0912 000 012', avatarColor: '#65a30d', status: 'active' },
     { id: 'u-tt', username: 'sotttt', password: P, fullName: 'Ngô Gia Huy', title: 'Giám đốc Sở Thông tin và Truyền thông', unitId: 'un-tt', role: 'delegate', email: 'huy.ng@tinh.gov.vn', phone: '0912 000 013', avatarColor: '#0369a1', status: 'active' },
+    // Quản trị đơn vị (E-HSMT vai trò thứ 5) — quản lý người dùng trong Sở KH&ĐT (cùng đơn vị với sokhdt)
+    { id: 'u-qtdv', username: 'qtdonvi', password: P, fullName: 'Nguyễn Quản Trị', title: 'Chuyên viên — Quản trị đơn vị Sở KH&ĐT', unitId: 'un-khdt', role: 'unit_admin', email: 'qtdv.khdt@tinh.gov.vn', phone: '0912 000 014', avatarColor: '#0d9488', status: 'active' },
   ] as Snapshot['users'];
 
   // ---------------- Phòng họp ----------------
   const rooms = [
-    { id: 'r1', name: 'Phòng họp số 1', location: 'Tầng 3, Trụ sở UBND tỉnh', capacity: 40, equipment: ['Màn hình LED 85"', 'Âm thanh hội nghị', 'Camera PTZ', 'Máy quét QR điểm danh'], supportsOnline: true, status: 'active' },
+    // Sơ đồ phòng họp số 1: lưới 5 hàng x 6 cột; cột giữa (index 2,3) hàng 2,3 để trống làm lối đi
+    { id: 'r1', name: 'Phòng họp số 1', location: 'Tầng 3, Trụ sở UBND tỉnh', capacity: 40, equipment: ['Màn hình LED 85"', 'Âm thanh hội nghị', 'Camera PTZ', 'Máy quét QR điểm danh'], supportsOnline: true, status: 'active', layout: { rows: 5, cols: 6, disabled: ['2-2', '2-3', '3-2', '3-3'] } },
     { id: 'r2', name: 'Hội trường A', location: 'Tầng 1, Trụ sở UBND tỉnh', capacity: 120, equipment: ['Sân khấu', 'Máy chiếu 4K', 'Hệ thống âm thanh lớn'], supportsOnline: false, status: 'active' },
     { id: 'r3', name: 'Phòng họp trực tuyến', location: 'Tầng 5, Trụ sở UBND tỉnh', capacity: 20, equipment: ['Thiết bị hội nghị truyền hình', 'Micro đa hướng'], supportsOnline: true, status: 'active' },
   ] as Snapshot['rooms'];
@@ -94,6 +97,11 @@ export function buildSeed(): Snapshot {
     D('d8', 'Báo cáo KT-XH tháng 6.2026.pdf', 'main', 'u-khdt', docText.kt6, { meetingId: 'm4', agendaItemId: 'a4-1' }),
     D('d9', 'Dự thảo Nghị quyết phiên họp tháng 6.pdf', 'main', 'u-tk', docText.nghiquyet.replace(/THÁNG 7/g, 'THÁNG 6'), { meetingId: 'm4', agendaItemId: 'a4-3' }),
     D('d10', 'Dự thảo Quy chế quản lý tài sản công.pdf', 'reference', 'u-tc', docText.tsc, {}),
+    // E-HSMT mục 24 — demo quy trình trình–duyệt tài liệu (trong phiên m2 sắp diễn ra):
+    // 1 tài liệu ĐANG CHỜ DUYỆT do Sở Tài chính trình lên
+    D('d11', 'Tờ trình phương án điều chuyển 120 tỷ vốn đầu tư công.pdf', 'main', 'u-tc', docText.totrinh, { meetingId: 'm2', agendaItemId: 'a2-2', reviewStatus: 'pending' }),
+    // 1 tài liệu BỊ TỪ CHỐI (yêu cầu làm lại) — kèm lý do
+    D('d12', 'Báo cáo bổ sung tiến độ giải ngân (bản 1).pdf', 'main', 'u-gtvt', docText.giaingan, { meetingId: 'm2', agendaItemId: 'a2-1', reviewStatus: 'rejected', reviewNote: 'Thiếu số liệu giải ngân chi tiết theo từng chủ đầu tư; đề nghị bổ sung phụ lục và trình lại.', reviewedById: 'u-tk', reviewedAt: iso(minAgo(60 * 3)) }),
     D('d-p1', 'Ghi chú chuẩn bị ý kiến chỉ đạo.docx', 'personal', 'u-ct', docText.ghichu, { sharedWith: ['u-tk'], mime: 'application/msword' }),
     D('d-p2', 'Danh sách công việc chuẩn bị phiên họp.docx', 'personal', 'u-tk', docText.dscv, { mime: 'application/msword' }),
   ] as Snapshot['documents'];
@@ -125,6 +133,12 @@ export function buildSeed(): Snapshot {
         pAccepted('u-gd', 'member', 'B4', false),
         pAccepted('u-tt', 'member', 'B5'),
       ],
+      // Gán sẵn vị trí đại biểu trên sơ đồ (khóa "hàng-cột" 0-based; tránh ô lối đi)
+      seatAssignments: {
+        'u-ct': '0-2', 'u-tk': '0-3',
+        'u-pct': '1-0', 'u-khdt': '1-1', 'u-tc': '1-4',
+        'u-tnmt': '3-0', 'u-gtvt': '3-1',
+      },
       agenda: [
         { id: 'a1', order: 1, title: 'Báo cáo tình hình kinh tế – xã hội 6 tháng đầu năm 2026, nhiệm vụ trọng tâm 6 tháng cuối năm', presenterId: 'u-khdt', durationMinutes: 45, documentIds: ['d1', 'd2'] },
         { id: 'a2', order: 2, title: 'Tờ trình phân bổ kế hoạch vốn đầu tư công đợt 2 năm 2026', presenterId: 'u-tc', durationMinutes: 30, documentIds: ['d3'] },

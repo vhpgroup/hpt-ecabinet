@@ -2,7 +2,7 @@
 // COMPONENT DÙNG CHUNG — Icon, Badge, Avatar, Modal, biểu đồ SVG…
 // ============================================================
 import React, { useEffect } from 'react';
-import type { User, Vote } from '../domain/types';
+import type { RoomLayout, User, Vote } from '../domain/types';
 import { thresholdLabel, voteOutcome, voteResults } from '../services/voteService';
 import { initials } from './format';
 
@@ -287,4 +287,76 @@ export function QRSvg({ seed, size = 168 }: { seed: string; size?: number }) {
     }
   }
   return <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="qr">{cells}</svg>;
+}
+
+// ============================================================
+// SƠ ĐỒ PHÒNG HỌP (E-HSMT mục 9 & 38) — lưới ghế dùng chung cho:
+//  - RoomsAdminPage : chỉnh sơ đồ (bật/tắt gh, xem trước)
+//  - MeetingDetailPage : gán vị trí đại biểu
+//  - LiveMeetingPage : xem sơ đồ + màu điểm danh realtime
+// ============================================================
+
+/** Khóa ghế "hàng-cột" (0-based) — nhất quán với server (isSeatKey). */
+export const seatKey = (r: number, c: number) => `${r}-${c}`;
+
+/** Bố cục mặc định khi phòng chưa cấu hình sơ đồ (suy ra từ sức chứa). */
+export function defaultLayout(capacity: number): RoomLayout {
+  const cols = capacity <= 12 ? 4 : capacity <= 24 ? 5 : 6;
+  const rows = Math.min(12, Math.max(1, Math.ceil(Math.min(capacity, 60) / cols)));
+  return { rows, cols, disabled: [] };
+}
+
+export interface SeatCellInfo {
+  /** class trạng thái thêm vào ô (assigned/att-present/speaking/selected…) */
+  cls?: string;
+  /** nhãn hiển thị trong ô (vd tên viết tắt) */
+  label?: React.ReactNode;
+  /** tooltip (vd họ tên đầy đủ) */
+  title?: string;
+}
+
+/**
+ * Lưới ghế. `render(r,c)` trả về thông tin hiển thị cho từng ghế (bỏ qua ô lối đi).
+ * `onCellClick` (tùy chọn) cho phép bấm ghế/ô để tương tác (chỉnh sơ đồ hoặc gán chỗ).
+ */
+export function SeatGrid({ layout, render, onCellClick, showScreen = true, editMode = false }: {
+  layout: RoomLayout;
+  render?: (r: number, c: number) => SeatCellInfo | null;
+  onCellClick?: (r: number, c: number, isAisle: boolean) => void;
+  showScreen?: boolean;
+  /** chế độ chỉnh sơ đồ: hiển thị cả ô lối đi để bấm bật/tắt */
+  editMode?: boolean;
+}) {
+  const disabled = new Set(layout.disabled ?? []);
+  const rows = Math.min(12, Math.max(1, layout.rows));
+  const cols = Math.min(12, Math.max(1, layout.cols));
+  return (
+    <div>
+      {showScreen && <div className="seatgrid-screen">MÀN HÌNH · CHỦ TỌA</div>}
+      <div className="seatgrid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+        {Array.from({ length: rows }).flatMap((_, r) =>
+          Array.from({ length: cols }).map((__, c) => {
+            const key = seatKey(r, c);
+            const isAisle = disabled.has(key);
+            const info = !isAisle && render ? render(r, c) : null;
+            const clickable = !!onCellClick && (editMode || !isAisle);
+            const cls = [
+              'cell',
+              isAisle ? 'aisle' : '',
+              clickable ? 'clickable' : '',
+              info?.cls ?? '',
+            ].filter(Boolean).join(' ');
+            return (
+              <div key={key} className={cls} title={info?.title ?? (isAisle ? 'Lối đi / khoảng trống' : `Ghế ${r + 1}-${c + 1}`)}
+                onClick={clickable ? () => onCellClick!(r, c, isAisle) : undefined}>
+                {isAisle
+                  ? (editMode ? '·' : '')
+                  : (info?.label ?? <span className="seat-code">{r + 1}-{c + 1}</span>)}
+              </div>
+            );
+          }),
+        )}
+      </div>
+    </div>
+  );
 }

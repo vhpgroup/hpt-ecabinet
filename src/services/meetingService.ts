@@ -156,6 +156,29 @@ export async function checkIn(actor: User, meetingId: string, userId: string) {
   await audit(actor, 'Điểm danh', `Điểm danh ${userId === actor.id ? 'cá nhân' : 'hộ đại biểu'} tại "${m.title}"`);
 }
 
+/**
+ * Gán / bỏ gán vị trí đại biểu trên sơ đồ phòng họp (E-HSMT mục 38).
+ * seatKey = "hàng-cột" (vd "1-2"); truyền null để bỏ gán.
+ * Một ghế chỉ 1 người: nếu ghế đã có người khác thì chuyển ghế cho người mới.
+ * Chỉ chủ trì/thư ký/admin gọi (UI đã chặn; server guard cũng chặn ở chế độ máy chủ).
+ */
+export async function assignSeat(actor: User, meetingId: string, userId: string, seatKey: string | null) {
+  const m = await db.meetings.get(meetingId);
+  if (!m) throw new Error('Không tìm thấy phiên họp');
+  const next: Record<string, string> = { ...(m.seatAssignments ?? {}) };
+  if (seatKey === null) {
+    delete next[userId];
+  } else {
+    // đảm bảo ghế là duy nhất: gỡ người đang ngồi ghế này (nếu có)
+    for (const [uidX, sk] of Object.entries(next)) {
+      if (sk === seatKey && uidX !== userId) delete next[uidX];
+    }
+    next[userId] = seatKey;
+  }
+  await db.meetings.update(meetingId, { seatAssignments: next });
+  await audit(actor, 'Gán vị trí đại biểu', `Cập nhật sơ đồ chỗ ngồi phiên "${m.title}"`);
+}
+
 export async function setCurrentAgendaItem(actor: User, meetingId: string, agendaItemId: string) {
   await db.meetings.update(meetingId, { currentAgendaItemId: agendaItemId });
   const m = await db.meetings.get(meetingId);

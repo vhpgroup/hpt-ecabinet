@@ -8,7 +8,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { DocFile, QuestionRequest } from '../../domain/types';
 import { QUESTION_STATUS, QUESTION_SESSION } from '../../domain/labels';
 import { useApp } from '../../store/AppContext';
-import { Avatar, Badge, Icon, Modal, QRSvg } from '../components';
+import { Avatar, Badge, Icon, Modal, QRSvg, SeatGrid, defaultLayout, seatKey } from '../components';
 import { can } from '../../services/authService';
 import * as meetingService from '../../services/meetingService';
 import * as chatService from '../../services/chatService';
@@ -16,7 +16,7 @@ import * as questionService from '../../services/questionService';
 import { simulateLiveTick } from '../../services/sim';
 import { db } from '../../data/db';
 import { realtime } from '../../data/realtime';
-import { fmtTime, indexBy, timeAgo } from '../format';
+import { fmtTime, indexBy, initials, timeAgo } from '../format';
 import { DocViewerModal } from './shared';
 import { VoteCard } from './MeetingDetailPage';
 
@@ -25,7 +25,7 @@ export default function LiveMeetingPage() {
   const { user, s, refresh, toast } = useApp();
   const nav = useNavigate();
   const m = s.meetings.find((x) => x.id === id);
-  const [rightTab, setRightTab] = useState<'attend' | 'speak' | 'question' | 'chat'>('attend');
+  const [rightTab, setRightTab] = useState<'attend' | 'seatmap' | 'speak' | 'question' | 'chat'>('attend');
   const [viewDoc, setViewDoc] = useState<DocFile | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [clock, setClock] = useState('');
@@ -201,6 +201,9 @@ export default function LiveMeetingPage() {
               <button className={'tab' + (rightTab === 'attend' ? ' active' : '')} onClick={() => setRightTab('attend')}>
                 Điểm danh <Badge color="green">{present}</Badge>
               </button>
+              <button className={'tab' + (rightTab === 'seatmap' ? ' active' : '')} onClick={() => setRightTab('seatmap')}>
+                Sơ đồ phòng họp
+              </button>
               <button className={'tab' + (rightTab === 'speak' ? ' active' : '')} onClick={() => setRightTab('speak')}>
                 Phát biểu <Badge color="amber">{waiting.length}</Badge>
               </button>
@@ -243,6 +246,7 @@ export default function LiveMeetingPage() {
               </div>
             )}
 
+            {rightTab === 'seatmap' && <SeatMapPane meetingId={m.id} />}
             {rightTab === 'speak' && <SpeakPane meetingId={m.id} chairCtl={chairCtl} speaking={speaking} waiting={waiting} act={act} />}
             {rightTab === 'question' && (
               <QuestionPane meetingId={m.id} chairCtl={chairCtl} session={qSession} active={qActive} pending={qPending} act={act} />
@@ -327,6 +331,62 @@ function SpeakPane({ meetingId, chairCtl, speaking, waiting, act }: {
         </div>
       ))}
       {waiting.length === 0 && !speaking && <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>Chưa có đại biểu đăng ký phát biểu.</p>}
+    </div>
+  );
+}
+
+// ---------------- Sơ đồ phòng họp trực tiếp (E-HSMT mục 38) ----------------
+// Xem-only cho mọi đại biểu: hiển thị vị trí đại biểu + MÀU theo điểm danh realtime,
+// viền nổi bật người đang phát biểu.
+function SeatMapPane({ meetingId }: { meetingId: string }) {
+  const { s } = useApp();
+  const users = useMemo(() => indexBy(s.users), [s.users]);
+  const m = s.meetings.find((x) => x.id === meetingId);
+  const room = s.rooms.find((r) => r.id === m?.roomId);
+  const layout = room?.layout ?? defaultLayout(room?.capacity ?? 24);
+  const assignments = m?.seatAssignments ?? {};
+  // ánh xạ userId -> dòng tham dự (Participant không có .id nên không dùng indexBy)
+  const partByUser = useMemo(() => new Map((m?.participants ?? []).map((p) => [p.userId, p])), [m]);
+  // người đang phát biểu (để nổi bật viền)
+  const speakingUserId = s.speakRequests.find((r) => r.meetingId === meetingId && r.status === 'speaking')?.userId;
+
+  const bySeat = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const [uidX, sk] of Object.entries(assignments)) map.set(sk, uidX);
+    return map;
+  }, [assignments]);
+
+  return (
+    <div className="tabpane">
+      <SeatGrid layout={layout}
+        render={(r, c) => {
+          const occupant = bySeat.get(seatKey(r, c));
+          if (!occupant) return { label: <span className="seat-code">{r + 1}-{c + 1}</span> };
+          const u = users.get(occupant);
+          const p = partByUser.get(occupant);
+          // màu theo điểm danh: có mặt=xanh, vắng có lý do=xám, chưa điểm danh=vàng nhạt
+          const attCls = p?.checkedInAt ? 'att-present'
+            : p?.attendStatus === 'declined' ? 'att-absent'
+            : 'att-pending';
+          const speakingCls = occupant === speakingUserId ? ' speaking' : '';
+          const status = p?.checkedInAt ? 'Có mặt' : p?.attendStatus === 'declined' ? 'Vắng (có lý do)' : 'Chưa điểm danh';
+          return {
+            cls: attCls + speakingCls,
+            label: <span>{u ? initials(u.fullName) : '?'}</span>,
+            title: `${u?.fullName ?? ''} · ${status}${occupant === speakingUserId ? ' · Đang phát biểu' : ''}`,
+          };
+        }} />
+      <div className="seatmap-legend">
+        <span><span className="dot" style={{ background: '#e9f7ef', borderColor: '#57c98a' }} />Có mặt</span>
+        <span><span className="dot" style={{ background: '#fef6e7', borderColor: '#f0cd80' }} />Chưa điểm danh</span>
+        <span><span className="dot" style={{ background: '#f1f5f9', borderColor: '#cbd5e1' }} />Vắng có lý do</span>
+        <span><span className="dot" style={{ background: '#fff', borderColor: '#1d9e5f' }} />Đang phát biểu</span>
+      </div>
+      {Object.keys(assignments).length === 0 && (
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>
+          Chưa gán vị trí đại biểu. Chủ trì/thư ký gán tại trang chi tiết phiên họp → tab “Sơ đồ chỗ ngồi”.
+        </p>
+      )}
     </div>
   );
 }

@@ -83,6 +83,13 @@ export default function MainLayout() {
               <NavLink to="/admin/reports" className={linkCls}><Icon name="chart" />Báo cáo thống kê</NavLink>
             </>
           )}
+          {/* Quản trị đơn vị (E-HSMT vai trò thứ 5): CHỈ quản lý người dùng trong đơn vị mình */}
+          {user?.role === 'unit_admin' && (
+            <>
+              <div className="sb-group">Quản trị đơn vị</div>
+              <NavLink to="/admin/users" className={linkCls}><Icon name="settings" />Người dùng đơn vị</NavLink>
+            </>
+          )}
         </nav>
         <div className="sb-foot">
           <Avatar user={user} size={38} />

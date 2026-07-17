@@ -3,7 +3,10 @@
 // Tầng này KHÔNG phụ thuộc UI hay nguồn dữ liệu.
 // ============================================================
 
-export type Role = 'admin' | 'chairman' | 'secretary' | 'delegate';
+// 5 vai trò theo E-HSMT (mục "Các đối tượng tham gia phần mềm"):
+// Chủ trì, Thư ký, Thành viên dự họp, Quản trị hệ thống, Quản trị đơn vị.
+// 'unit_admin' = Quản trị đơn vị: quản lý người dùng trong PHẠM VI đơn vị mình.
+export type Role = 'admin' | 'chairman' | 'secretary' | 'delegate' | 'unit_admin';
 
 export interface Unit {
   id: string;
@@ -26,6 +29,18 @@ export interface User {
   status: 'active' | 'inactive';
 }
 
+/**
+ * Sơ đồ chỗ ngồi của phòng họp (E-HSMT mục 9 "Cập nhật sơ đồ phòng họp").
+ * OPTIONAL để tương thích ngược dữ liệu cũ + round-trip JSONB/localStorage.
+ * - rows/cols: kích thước lưới ghế (giới hạn 1..12).
+ * - disabled : danh sách ô KHÔNG phải ghế (lối đi / khoảng trống), khóa theo "hàng-cột" (vd "2-3").
+ */
+export interface RoomLayout {
+  rows: number;
+  cols: number;
+  disabled?: string[];
+}
+
 export interface Room {
   id: string;
   name: string;
@@ -34,6 +49,8 @@ export interface Room {
   equipment: string[];
   supportsOnline: boolean;
   status: 'active' | 'maintenance';
+  /** Sơ đồ phòng họp (lưới ghế). OPTIONAL — chưa cấu hình thì dùng bố cục mặc định. */
+  layout?: RoomLayout;
 }
 
 // ---------------- Phiên họp ----------------
@@ -118,6 +135,12 @@ export interface Meeting {
   documentLocation?: string;
   /** Nơi nhận (ngoài "Lưu: VT") */
   recipients?: string[];
+  /**
+   * Gán vị trí đại biểu trên sơ đồ phòng họp (E-HSMT mục 38 "Xem vị trí các đại biểu").
+   * Bản đồ userId -> khóa ghế "hàng-cột" (vd "1-2"). Chỉ chủ trì/thư ký/admin được gán.
+   * OPTIONAL để tương thích ngược dữ liệu cũ + round-trip JSONB.
+   */
+  seatAssignments?: Record<string, string>;
 }
 
 // ---------------- Tài liệu ----------------
@@ -138,6 +161,22 @@ export interface DocFile {
   uploadedAt: string;
   secret: boolean; // tài liệu mật
   version: number;
+  // ---- Quy trình trình–duyệt tài liệu (E-HSMT mục 24 "Duyệt/không duyệt tài liệu"). OPTIONAL ----
+  /**
+   * Trạng thái duyệt tài liệu:
+   * - undefined : tương thích ngược — coi như ĐÃ DUYỆT (tài liệu cũ hiển thị bình thường).
+   * - 'draft'   : bản nháp (người trình đang chuẩn bị, chưa gửi duyệt).
+   * - 'pending' : đã trình, chờ Thành viên dự họp/quản lý duyệt.
+   * - 'approved': đã duyệt — hiển thị cho đại biểu.
+   * - 'rejected': không duyệt (yêu cầu làm lại) — kèm lý do ở reviewNote.
+   */
+  reviewStatus?: 'draft' | 'pending' | 'approved' | 'rejected';
+  /** Lý do/nhận xét khi duyệt hoặc từ chối (bắt buộc khi từ chối). */
+  reviewNote?: string;
+  /** Người thực hiện duyệt/từ chối gần nhất. */
+  reviewedById?: string;
+  /** Thời điểm duyệt/từ chối gần nhất. */
+  reviewedAt?: string;
 }
 
 export interface Annotation {

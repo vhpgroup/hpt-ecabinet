@@ -20,19 +20,25 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 // giá trị không phải mảng). Sai kiểu -> 400, KHÔNG lưu.
 // ============================================================
 const SCHEMA = {
-  meetings: { code: 'string', title: 'string', description: 'string', startTime: 'string', endTime: 'string', roomId: 'string', isOnline: 'boolean', status: 'string', chairId: 'string', secretaryId: 'string', participants: 'array', agenda: 'array', currentAgendaItemId: 'string|null', conclusions: 'array', minutes: 'object|null', invitedAt: 'string', questionSession: 'string' },
+  meetings: { code: 'string', title: 'string', description: 'string', startTime: 'string', endTime: 'string', roomId: 'string', isOnline: 'boolean', status: 'string', chairId: 'string', secretaryId: 'string', participants: 'array', agenda: 'array', currentAgendaItemId: 'string|null', conclusions: 'array', minutes: 'object|null', invitedAt: 'string', questionSession: 'string', seatAssignments: 'object' },
   votes: { kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', title: 'string', description: 'string', options: 'array', ballots: 'array', eligibleIds: 'array', documentIds: 'array', secret: 'boolean', status: 'string', deadline: 'string|null' },
-  documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string' },
+  documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string', reviewStatus: 'string', reviewNote: 'string', reviewedById: 'string', reviewedAt: 'string' },
   annotations: { docId: 'string', content: 'string', isPublic: 'boolean' },
   tasks: { title: 'string', description: 'string', assigneeId: 'string', deadline: 'string', status: 'string', progress: 'number', meetingId: 'string|null' },
   notifications: { read: 'boolean', title: 'string', body: 'string', type: 'string' },
   users: { fullName: 'string', title: 'string', unitId: 'string', role: 'string', email: 'string', phone: 'string', status: 'string', avatarColor: 'string', username: 'string' },
   units: { name: 'string', short: 'string', order: 'number' },
-  rooms: { name: 'string', location: 'string', capacity: 'number', equipment: 'array', supportsOnline: 'boolean', status: 'string' },
+  rooms: { name: 'string', location: 'string', capacity: 'number', equipment: 'array', supportsOnline: 'boolean', status: 'string', layout: 'object|null' },
   speakRequests: { meetingId: 'string', topic: 'string', status: 'string' },
   questions: { meetingId: 'string', userId: 'string', targetName: 'string', topic: 'string', content: 'string', status: 'string', order: 'number', calledAt: 'string', endedAt: 'string' },
   messages: { meetingId: 'string', content: 'string', toId: 'string|null' },
 };
+
+// Vai trò hợp lệ + trạng thái duyệt tài liệu hợp lệ (chống ghi giá trị rác vào enum)
+const VALID_ROLES = ['admin', 'chairman', 'secretary', 'delegate', 'unit_admin'];
+const VALID_REVIEW = ['draft', 'pending', 'approved', 'rejected'];
+/** Khóa ghế hợp lệ: chuỗi "số-số" (vd "10-3"). */
+const isSeatKey = (v) => typeof v === 'string' && /^\d+-\d+$/.test(v);
 
 function typeOk(val, spec) {
   for (const t of spec.split('|')) {
@@ -95,6 +101,39 @@ export function validatePatch(col, body) {
       && !['closed', 'open', 'paused'].includes(body.questionSession)) {
     throw httpError(400, 'Trạng thái phiên chất vấn không hợp lệ');
   }
+  // Sơ đồ chỗ ngồi (E-HSMT mục 38): phải là object map userId(string) -> "hàng-cột".
+  // Chặn mảng / kiểu sai / giá trị rác để không làm hỏng bản ghi.
+  if (col === 'meetings' && body.seatAssignments !== undefined) {
+    const sa = body.seatAssignments;
+    if (sa === null || typeof sa !== 'object' || Array.isArray(sa)) {
+      throw httpError(400, 'Sơ đồ chỗ ngồi không hợp lệ (phải là đối tượng ánh xạ)');
+    }
+    for (const [k, v] of Object.entries(sa)) {
+      if (typeof k !== 'string' || !isSeatKey(v)) {
+        throw httpError(400, 'Vị trí chỗ ngồi không hợp lệ (mỗi giá trị phải là "hàng-cột")');
+      }
+    }
+  }
+  // Sơ đồ phòng họp (E-HSMT mục 9): rows/cols trong khoảng 1..12, disabled là mảng khóa "hàng-cột".
+  if (col === 'rooms' && body.layout !== undefined && body.layout !== null) {
+    const lo = body.layout;
+    if (typeof lo !== 'object' || Array.isArray(lo)
+      || !Number.isInteger(lo.rows) || !Number.isInteger(lo.cols)
+      || lo.rows < 1 || lo.rows > 12 || lo.cols < 1 || lo.cols > 12) {
+      throw httpError(400, 'Sơ đồ phòng họp không hợp lệ (số hàng/cột phải trong khoảng 1–12)');
+    }
+    if (lo.disabled !== undefined && (!Array.isArray(lo.disabled) || lo.disabled.some((x) => !isSeatKey(x)))) {
+      throw httpError(400, 'Danh sách ô lối đi không hợp lệ');
+    }
+  }
+  // Trạng thái duyệt tài liệu (E-HSMT mục 24): chỉ nhận enum hợp lệ
+  if (col === 'documents' && body.reviewStatus !== undefined && !VALID_REVIEW.includes(body.reviewStatus)) {
+    throw httpError(400, 'Trạng thái duyệt tài liệu không hợp lệ');
+  }
+  // Vai trò người dùng: chỉ nhận 5 vai trò hợp lệ
+  if (col === 'users' && body.role !== undefined && !VALID_ROLES.includes(body.role)) {
+    throw httpError(400, 'Vai trò người dùng không hợp lệ');
+  }
 }
 
 /**
@@ -104,7 +143,51 @@ export function guardPatch(col, existing, patch, user) {
   if (col === 'votes') return guardVotes(patch, user);
   if (col === 'meetings') return guardMeetings(existing, patch, user);
   if (col === 'questions') return guardQuestions(existing, patch, user);
+  if (col === 'documents') return guardDocuments(existing, patch, user);
   return patch;
+}
+
+/**
+ * TÀI LIỆU — siết quy trình trình–duyệt (E-HSMT mục 24):
+ * - Người trình (owner) KHÔNG được tự approve. Chỉ chuyển draft/rejected -> pending.
+ * - Quản lý (chủ trì/thư ký/admin) duyệt: pending -> approved | rejected.
+ * - reviewedById/reviewedAt do SERVER quyết định, không tin client.
+ * Vi phạm chuyển trạng thái -> 403 (phản hồi rõ ràng, không âm thầm bỏ qua).
+ */
+function guardDocuments(existing, patch, user) {
+  const isManage = MANAGE.includes(user.role);
+  const p = { ...patch };
+  // các trường vết duyệt do server ghi (qua service) — chặn client tự đặt tùy tiện
+  // (service phía máy chủ không có; client REST gửi trọn gói nên ta chuẩn hóa tại đây)
+  const cur = existing.reviewStatus ?? 'approved';
+
+  if (p.reviewStatus !== undefined && p.reviewStatus !== cur) {
+    const isOwner = existing.ownerId === user.sub;
+    const allowedOwner = isOwner && (cur === 'draft' || cur === 'rejected') && p.reviewStatus === 'pending';
+    const allowedManage = isManage && cur === 'pending' && (p.reviewStatus === 'approved' || p.reviewStatus === 'rejected');
+    if (!allowedOwner && !allowedManage) {
+      throw httpError(403, 'Không được chuyển trạng thái duyệt tài liệu như vậy');
+    }
+    if (p.reviewStatus === 'rejected') {
+      const note = typeof p.reviewNote === 'string' ? p.reviewNote.trim() : '';
+      if (!note) throw httpError(400, 'Phải nhập lý do khi từ chối tài liệu');
+      p.reviewNote = note.slice(0, 2000);
+    }
+    // ghi vết duyệt phía server khi là hành động duyệt/từ chối của quản lý
+    if (allowedManage) {
+      p.reviewedById = user.sub;
+      p.reviewedAt = new Date().toISOString();
+      if (p.reviewStatus === 'approved') p.reviewNote = undefined;
+    } else {
+      // owner trình duyệt lại: xóa vết/nhận xét cũ
+      p.reviewNote = undefined;
+    }
+  } else if (p.reviewStatus === undefined) {
+    // không đổi trạng thái duyệt -> không cho lén ghi vết duyệt
+    delete p.reviewedById;
+    delete p.reviewedAt;
+  }
+  return p;
 }
 
 /**
@@ -166,6 +249,12 @@ function guardMeetings(existing, patch, user) {
   // Đại biểu thường gửi lên -> chặn thẳng (không âm thầm bỏ qua).
   if (p.questionSession !== undefined && !isManage) {
     throw httpError(403, 'Chỉ chủ tọa/thư ký được điều hành phiên chất vấn');
+  }
+
+  // Sơ đồ chỗ ngồi (E-HSMT mục 38): CHỈ chủ trì/thư ký/admin được gán vị trí đại biểu.
+  // Đại biểu thường gửi lên -> chặn thẳng.
+  if (p.seatAssignments !== undefined && !isManage) {
+    throw httpError(403, 'Chỉ chủ tọa/thư ký được gán vị trí chỗ ngồi cho đại biểu');
   }
 
   // biên bản: chữ ký & khóa chỉ qua /actions/sign; đã khóa là bất biến

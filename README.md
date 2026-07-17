@@ -22,6 +22,8 @@ Hệ thống phòng họp không giấy đầy đủ chức năng theo mô hình
 | **Lịch công tác** | Lịch tháng của đơn vị / lịch cá nhân, danh sách cuộc họp trong tháng, trạng thái màu. |
 | **Giấy mời & xác nhận** | Gửi giấy mời (mô phỏng email/SMS), đại biểu xác nhận tham dự / báo vắng kèm lý do / ủy quyền cho người khác; **thành phần khách mời** (tham dự, không biểu quyết). |
 | **Quản lý tài liệu** | Tài liệu chính theo từng mục chương trình, tài liệu tham khảo, tài liệu cá nhân; tải tệp lên hoặc soạn nội dung; đánh dấu tài liệu **Mật**; phiên bản; chia sẻ có kiểm soát; **ghi chú cá nhân** và **góp ý công khai** trên từng tài liệu; **tự động thông báo khi có tài liệu mới cần xử lý**. |
+| **Trình – duyệt tài liệu** | Quy trình duyệt tài liệu họp: người trình **Trình duyệt** (Nháp → Chờ duyệt), chủ trì/thư ký **Duyệt** hoặc **Từ chối kèm lý do** (yêu cầu làm lại); badge trạng thái (Nháp / Chờ duyệt / Đã duyệt / Từ chối); **đại biểu chỉ thấy tài liệu đã duyệt**; hàng đợi duyệt cho quản lý. |
+| **Sơ đồ phòng họp & vị trí đại biểu** | Quản trị cập nhật **sơ đồ phòng họp** (lưới ghế, đánh dấu lối đi); chủ trì/thư ký **gán vị trí đại biểu** theo sơ đồ; phòng họp trực tiếp hiển thị sơ đồ với **màu điểm danh trực tiếp** (có mặt / chưa điểm danh / vắng) và viền nổi bật người đang phát biểu. |
 | **Điểm danh** | Tự điểm danh khi họp, thư ký điểm danh hộ, mã QR điểm danh (mô phỏng), thống kê có mặt/vắng theo thời gian thực. |
 | **Đăng ký phát biểu** | Đại biểu đăng ký kèm chủ đề; chủ tọa mời phát biểu theo hàng đợi, kết thúc/từ chối lượt. |
 | **Chất vấn** | Đại biểu đăng ký/hủy chất vấn (người được chất vấn, chủ đề, nội dung), xem danh sách & nội dung chất vấn; chủ tọa điều hành phiên chất vấn (bắt đầu/tạm dừng/kết thúc), duyệt danh sách đã gọi/chưa gọi, gọi/từ chối chất vấn — hiển thị người đang chất vấn trên màn hình TV. |
@@ -34,8 +36,9 @@ Hệ thống phòng họp không giấy đầy đủ chức năng theo mô hình
 | **Màn hình TV phòng họp** | Chế độ trình chiếu toàn màn hình cho màn hình lớn tại phòng họp: nội dung đang thảo luận, người phát biểu, kết quả biểu quyết trực tiếp, mã QR điểm danh, số đại biểu có mặt. |
 
 ### Phân hệ quản trị
-- Quản lý **người dùng** + phân quyền 4 vai trò: Quản trị viên / Chủ trì / Thư ký / Đại biểu
-- Quản lý **đơn vị**, **phòng họp** (thiết bị, sức chứa, sơ đồ chỗ ngồi)
+- Quản lý **người dùng** + phân quyền **5 vai trò**: Quản trị hệ thống / Chủ trì / Thư ký / Thành viên dự họp / **Quản trị đơn vị**
+- **Quản trị đơn vị** (unit_admin): quản lý người dùng **trong phạm vi đơn vị mình** (tạo/sửa/khóa – mở), không xóa tài khoản, không đụng vai trò/tài khoản Quản trị hệ thống, không đổi đơn vị của mình — siết chặt phía máy chủ (đọc đơn vị từ CSDL, không tin dữ liệu gửi lên)
+- Quản lý **đơn vị**, **phòng họp** (thiết bị, sức chứa, **sơ đồ phòng họp** cấu hình được)
 - **Nhật ký hệ thống** (audit log) lưu vết mọi thao tác
 - **Báo cáo thống kê**: số phiên họp theo tháng, tỷ lệ tham dự, lượt biểu quyết, nhiệm vụ, ước tính giấy/chi phí tiết kiệm
 
@@ -56,7 +59,8 @@ Mật khẩu chung: **123456**
 | `thuky` | Phạm Văn Thư | Chánh Văn phòng — **Thư ký** |
 | `phochutich` | Lê Minh Khuê | Phó Chủ tịch — Chủ trì |
 | `quantri` | Đỗ Quang Trị | **Quản trị hệ thống** (mở phân hệ quản trị) |
-| `sokhdt`, `sotc`, `soxd`, `sotnmt`, `sogtvt`, `soyt`, `sogddt`, `sotttt` | Giám đốc các Sở | **Đại biểu** |
+| `qtdonvi` | Nguyễn Quản Trị | **Quản trị đơn vị** — Sở KH&ĐT (quản lý người dùng trong đơn vị) |
+| `sokhdt`, `sotc`, `soxd`, `sotnmt`, `sogtvt`, `soyt`, `sogddt`, `sotttt` | Giám đốc các Sở | **Thành viên dự họp** |
 
 Dữ liệu mẫu luôn có sẵn: 1 phiên họp **đang diễn ra**, phiên sắp tới chờ xác nhận, phiên đã kết thúc (biên bản đã ký số), phiếu lấy ý kiến đang mở, nhiệm vụ sau họp. Nút **↻** trên thanh công cụ khôi phục dữ liệu mẫu bất kỳ lúc nào.
 

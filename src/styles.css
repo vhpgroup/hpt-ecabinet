@@ -461,6 +461,35 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .seat.taken { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
 .seat.chair-seat { grid-column: span 3; background: var(--navy); color: #fff; border-color: var(--navy); }
 
+/* ---------------- Sơ đồ phòng họp cấu hình được (lưới ghế) ---------------- */
+.seatgrid { display: grid; gap: 7px; }
+.seatgrid-screen {
+  text-align: center; font-size: 11px; font-weight: 700; letter-spacing: 1px;
+  color: #fff; background: #274066; border-radius: 8px; padding: 7px 0; margin-bottom: 12px;
+}
+.seatgrid .cell {
+  aspect-ratio: 1.25; border-radius: 8px; border: 1.5px solid var(--line-2);
+  display: grid; place-items: center; font-size: 11px; font-weight: 700;
+  color: var(--muted); background: #fff; cursor: default; user-select: none;
+  padding: 2px; text-align: center; line-height: 1.1; overflow: hidden;
+}
+.seatgrid .cell.clickable { cursor: pointer; }
+.seatgrid .cell.clickable:hover { border-color: var(--primary); }
+/* ô lối đi (disabled) — không phải ghế */
+.seatgrid .cell.aisle { background: transparent; border-style: dashed; border-color: #d8e0ea; color: #b8c4d4; cursor: pointer; }
+/* ghế đã gán đại biểu */
+.seatgrid .cell.assigned { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
+.seatgrid .cell.selected { outline: 3px solid rgba(15,76,146,.35); outline-offset: 1px; }
+/* trạng thái điểm danh (dùng ở phòng họp trực tiếp) */
+.seatgrid .cell.att-present { background: #e9f7ef; border-color: #57c98a; color: #10643c; }
+.seatgrid .cell.att-absent { background: #f1f5f9; border-color: #cbd5e1; color: #64748b; }
+.seatgrid .cell.att-pending { background: #fef6e7; border-color: #f0cd80; color: #a5641a; }
+/* người đang phát biểu — viền nổi bật */
+.seatgrid .cell.speaking { outline: 3px solid #1d9e5f; outline-offset: 1px; box-shadow: 0 0 0 2px rgba(29,158,95,.15); }
+.seatgrid .cell .seat-code { font-size: 9px; opacity: .6; font-weight: 600; }
+.seatmap-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 12px; align-items: center; }
+.seatmap-legend .dot { width: 13px; height: 13px; border-radius: 4px; display: inline-block; margin-right: 5px; vertical-align: -2px; border: 1.5px solid; }
+
 /* ---------------- Màn hình TV phòng họp ---------------- */
 .tv-shell {
   min-height: 100vh; display: flex; flex-direction: column; color: #dfe9f5;

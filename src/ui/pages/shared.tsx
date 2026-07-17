@@ -4,7 +4,9 @@
 import React, { useMemo, useState } from 'react';
 import type { DocFile } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
-import { Badge, Icon, Modal } from '../components';
+import { Badge, Field, Icon, Modal } from '../components';
+import { DOC_REVIEW } from '../../domain/labels';
+import { can } from '../../services/authService';
 import * as documentService from '../../services/documentService';
 import { fmtSize, indexBy, timeAgo } from '../format';
 
@@ -117,7 +119,7 @@ export function DocRow({ doc, onView, extra }: { doc: DocFile; onView: (d: DocFi
       </div>
       <div style={{ minWidth: 0, flex: 1 }}>
         <div className="doc-name" onClick={() => onView(doc)}>
-          {doc.name} {doc.secret && <Badge color="red">Mật</Badge>}
+          {doc.name} {doc.secret && <Badge color="red">Mật</Badge>} <DocReviewBadge doc={doc} />
         </div>
         <div className="doc-sub">{fmtSize(doc.size)} · {timeAgo(doc.uploadedAt)} · v{doc.version}</div>
       </div>
@@ -126,5 +128,81 @@ export function DocRow({ doc, onView, extra }: { doc: DocFile; onView: (d: DocFi
         {extra}
       </div>
     </div>
+  );
+}
+
+// ============================================================
+// QUY TRÌNH TRÌNH–DUYỆT TÀI LIỆU (E-HSMT mục 24) — hiển thị & thao tác
+// ============================================================
+
+/** Huy hiệu trạng thái duyệt. undefined/'approved' của tài liệu cá nhân -> không hiện (tránh nhiễu). */
+export function DocReviewBadge({ doc }: { doc: DocFile }) {
+  const st = doc.reviewStatus;
+  if (!st || st === 'approved') return null; // đã duyệt (mặc định) — không cần badge
+  const info = DOC_REVIEW[st];
+  return (
+    <span title={st === 'rejected' && doc.reviewNote ? `Lý do từ chối: ${doc.reviewNote}` : info.label}>
+      <Badge color={info.color}>{info.label}</Badge>
+    </span>
+  );
+}
+
+/**
+ * Nút thao tác duyệt tài liệu dùng chung (DocumentsPage + tab tài liệu phiên họp):
+ * - Người trình (owner): "Trình duyệt" khi nháp/bị từ chối.
+ * - Quản lý (chủ trì/thư ký/admin): "Duyệt" / "Từ chối" khi đang chờ duyệt.
+ */
+export function DocReviewControls({ doc, onChanged }: { doc: DocFile; onChanged?: () => void }) {
+  const { user, refresh, toast } = useApp();
+  const [rejectOpen, setRejectOpen] = useState(false);
+  if (!user) return null;
+  const st = doc.reviewStatus ?? 'approved';
+  const isOwner = doc.ownerId === user.id;
+  const manage = can.manageMeetings(user);
+
+  const act = async (fn: () => Promise<unknown>, msg: string) => {
+    try { await fn(); await refresh(); onChanged?.(); toast(msg); }
+    catch (ex) { toast((ex as Error).message, 'error'); }
+  };
+
+  return (
+    <>
+      {isOwner && (st === 'draft' || st === 'rejected') && (
+        <button className="btn outline sm" title="Trình tài liệu lên để duyệt"
+          onClick={() => act(() => documentService.submitForReview(user, doc), 'Đã trình tài liệu chờ duyệt')}>
+          <Icon name="send" size={13} />Trình duyệt
+        </button>
+      )}
+      {manage && st === 'pending' && (
+        <>
+          <button className="btn success sm" onClick={() => act(() => documentService.approveDocument(user, doc), 'Đã duyệt tài liệu')}>
+            <Icon name="check" size={13} />Duyệt
+          </button>
+          <button className="btn danger sm" onClick={() => setRejectOpen(true)}>
+            <Icon name="x" size={13} />Từ chối
+          </button>
+        </>
+      )}
+      {rejectOpen && (
+        <RejectModal onClose={() => setRejectOpen(false)}
+          onSubmit={(note) => act(async () => { await documentService.rejectDocument(user, doc, note); setRejectOpen(false); }, 'Đã từ chối — yêu cầu đơn vị làm lại')} />
+      )}
+    </>
+  );
+}
+
+function RejectModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (note: string) => void }) {
+  const [note, setNote] = useState('');
+  return (
+    <Modal title="Từ chối tài liệu" onClose={onClose} width={440}
+      footer={<>
+        <button className="btn outline" onClick={onClose}>Hủy</button>
+        <button className="btn danger" disabled={!note.trim()} onClick={() => onSubmit(note.trim())}>Từ chối tài liệu</button>
+      </>}>
+      <Field label="Lý do từ chối (để đơn vị làm lại)" required>
+        <textarea className="ta" value={note} onChange={(e) => setNote(e.target.value)}
+          placeholder="VD: Thiếu phụ lục số liệu; đề nghị bổ sung căn cứ pháp lý…" />
+      </Field>
+    </Modal>
   );
 }

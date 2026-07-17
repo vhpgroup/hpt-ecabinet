@@ -39,13 +39,15 @@ export async function buildAccessCtx(user) {
 // ---------------- Quy tắc từng bộ dữ liệu ----------------
 
 export function canReadDoc(doc, user, ctx) {
-  if (isManage(user)) return true;                         // thư ký/chủ trì/admin: phục vụ chuẩn bị tài liệu
-  if (doc.ownerId === user.sub) return true;
+  if (isManage(user)) return true;                         // thư ký/chủ trì/admin: phục vụ chuẩn bị & duyệt tài liệu
+  if (doc.ownerId === user.sub) return true;               // người trình: xem mọi trạng thái (kể cả nháp/chờ/từ chối)
   if (Array.isArray(doc.sharedWith) && doc.sharedWith.includes(user.sub)) return true;
   if (doc.kind === 'personal') return false;               // cá nhân: chỉ owner/được chia sẻ
   const inMeeting = !doc.meetingId || ctx.myMeetingIds.has(doc.meetingId);
   if (!inMeeting) return false;                            // tài liệu họp: phải là thành phần
   if (doc.secret) return false;                            // tài liệu MẬT: đại biểu thường không đọc
+  // E-HSMT mục 24: đại biểu thường CHỈ đọc tài liệu ĐÃ DUYỆT (undefined coi như đã duyệt — tương thích cũ)
+  if (doc.reviewStatus !== undefined && doc.reviewStatus !== 'approved') return false;
   return true;
 }
 

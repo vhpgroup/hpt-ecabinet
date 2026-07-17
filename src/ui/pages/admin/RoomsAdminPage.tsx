@@ -2,9 +2,9 @@
 // QUẢN TRỊ PHÒNG HỌP & VỊ TRÍ CHỖ NGỒI
 // ============================================================
 import React, { useState } from 'react';
-import type { Room } from '../../../domain/types';
+import type { Room, RoomLayout } from '../../../domain/types';
 import { useApp } from '../../../store/AppContext';
-import { Badge, Field, Icon, Modal, PageHeader } from '../../components';
+import { Badge, Field, Icon, Modal, PageHeader, SeatGrid, defaultLayout, seatKey } from '../../components';
 import * as adminService from '../../../services/adminService';
 
 export default function RoomsAdminPage() {
@@ -58,21 +58,13 @@ export default function RoomsAdminPage() {
       </div>
 
       {seatRoom && (
-        <Modal title={`Sơ đồ chỗ ngồi — ${seatRoom.name}`} onClose={() => setSeatRoom(null)} width={520}>
-          <div className="seatmap">
-            <div className="seat chair-seat">CHỦ TỌA — THƯ KÝ</div>
-            <div className="seat chair-seat" style={{ background: '#274066' }}>MÀN HÌNH LED</div>
-            {Array.from({ length: Math.min(seatRoom.capacity, 30) }).map((_, i) => {
-              const row = String.fromCharCode(65 + Math.floor(i / 6));
-              const seat = `${row}${(i % 6) + 1}`;
-              const taken = s.meetings.some((m) => m.status === 'live' && m.roomId === seatRoom.id && m.participants.some((p) => p.seat === seat && p.checkedInAt));
-              return <div key={i} className={'seat' + (taken ? ' taken' : '')} title={taken ? 'Đang có người' : 'Trống'}>{seat}</div>;
-            })}
-          </div>
-          <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12 }}>
-            Ô đậm màu: vị trí đã có đại biểu điểm danh trong phiên họp đang diễn ra. Sức chứa {seatRoom.capacity} chỗ (hiển thị tối đa 30).
-          </p>
-        </Modal>
+        <SeatLayoutModal room={seatRoom} onClose={() => setSeatRoom(null)}
+          onSave={async (layout) => {
+            await adminService.saveRoom(user!, { id: seatRoom.id, layout });
+            await refresh();
+            setSeatRoom(null);
+            toast('Đã lưu sơ đồ phòng họp');
+          }} />
       )}
 
       {editing && (
@@ -110,5 +102,60 @@ export default function RoomsAdminPage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+// ---------------- Chỉnh sơ đồ phòng họp (E-HSMT mục 9) ----------------
+function SeatLayoutModal({ room, onClose, onSave }: {
+  room: Room; onClose: () => void; onSave: (layout: RoomLayout) => void;
+}) {
+  const init = room.layout ?? defaultLayout(room.capacity);
+  const [rows, setRows] = useState(init.rows);
+  const [cols, setCols] = useState(init.cols);
+  const [disabled, setDisabled] = useState<Set<string>>(new Set(init.disabled ?? []));
+  const clamp = (n: number) => Math.min(12, Math.max(1, Math.floor(n || 1)));
+
+  const layout: RoomLayout = {
+    rows, cols,
+    // chỉ giữ ô lối đi nằm trong phạm vi lưới hiện tại
+    disabled: Array.from(disabled).filter((k) => {
+      const [r, c] = k.split('-').map(Number);
+      return r < rows && c < cols;
+    }),
+  };
+  const seats = rows * cols - layout.disabled!.length;
+
+  const toggle = (r: number, c: number) => {
+    const k = seatKey(r, c);
+    setDisabled((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  };
+
+  return (
+    <Modal title={`Sơ đồ phòng họp — ${room.name}`} onClose={onClose} width={560}
+      footer={<>
+        <button className="btn outline" onClick={onClose}>Hủy</button>
+        <button className="btn" onClick={() => onSave(layout)}><Icon name="check" size={15} />Lưu sơ đồ</button>
+      </>}>
+      <div className="form-row">
+        <Field label="Số hàng (1–12)">
+          <input className="inp" type="number" min={1} max={12} value={rows}
+            onChange={(e) => setRows(clamp(Number(e.target.value)))} />
+        </Field>
+        <Field label="Số cột (1–12)">
+          <input className="inp" type="number" min={1} max={12} value={cols}
+            onChange={(e) => setCols(clamp(Number(e.target.value)))} />
+        </Field>
+      </div>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '2px 0 12px' }}>
+        Bấm vào ô để bật/tắt ghế. Ô nét đứt = lối đi / khoảng trống (không phải ghế).
+        Tổng số ghế: <b>{seats}</b>.
+      </p>
+      <SeatGrid layout={layout} editMode onCellClick={(r, c) => toggle(r, c)}
+        render={() => ({ label: <span className="seat-code">ghế</span> })} />
+    </Modal>
   );
 }
