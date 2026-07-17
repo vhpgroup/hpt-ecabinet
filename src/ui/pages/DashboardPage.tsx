@@ -4,7 +4,7 @@
 import React, { useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useApp } from '../../store/AppContext';
-import { Badge, Icon, StatCard } from '../components';
+import { ColorIcon,Badge, Icon, StatCard } from '../components';
 import { MEETING_STATUS } from '../../domain/labels';
 import * as meetingService from '../../services/meetingService';
 import { isOverdue } from '../../services/taskService';
@@ -117,7 +117,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="card card-pad">
-            <h3 className="card-title"><Icon name="file" size={16} />Tài liệu mới cập nhật</h3>
+            <h3 className="card-title"><ColorIcon name="file" size={16} />Tài liệu mới cập nhật</h3>
             {data.recentDocs.map((d) => (
               <div className="doc-item" key={d.id}>
                 <div className={'doc-ic' + (d.mime.includes('word') ? ' word' : '')}><Icon name="file" size={17} /></div>
@@ -132,7 +132,7 @@ export default function DashboardPage() {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card card-pad">
-            <h3 className="card-title"><Icon name="vote" size={16} />Phiếu lấy ý kiến đang mở</h3>
+            <h3 className="card-title"><ColorIcon name="vote" size={16} />Phiếu lấy ý kiến đang mở</h3>
             {data.openPolls.length === 0 && <p style={{ color: 'var(--muted)', fontSize: 13 }}>Không có phiếu lấy ý kiến nào.</p>}
             {data.openPolls.map((p) => {
               const answered = p.ballots.some((b) => b.userId === user?.id);
@@ -155,7 +155,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="card card-pad">
-            <h3 className="card-title"><Icon name="bell" size={16} />Thông báo mới</h3>
+            <h3 className="card-title"><ColorIcon name="bell" size={16} />Thông báo mới</h3>
             {data.notifs.map((n) => (
               <div key={n.id} style={{ padding: '8px 0', borderBottom: '1px dashed var(--line)' }}>
                 <b style={{ fontSize: 13, color: n.read ? 'var(--text)' : 'var(--primary)' }}>{n.title}</b>

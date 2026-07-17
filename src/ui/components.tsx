@@ -5,6 +5,7 @@ import React, { useEffect } from 'react';
 import type { RoomLayout, User, Vote } from '../domain/types';
 import { thresholdLabel, voteOutcome, voteResults } from '../services/voteService';
 import { initials } from './format';
+import { EMOJI } from './emojiIcons';
 
 // ---------------- Icon — bộ Lucide chính thức ----------------
 // Dữ liệu SVG lấy nguyên bản từ Lucide (https://lucide.dev) — ISC License,
@@ -60,6 +61,21 @@ export function Icon({ name, size = 18, className }: { name: keyof typeof PATHS 
       className={className} width={size} height={size} viewBox="0 0 24 24" fill="none"
       stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
       dangerouslySetInnerHTML={{ __html: PATHS[name] ?? PATHS.info }}
+    />
+  );
+}
+
+/**
+ * Icon MÀU 3D (Microsoft Fluent Emoji) — dùng cho menu điều hướng, thẻ thống kê,
+ * tiêu đề khối nổi bật. Không có bản màu thì tự rơi về icon nét mảnh (Icon).
+ */
+export function ColorIcon({ name, size = 20, className }: { name: string; size?: number; className?: string }) {
+  const src = EMOJI[name];
+  if (!src) return <Icon name={name} size={size} className={className} />;
+  return (
+    <img
+      src={src} width={size} height={size} className={className} alt=""
+      style={{ objectFit: 'contain', flexShrink: 0 }} draggable={false}
     />
   );
 }
@@ -131,7 +147,7 @@ export function StatCard({ icon, label, value, tone = 'blue', hint }: {
 }) {
   return (
     <div className={`stat-card tone-${tone}`}>
-      <div className="stat-ic"><Icon name={icon} size={20} /></div>
+      <div className="stat-ic"><ColorIcon name={icon} size={26} /></div>
       <div>
         <div className="stat-value">{value}</div>
         <div className="stat-label">{label}</div>

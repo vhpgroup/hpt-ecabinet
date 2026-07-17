@@ -5,7 +5,7 @@ import React, { useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useApp } from '../store/AppContext';
 import { db } from '../data/db';
-import { Avatar, Badge, Icon } from './components';
+import { Avatar, Badge, Icon, ColorIcon } from './components';
 import { ROLE_LABEL } from '../domain/labels';
 import * as notificationService from '../services/notificationService';
 import { resetAllData } from '../services/adminService';
@@ -62,37 +62,37 @@ export default function MainLayout() {
         </div>
         <nav className="sb-nav" onClick={() => setSbOpen(false)}>
           <div className="sb-group">Tổng quan</div>
-          <NavLink to="/" end className={linkCls}><Icon name="home" />Trang chủ</NavLink>
-          <NavLink to="/calendar" className={linkCls}><Icon name="calendar" />Lịch công tác</NavLink>
+          <NavLink to="/" end className={linkCls}><ColorIcon name="home" />Trang chủ</NavLink>
+          <NavLink to="/calendar" className={linkCls}><ColorIcon name="calendar" />Lịch công tác</NavLink>
           <NavLink to="/notifications" className={linkCls}>
-            <Icon name="bell" />Thông báo
+            <ColorIcon name="bell" />Thông báo
             {unread > 0 && <Badge color="red">{unread}</Badge>}
           </NavLink>
           <div className="sb-group">Nghiệp vụ họp</div>
-          <NavLink to="/meetings" className={linkCls}><Icon name="users" />Phiên họp</NavLink>
-          <NavLink to="/documents" className={linkCls}><Icon name="file" />Tài liệu</NavLink>
-          <NavLink to="/polls" className={linkCls}><Icon name="vote" />Lấy ý kiến</NavLink>
-          <NavLink to="/tasks" className={linkCls}><Icon name="clipboard" />Nhiệm vụ sau họp</NavLink>
+          <NavLink to="/meetings" className={linkCls}><ColorIcon name="users" />Phiên họp</NavLink>
+          <NavLink to="/documents" className={linkCls}><ColorIcon name="file" />Tài liệu</NavLink>
+          <NavLink to="/polls" className={linkCls}><ColorIcon name="vote" />Lấy ý kiến</NavLink>
+          <NavLink to="/tasks" className={linkCls}><ColorIcon name="clipboard" />Nhiệm vụ sau họp</NavLink>
           <div className="sb-group">Tiện ích</div>
-          <NavLink to="/help" className={linkCls}><Icon name="book" />Hướng dẫn sử dụng</NavLink>
+          <NavLink to="/help" className={linkCls}><ColorIcon name="book" />Hướng dẫn sử dụng</NavLink>
           {user?.role === 'admin' && (
             <>
               <div className="sb-group">Quản trị hệ thống</div>
-              <NavLink to="/admin/users" className={linkCls}><Icon name="settings" />Người dùng</NavLink>
-              <NavLink to="/admin/units" className={linkCls}><Icon name="building" />Đơn vị</NavLink>
-              <NavLink to="/admin/rooms" className={linkCls}><Icon name="room" />Phòng họp</NavLink>
-              <NavLink to="/admin/catalogs" className={linkCls}><Icon name="tag" />Danh mục</NavLink>
-              <NavLink to="/admin/guides" className={linkCls}><Icon name="book" />Tài liệu HDSD</NavLink>
-              <NavLink to="/admin/api" className={linkCls}><Icon name="share" />API & Tích hợp</NavLink>
-              <NavLink to="/admin/audit" className={linkCls}><Icon name="list" />Nhật ký hệ thống</NavLink>
-              <NavLink to="/admin/reports" className={linkCls}><Icon name="chart" />Báo cáo thống kê</NavLink>
+              <NavLink to="/admin/users" className={linkCls}><ColorIcon name="settings" />Người dùng</NavLink>
+              <NavLink to="/admin/units" className={linkCls}><ColorIcon name="building" />Đơn vị</NavLink>
+              <NavLink to="/admin/rooms" className={linkCls}><ColorIcon name="room" />Phòng họp</NavLink>
+              <NavLink to="/admin/catalogs" className={linkCls}><ColorIcon name="tag" />Danh mục</NavLink>
+              <NavLink to="/admin/guides" className={linkCls}><ColorIcon name="book" />Tài liệu HDSD</NavLink>
+              <NavLink to="/admin/api" className={linkCls}><ColorIcon name="share" />API & Tích hợp</NavLink>
+              <NavLink to="/admin/audit" className={linkCls}><ColorIcon name="list" />Nhật ký hệ thống</NavLink>
+              <NavLink to="/admin/reports" className={linkCls}><ColorIcon name="chart" />Báo cáo thống kê</NavLink>
             </>
           )}
           {/* Quản trị đơn vị (E-HSMT vai trò thứ 5): CHỈ quản lý người dùng trong đơn vị mình */}
           {user?.role === 'unit_admin' && (
             <>
               <div className="sb-group">Quản trị đơn vị</div>
-              <NavLink to="/admin/users" className={linkCls}><Icon name="settings" />Người dùng đơn vị</NavLink>
+              <NavLink to="/admin/users" className={linkCls}><ColorIcon name="settings" />Người dùng đơn vị</NavLink>
             </>
           )}
         </nav>
