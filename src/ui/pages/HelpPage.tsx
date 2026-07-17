@@ -22,7 +22,7 @@ export default function HelpPage() {
 
   return (
     <div>
-      <PageHeader title="Hướng dẫn sử dụng"
+      <PageHeader icon="book" title="Hướng dẫn sử dụng"
         subtitle={`Tài liệu hướng dẫn áp dụng cho vai trò ${user ? ROLE_LABEL[user.role] : ''}`} />
       <div className="card card-pad">
         {list.length === 0 && <EmptyState icon="info" text="Chưa có tài liệu hướng dẫn nào dành cho bạn" />}

@@ -8,7 +8,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { DocFile, QuestionRequest } from '../../domain/types';
 import { QUESTION_STATUS, QUESTION_SESSION } from '../../domain/labels';
 import { useApp } from '../../store/AppContext';
-import { Avatar, Badge, Icon, Modal, QRSvg, SeatGrid, defaultLayout, seatKey } from '../components';
+import { ColorIcon,Avatar, Badge, Icon, Modal, QRSvg, SeatGrid, defaultLayout, seatKey } from '../components';
 import { can } from '../../services/authService';
 import * as meetingService from '../../services/meetingService';
 import * as chatService from '../../services/chatService';
@@ -242,18 +242,18 @@ export default function LiveMeetingPage() {
           <div className="live-panel">
             <div className="tabs">
               <button className={'tab' + (rightTab === 'attend' ? ' active' : '')} onClick={() => setRightTab('attend')}>
-                Điểm danh <Badge color="green">{present}</Badge>
+                <ColorIcon name="hand" size={15} /> Điểm danh <Badge color="green">{present}</Badge>
               </button>
               <button className={'tab' + (rightTab === 'seatmap' ? ' active' : '')} onClick={() => setRightTab('seatmap')}>
-                Sơ đồ phòng họp
+                <ColorIcon name="chair" size={15} /> Sơ đồ phòng họp
               </button>
               <button className={'tab' + (rightTab === 'speak' ? ' active' : '')} onClick={() => setRightTab('speak')}>
-                Phát biểu <Badge color="amber">{waiting.length}</Badge>
+                <ColorIcon name="mic" size={15} /> Phát biểu <Badge color="amber">{waiting.length}</Badge>
               </button>
               <button className={'tab' + (rightTab === 'question' ? ' active' : '')} onClick={() => setRightTab('question')}>
-                Chất vấn {qActive ? <Badge color="green">•</Badge> : qPending.length > 0 ? <Badge color="amber">{qPending.length}</Badge> : null}
+                <ColorIcon name="question" size={15} /> Chất vấn {qActive ? <Badge color="green">•</Badge> : qPending.length > 0 ? <Badge color="amber">{qPending.length}</Badge> : null}
               </button>
-              <button className={'tab' + (rightTab === 'chat' ? ' active' : '')} onClick={() => setRightTab('chat')}>Trao đổi</button>
+              <button className={'tab' + (rightTab === 'chat' ? ' active' : '')} onClick={() => setRightTab('chat')}><ColorIcon name="chat" size={15} /> Trao đổi</button>
             </div>
 
             {rightTab === 'attend' && (

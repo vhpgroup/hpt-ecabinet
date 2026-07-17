@@ -43,6 +43,7 @@ export default function MeetingsPage() {
   return (
     <div>
       <PageHeader
+        icon="users"
         title="Phiên họp"
         subtitle={`${s.meetings.length} phiên họp trong hệ thống`}
         actions={can.manageMeetings(user) && (

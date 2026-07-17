@@ -121,11 +121,16 @@ export function Modal({ title, onClose, children, width = 560, footer }: {
 }
 
 // ---------------- Trang & khối ----------------
-export function PageHeader({ title, subtitle, actions }: { title: React.ReactNode; subtitle?: React.ReactNode; actions?: React.ReactNode }) {
+export function PageHeader({ title, subtitle, actions, icon }: {
+  title: React.ReactNode; subtitle?: React.ReactNode; actions?: React.ReactNode; icon?: string;
+}) {
   return (
     <div className="page-head">
       <div>
-        <h1>{title}</h1>
+        <h1 style={icon ? { display: 'flex', alignItems: 'center', gap: 10 } : undefined}>
+          {icon && <ColorIcon name={icon} size={30} />}
+          {title}
+        </h1>
         {subtitle && <p className="page-sub">{subtitle}</p>}
       </div>
       {actions && <div className="page-actions">{actions}</div>}
@@ -133,10 +138,10 @@ export function PageHeader({ title, subtitle, actions }: { title: React.ReactNod
   );
 }
 
-export function EmptyState({ icon = 'info', text }: { icon?: string; text: string }) {
+export function EmptyState({ icon = 'mailbox', text }: { icon?: string; text: string }) {
   return (
     <div className="empty">
-      <Icon name={icon} size={30} />
+      <ColorIcon name={icon} size={44} />
       <p>{text}</p>
     </div>
   );

@@ -26,7 +26,7 @@ export default function PollsPage() {
 
   return (
     <div>
-      <PageHeader title="Lấy ý kiến" subtitle="Gửi phiếu xin ý kiến thành viên kèm tài liệu, tổng hợp tự động"
+      <PageHeader icon="vote" title="Lấy ý kiến" subtitle="Gửi phiếu xin ý kiến thành viên kèm tài liệu, tổng hợp tự động"
         actions={can.manageMeetings(user) && (
           <button className="btn" onClick={() => setCreateOpen(true)}><Icon name="plus" size={15} />Tạo phiếu lấy ý kiến</button>
         )} />

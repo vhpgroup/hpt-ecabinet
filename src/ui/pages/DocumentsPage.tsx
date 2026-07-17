@@ -80,7 +80,7 @@ export default function DocumentsPage() {
 
   return (
     <div>
-      <PageHeader title="Tài liệu" subtitle="Kho tài liệu phiên họp và tài liệu cá nhân"
+      <PageHeader icon="file" title="Tài liệu" subtitle="Kho tài liệu phiên họp và tài liệu cá nhân"
         actions={<button className="btn" onClick={() => setAddOpen(true)}><Icon name="plus" size={15} />Thêm tài liệu cá nhân</button>} />
 
       <div className="tabs">

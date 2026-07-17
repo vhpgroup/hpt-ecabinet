@@ -31,7 +31,7 @@ export default function NotificationsPage() {
 
   return (
     <div>
-      <PageHeader title="Thông báo" subtitle="Giấy mời họp, biểu quyết, tài liệu, nhiệm vụ… (giai đoạn 2: đẩy thêm email/SMS)"
+      <PageHeader icon="bell" title="Thông báo" subtitle="Giấy mời họp, biểu quyết, tài liệu, nhiệm vụ… (giai đoạn 2: đẩy thêm email/SMS)"
         actions={
           <>
             <button className={'btn sm' + (onlyUnread ? '' : ' outline')} onClick={() => setOnlyUnread(!onlyUnread)}>Chưa đọc</button>

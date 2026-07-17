@@ -41,7 +41,7 @@ export default function TasksPage() {
 
   return (
     <div>
-      <PageHeader title="Nhiệm vụ sau họp" subtitle="Theo dõi tiến độ thực hiện kết luận, chỉ đạo sau các phiên họp"
+      <PageHeader icon="clipboard" title="Nhiệm vụ sau họp" subtitle="Theo dõi tiến độ thực hiện kết luận, chỉ đạo sau các phiên họp"
         actions={can.manageMeetings(user) && <button className="btn" onClick={() => setAddOpen(true)}><Icon name="plus" size={15} />Giao nhiệm vụ</button>} />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>

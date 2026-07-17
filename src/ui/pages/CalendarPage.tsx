@@ -65,6 +65,7 @@ export default function CalendarPage() {
   return (
     <div>
       <PageHeader
+        icon="calendar"
         title="Lịch công tác"
         subtitle="Lịch họp của đơn vị và lịch cá nhân"
         actions={
