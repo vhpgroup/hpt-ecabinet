@@ -1,0 +1,80 @@
+# ============================================================
+# eCabinet — Triển khai full-stack biến thể .NET 8 + SQL Server 2022
+# (đáp ứng nền tảng E-HSMT: nền tảng .NET + MS SQL Server 2022 + Windows Server)
+#
+#   web : frontend React build sẵn (Y HỆT bản Node), phục vụ qua nginx + proxy /api
+#   api : backend ASP.NET Core 8 (server-dotnet) — API contract Y HỆT bản Node
+#   db  : Microsoft SQL Server 2022 (Express) + volume dữ liệu
+#
+# KHÁC với docker-compose.yml (bản Node + PostgreSQL): file NÀY dùng .NET + SQL Server.
+# Hai backend độc lập; chọn 1 để chạy. Frontend & API contract giống hệt nhau.
+#
+# Chạy:      DB_PASSWORD='Ecabinet#2026' docker compose -f docker-compose.dotnet.yml up -d --build
+# Truy cập:  http://localhost:8081   (đăng nhập: chutich / 123456)
+# LƯU Ý:
+#   - MSSQL_SA_PASSWORD BẮT BUỘC (mật khẩu mạnh: ≥8 ký tự, đủ hoa/thường/số/ký tự đặc biệt).
+#   - SQL Server 2022 cần ~2GB RAM tối thiểu cho container db.
+# ============================================================
+services:
+  web:
+    build:
+      context: .
+      args:
+        VITE_API_URL: /api        # frontend gọi API cùng origin qua nginx
+    container_name: ecabinet-dotnet-web
+    ports:
+      - "8081:80"                 # cổng 8081 để không đụng bản Node (8080)
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  api:
+    build: ./server-dotnet
+    container_name: ecabinet-dotnet-api
+    environment:
+      PORT: 3000
+      # Chuỗi kết nối SQL Server (SqlClient). TrustServerCertificate=True cho cert tự ký nội bộ.
+      DATABASE_URL: "Server=db,1433;Database=ecabinet;User Id=sa;Password=${DB_PASSWORD:?Chưa đặt DB_PASSWORD};TrustServerCertificate=True;Encrypt=True"
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_TTL: ${JWT_TTL:-3600}
+      REFRESH_TTL_SEC: ${REFRESH_TTL_SEC:-604800}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      LOGIN_RATE_MAX: ${LOGIN_RATE_MAX:-10}
+      OPEN_RATE_MAX: ${OPEN_RATE_MAX:-120}
+      # CORS cho app di động (Capacitor/Ionic) — tắt bằng MOBILE_CORS=off
+      MOBILE_CORS: ${MOBILE_CORS:-on}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # Họp trực tuyến WebRTC (LiveKit) — GATED: trống -> mô phỏng; điền -> họp thật.
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    # expose để debug trực tiếp API (tùy chọn):
+    # ports: ["3000:3000"]
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: ecabinet-dotnet-db
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Express                       # bản Express miễn phí (đủ cho phòng họp cấp sở/đơn vị)
+      MSSQL_SA_PASSWORD: ${DB_PASSWORD:?Chưa đặt DB_PASSWORD (mật khẩu SA mạnh)}
+    volumes:
+      - ecabinet_mssql:/var/opt/mssql          # dữ liệu bền vững
+    # LƯU Ý: SQL Server 2022 cần ~2GB RAM cho container này. Trên máy yếu hãy tăng RAM Docker.
+    healthcheck:
+      # -C: tin cậy cert máy chủ (self-signed) — bắt buộc với sqlcmd 18+ trong image 2022.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+    restart: unless-stopped
+
+volumes:
+  ecabinet_mssql:

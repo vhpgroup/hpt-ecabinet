@@ -326,4 +326,101 @@ curl "https://<host>/api/open/v1/spec"
 
 ---
 
+## 11. Backend .NET 8 + SQL Server (đáp ứng nền tảng E-HSMT)
+
+Bên cạnh backend Node.js (`server/`), dự án có **backend thứ hai viết bằng ASP.NET Core 8 + Microsoft SQL Server** tại thư mục **`server-dotnet/`**, port **1:1** từ bản Node để đáp ứng yêu cầu nền tảng của E-HSMT (**.NET + SQL Server 2022 + Windows Server**).
+
+### Vì sao có 2 backend?
+- **`server/` (Node.js + PostgreSQL/PGlite)** — bản gốc, dùng làm **nguồn chân lý** hợp đồng API.
+- **`server-dotnet/` (ASP.NET Core 8 + SQL Server 2022)** — bản port đáp ứng hạ tầng bắt buộc của hồ sơ mời thầu (E-HSMT): nền tảng .NET, CSDL MS SQL Server 2022, chạy trên Windows Server.
+
+**API contract giống hệt nhau** (đường dẫn, method, mã lỗi + thông điệp tiếng Việt, shape JSON, đường WebSocket `/api/realtime` + message `{type:'change',collection,action,id,at}`). **Frontend React không đổi một dòng** — chỉ đổi backend phía sau. Chọn **một** backend để chạy (không chạy song song cùng dữ liệu).
+
+### Kiến trúc `server-dotnet/`
+```
+server-dotnet/
+├── ECabinet.sln
+├── ECabinet.Api/                # API (gói NuGet ngoài shared framework: CHỈ Microsoft.Data.SqlClient)
+│   ├── Program.cs               # entrypoint (listen 0.0.0.0:PORT, mặc định 3000)
+│   ├── App.cs                   # lắp ráp pipeline + route (port index.js)
+│   ├── Http/{HttpUtil,Router}.cs# router tối giản (port router.js) + tiện ích HTTP
+│   ├── Auth.cs                  # JWT HS256 + mật khẩu PBKDF2 (port auth.js)
+│   ├── Sessions.cs              # refresh token xoay vòng (port sessions.js)
+│   ├── RateLimit.cs             # rate-limit cửa sổ trong bộ nhớ (port ratelimit.js)
+│   ├── Acl.cs                   # ma trận ACL + allowed() (port acl.js)
+│   ├── Access.cs                # lọc quyền đọc theo bản ghi (port access.js)
+│   ├── Guard.cs                 # validatePatch + guardPatch (port guard.js)
+│   ├── Actions.cs               # /api/actions nghiệp vụ + CAS (port actions.js)
+│   ├── Rtc.cs                   # /api/rtc config + mint LiveKit token (port rtc.js)
+│   ├── OpenApiCatalog.cs        # CATALOG + OpenAPI 3.0 (port openapi.js)
+│   ├── OpenRoutes.cs            # bộ API mở /api/open/v1 (port open.js)
+│   ├── Ws.cs                    # WebSocket /api/realtime (port ws.js)
+│   ├── Seed.cs                  # nạp seed.json (dùng chung nội dung với frontend)
+│   ├── Store/                   # IDocStore + InMemoryDocStore + SqlServerDocStore + CAS
+│   └── seed.json               # sinh từ server/src/seed.mjs
+└── ECabinet.Tests/              # runner console (TestHost in-memory) — `dotnet run`
+```
+
+### Chạy nhanh (dev — InMemory, không cần SQL Server)
+```bash
+export PATH=/path/to/.dotnet:$PATH        # cần .NET SDK 8
+cd server-dotnet
+dotnet run --project ECabinet.Api          # API tại http://localhost:3000 (kho InMemory + seed)
+```
+Không đặt `DATABASE_URL` → chạy kho **InMemory** (parity chế độ PGlite của bản Node; dev/test không cần cài DB). `/health` trả `"db":"inmemory"`.
+
+### Chạy với SQL Server thật
+```bash
+DATABASE_URL="Server=localhost,1433;Database=ecabinet;User Id=sa;Password=<mật-khẩu-mạnh>;TrustServerCertificate=True" \
+  JWT_SECRET='chuoi-bi-mat-dai' dotnet run --project ECabinet.Api
+```
+`/health` trả `"db":"sqlserver"`. Ứng dụng **tự tạo bảng + nạp seed** lần đầu.
+
+**Chuỗi kết nối** (SqlClient): `Server=<host>,1433;Database=ecabinet;User Id=sa;Password=<...>;TrustServerCertificate=True`. Dùng `TrustServerCertificate=True` với chứng thư tự ký nội bộ; triển khai thật nên cấp chứng thư hợp lệ và cân nhắc tài khoản SQL riêng thay `sa`.
+
+### Docker Compose (biến thể .NET + SQL Server)
+```bash
+DB_PASSWORD='Ecabinet#2026' docker compose -f docker-compose.dotnet.yml up -d --build
+# → http://localhost:8081   (đăng nhập chutich / 123456)
+```
+3 service: `web` (frontend build `VITE_API_URL=/api`, nginx proxy `/api` → `api:3000`, cổng **8081**), `api` (ASP.NET Core 8), `db` (**mcr.microsoft.com/mssql/server:2022-latest**, Express, volume `ecabinet_mssql`, healthcheck `sqlcmd -C`). **Lưu ý: SQL Server 2022 cần ~2GB RAM cho container `db`.**
+
+### Bảng parity (Node ⇄ .NET)
+| Thành phần | `server/` (Node) | `server-dotnet/` (.NET) |
+|---|---|---|
+| Runtime | Node.js ≥ 20 | ASP.NET Core 8 |
+| CSDL | PostgreSQL / PGlite | SQL Server 2022 / InMemory |
+| Lưu trữ | bảng JSONB `(id,data,updated_at)` | bảng `NVARCHAR(MAX)` `ISJSON` + `(id,data,updated_at)` |
+| CAS chống mất ghi | `UPDATE … WHERE data = data_cũ` (jsonb) | `UPDATE … WHERE data = @old` (chuỗi JSON) + retry |
+| JWT | HS256 (node:crypto) | HS256 (HMACSHA256 + base64url) — **tương thích** |
+| Mật khẩu | scrypt | **PBKDF2-SHA256** (xem ghi chú độ lệch) |
+| Refresh token | băm SHA-256, xoay vòng | băm SHA-256, xoay vòng |
+| WebSocket | RFC 6455 tự viết | WebSocket tích hợp ASP.NET — **cùng đường `/api/realtime`, cùng message** |
+| Rate-limit | cửa sổ trong bộ nhớ | cửa sổ trong bộ nhớ |
+| API mở /health db | `postgresql`/`pglite` | `sqlserver`/`inmemory` |
+
+### Ghi chú độ lệch chủ đích: mật khẩu PBKDF2 (thay scrypt)
+.NET BCL không có `scrypt`, nên bản .NET băm mật khẩu bằng **PBKDF2-SHA256** (`Rfc2898DeriveBytes`, **210.000 vòng**, salt 16 byte), định dạng lưu `pbkdf2$<số-vòng>$<saltBase64>$<hashBase64>`. Vì **seed hash lại mật khẩu** bằng chính hàm này khi nạp, **không cần migrate** — hai backend có CSDL độc lập. Phần JWT vẫn **tương thích** (cùng HS256). Đây là **độ lệch có chủ đích duy nhất** so với bản Node.
+
+### CORS cho ứng dụng di động (Capacitor/Ionic)
+Ngoài hành vi CORS như bản Node (`CORS_ORIGIN`, mặc định `*`), bản .NET còn cho phép thêm origin qua **`CORS_ORIGINS`** (nhiều origin, phân tách bằng dấu phẩy) và **mặc định cho phép** các origin app di động **`capacitor://localhost`, `ionic://localhost`, `http://localhost`** (echo lại đúng origin). Tắt phần mobile bằng **`MOBILE_CORS=off`**.
+
+### Kiểm thử (tiêu chí nghiệm thu)
+```bash
+cd server-dotnet
+dotnet build ECabinet.sln                   # 0 error
+dotnet run --project ECabinet.Tests         # in bảng PASS/FAIL 7 nhóm; exit != 0 nếu có ca lỗi
+```
+Test chạy **in-memory bằng Microsoft.AspNetCore.TestHost** (KHÔNG mở socket) — bao phủ 7 nhóm: AUTH, ACL, ACCESS, GUARD, ACTIONS/CAS, OPEN+RTC, WS (≥55 ca). Kho `InMemoryDocStore` được dùng cho test; lớp `SqlServerDocStore` viết theo cú pháp SqlClient chuẩn nhưng **chưa kiểm thử trên SQL Server thật** trong môi trường sandbox (không có sẵn instance MSSQL) — cần chạy compose để kiểm thử tích hợp thật.
+
+### Triển khai Windows Server + IIS + SQL Server (outline)
+1. Cài **.NET 8 Hosting Bundle** (ASP.NET Core Module) + **IIS** (role Web Server) trên Windows Server.
+2. Cài **SQL Server 2022** (Standard cho sản xuất, hoặc Express cho quy mô nhỏ); tạo database `ecabinet` + tài khoản SQL (khuyến nghị tài khoản riêng, không dùng `sa`).
+3. `dotnet publish ECabinet.Api -c Release -o C:\inetpub\ecabinet-api` (hoặc build từ `server-dotnet/Dockerfile`).
+4. Tạo IIS **Site/App Pool** (No Managed Code) trỏ vào thư mục publish; đặt biến môi trường `DATABASE_URL`, `JWT_SECRET`, `LIVEKIT_*` (Configuration Editor hoặc `web.config`/`environmentVariables`).
+5. Reverse proxy: IIS phục vụ frontend build (`dist/`) + proxy `/api` (kể cả nâng cấp **WebSocket** — bật tính năng *WebSocket Protocol* của IIS) sang site API.
+6. Sản xuất: cấp **chứng thư TLS hợp lệ** (bỏ `TrustServerCertificate` nếu dùng CA nội bộ tin cậy), bật sao lưu SQL định kỳ, chạy API dưới tài khoản dịch vụ tối thiểu quyền.
+
+---
+
 © 2026 — eCabinet demo, xây dựng theo mô hình chức năng VNPT eCabinet (phòng họp không giấy).

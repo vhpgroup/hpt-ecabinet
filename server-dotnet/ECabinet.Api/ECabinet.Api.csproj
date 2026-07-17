@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ECabinet.Api</RootNamespace>
+    <AssemblyName>ECabinet.Api</AssemblyName>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Gói NuGet DUY NHẤT: driver MS SQL Server. Phần còn lại dùng shared framework ASP.NET Core. -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- seed.json phải nằm cạnh app khi chạy (dev + container) -->
+    <None Update="seed.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -61,8 +61,19 @@ class RealtimeClient {
     if (!this.path || !token || typeof WebSocket === 'undefined') return;
     try { this.ws?.close(); } catch { /* ignore */ }
 
-    const abs = this.path.startsWith('http') ? this.path : location.origin + this.path;
-    const wsUrl = abs.replace(/^http/, 'ws') + '?token=' + encodeURIComponent(token);
+    // this.path có thể ở 3 dạng (do apiBase.wsUrl() / restAdapter dựng):
+    //  - "ws(s)://host/api/realtime" : app native, base tuyệt đối -> DÙNG NGUYÊN
+    //  - "http(s)://host/api/realtime": tuyệt đối scheme http -> đổi sang ws(s)
+    //  - "/api/realtime"              : web cùng origin -> ghép location.origin (hành vi cũ)
+    let abs: string;
+    if (/^wss?:\/\//i.test(this.path)) {
+      abs = this.path;                                   // đã là ws/wss tuyệt đối
+    } else if (/^https?:\/\//i.test(this.path)) {
+      abs = this.path.replace(/^http/i, 'ws');           // http(s) tuyệt đối -> ws(s)
+    } else {
+      abs = (location.origin + this.path).replace(/^http/i, 'ws'); // tương đối -> suy từ location
+    }
+    const wsUrl = abs + '?token=' + encodeURIComponent(token);
 
     let ws: WebSocket;
     try { ws = new WebSocket(wsUrl); } catch { this.scheduleReconnect(); return; }

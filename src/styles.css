@@ -317,6 +317,28 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .acct-chip span { font-size: 11px; color: var(--muted); display: block; }
 .login-hint { margin-top: 14px; font-size: 12.5px; color: var(--muted); text-align: center; }
 
+/* ---------------- Panel đổi máy chủ (app native) ---------------- */
+.srv-toggle-row { margin-top: 12px; text-align: center; }
+.srv-toggle {
+  display: inline-flex; align-items: center; gap: 5px; background: none; border: none;
+  color: var(--muted); font-size: 12.5px; cursor: pointer; padding: 4px 8px; border-radius: 8px;
+}
+.srv-toggle:hover { color: var(--primary); background: var(--primary-soft); }
+.srv-panel {
+  margin-top: 12px; padding: 16px; border: 1px solid var(--line-2); border-radius: 10px;
+  background: var(--bg);
+}
+.srv-panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.srv-panel-head b { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--navy); }
+.srv-hint { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+.srv-preview { font-size: 12px; color: var(--muted); margin: -4px 0 10px; }
+.srv-preview code, .srv-current code { color: var(--primary); background: var(--primary-soft); padding: 1px 5px; border-radius: 5px; }
+.srv-result { display: flex; align-items: center; gap: 5px; font-size: 12.5px; margin: 0 0 10px; }
+.srv-result.ok { color: var(--green); }
+.srv-result.bad { color: var(--red); }
+.srv-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.srv-current { margin-top: 10px; font-size: 12px; color: var(--muted); }
+
 /* ---------------- Lịch ---------------- */
 .cal-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .cal-title { font-size: 17px; font-weight: 700; color: var(--navy); min-width: 170px; text-align: center; }

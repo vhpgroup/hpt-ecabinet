@@ -6,6 +6,101 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { useApp } from '../../store/AppContext';
 import { Icon } from '../components';
 import { ROLE_LABEL } from '../../domain/labels';
+import {
+  getServerUrl, setServerUrl, normalizeServerUrl, isLocalBuild,
+} from '../../data/apiBase';
+
+// ------------------------------------------------------------
+// PANEL "ĐỔI MÁY CHỦ" — cấu hình địa chỉ máy chủ LÚC CHẠY.
+// Cần cho app native (Capacitor) vì app khác origin với máy chủ:
+// người dùng nhập URL máy chủ, kiểm tra, lưu rồi khởi động lại app.
+// Trên web cùng origin panel vẫn dùng được (đổi sang máy chủ khác).
+// ------------------------------------------------------------
+function isCapacitor(): boolean {
+  return typeof window !== 'undefined' && !!(window as unknown as { Capacitor?: unknown }).Capacitor;
+}
+
+function ServerPanel({ onClose }: { onClose: () => void }) {
+  const [url, setUrl] = useState(getServerUrl() ?? '');
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<null | { ok: boolean; msg: string }>(null);
+
+  const check = async () => {
+    setResult(null);
+    const norm = normalizeServerUrl(url);
+    if (!norm) { setResult({ ok: false, msg: 'Vui lòng nhập địa chỉ máy chủ' }); return; }
+    // /health nằm ở GỐC máy chủ (không kèm /api) — lấy origin từ base đã chuẩn hóa
+    const origin = norm.replace(/\/api$/i, '');
+    setChecking(true);
+    try {
+      const res = await fetch(origin + '/health', { method: 'GET' });
+      setResult(res.ok
+        ? { ok: true, msg: `Kết nối được (${origin})` }
+        : { ok: false, msg: `Máy chủ trả lỗi HTTP ${res.status}` });
+    } catch {
+      setResult({ ok: false, msg: 'Không kết nối được — kiểm tra URL, mạng hoặc HTTPS' });
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const saveAndConnect = () => {
+    const norm = normalizeServerUrl(url);
+    if (!norm) { setResult({ ok: false, msg: 'Vui lòng nhập địa chỉ máy chủ' }); return; }
+    setServerUrl(url);          // chuẩn hóa + lưu localStorage['ecabinet.serverUrl']
+    location.reload();          // khởi động lại app -> db.ts chọn REST adapter theo URL mới
+  };
+
+  const backToDemo = () => {
+    setServerUrl(null);         // xóa serverUrl -> quay lại LocalStorageAdapter (demo)
+    location.reload();
+  };
+
+  const current = getServerUrl();
+
+  return (
+    <div className="srv-panel">
+      <div className="srv-panel-head">
+        <b><Icon name="settings" size={15} /> Kết nối máy chủ</b>
+        <button type="button" className="btn ghost sm" onClick={onClose} aria-label="Đóng"><Icon name="x" size={14} /></button>
+      </div>
+      <p className="srv-hint">
+        Nhập địa chỉ máy chủ eCabinet của cơ quan. Ứng dụng sẽ kết nối tới máy chủ này
+        cho đăng nhập, tài liệu và cập nhật thời gian thực.
+      </p>
+      <label className="field">
+        <span className="field-label">Địa chỉ máy chủ</span>
+        <input
+          className="inp"
+          value={url}
+          onChange={(e) => { setUrl(e.target.value); setResult(null); }}
+          placeholder="https://ecabinet.example.gov.vn"
+          autoComplete="url"
+          inputMode="url"
+          spellCheck={false}
+        />
+      </label>
+      {url && (
+        <div className="srv-preview">Sẽ gọi API tại: <code>{normalizeServerUrl(url) || '—'}</code></div>
+      )}
+      {result && (
+        <p className={'srv-result ' + (result.ok ? 'ok' : 'bad')}>
+          <Icon name={result.ok ? 'check' : 'x'} size={13} /> {result.msg}
+        </p>
+      )}
+      <div className="srv-actions">
+        <button type="button" className="btn outline sm" onClick={check} disabled={checking}>
+          {checking ? 'Đang kiểm tra…' : 'Kiểm tra'}
+        </button>
+        <button type="button" className="btn sm" onClick={saveAndConnect}>Lưu &amp; kết nối</button>
+        {isLocalBuild() && current && (
+          <button type="button" className="btn ghost sm" onClick={backToDemo}>Về bản demo</button>
+        )}
+      </div>
+      {current && <div className="srv-current">Đang trỏ: <code>{current}</code></div>}
+    </div>
+  );
+}
 
 const QUICK_ACCOUNTS = [
   { username: 'chutich', name: 'Trần Đại Nghĩa', role: 'Chủ tịch UBND tỉnh — Chủ trì' },
@@ -23,6 +118,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState('123456');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // Panel đổi máy chủ TỰ MỞ trong app native khi chưa cấu hình máy chủ.
+  const [showServer, setShowServer] = useState(() => isCapacitor() && !getServerUrl());
 
   if (ready && user) return <Navigate to="/" replace />;
 
@@ -98,6 +195,13 @@ export default function LoginPage() {
               </button>
             </form>
             <p className="login-hint">Mật khẩu demo cho mọi tài khoản: <b>123456</b> · Vai trò: {Object.values(ROLE_LABEL).join(' / ')}</p>
+
+            <div className="srv-toggle-row">
+              <button type="button" className="srv-toggle" onClick={() => setShowServer((v) => !v)}>
+                <Icon name="settings" size={13} /> Đổi máy chủ
+              </button>
+            </div>
+            {showServer && <ServerPanel onClose={() => setShowServer(false)} />}
           </div>
         </div>
       </div>

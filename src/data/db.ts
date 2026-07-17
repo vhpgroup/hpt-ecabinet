@@ -4,6 +4,7 @@
 // ============================================================
 import type { DataSource, Repo } from './repository';
 import { createRestDataSource } from './restAdapter';
+import { getApiBase, getServerUrl } from './apiBase';
 import { buildSeed } from './seed';
 
 const PREFIX = 'ecab.';
@@ -105,14 +106,21 @@ export function createDataSource(): DataSource {
 }
 
 // ------------------------------------------------------------
-// FACTORY CHỌN NGUỒN DỮ LIỆU (GĐ2)
-// - Đặt VITE_API_URL (vd "/api") lúc build  -> RestApiAdapter (máy chủ + JWT)
-// - Không đặt                                -> LocalStorageAdapter (demo)
+// FACTORY CHỌN NGUỒN DỮ LIỆU (GĐ2 + APP NATIVE)
+// Nguồn địa chỉ máy chủ được phân giải LÚC CHẠY qua apiBase.getApiBase():
+//   1) localStorage['ecabinet.serverUrl']  (người dùng nhập trong app native)
+//   2) import.meta.env.VITE_API_URL         (đóng cứng lúc build, nếu có)
+//   3) '' (rỗng)                             -> LocalStorageAdapter (demo cục bộ)
+//
+// Nhờ (1): app Capacitor build MỘT lần (không cần đặt VITE_API_URL) vẫn có thể
+// trỏ tới BẤT KỲ máy chủ nào — chỉ cần người dùng nhập URL trong app rồi reload.
+// Đổi máy chủ = apiBase.setServerUrl(url) + location.reload() (khởi động lại app).
 // ------------------------------------------------------------
-const API_URL: string | undefined =
-  ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_URL)
-  ?? ((globalThis as Record<string, unknown>).__ECABINET_API_URL__ as string | undefined);
+const API_URL: string = getApiBase();
 
 export const db: DataSource = API_URL ? createRestDataSource(API_URL) : createDataSource();
 
-if (API_URL) console.info('[eCabinet] Chế độ máy chủ (REST):', API_URL);
+if (API_URL) {
+  const via = getServerUrl() ? 'người dùng chọn' : 'cấu hình build';
+  console.info(`[eCabinet] Chế độ máy chủ (REST) [${via}]:`, API_URL);
+}

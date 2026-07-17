@@ -6,6 +6,7 @@
 // ============================================================
 import type { DataSource, Repo } from './repository';
 import type { User } from '../domain/types';
+import { wsUrl } from './apiBase';
 
 const TOKEN_KEY = 'ecab.jwt';
 const REFRESH_KEY = 'ecab.refresh';
@@ -136,7 +137,10 @@ export function createRestDataSource(baseUrl: string): DataSource {
 
   return {
     remote: true,
-    realtimePath: `${base}/realtime`,
+    // Đường realtime dựng qua apiBase.wsUrl():
+    //  - base tuyệt đối (app native)  -> "wss://host/api/realtime" (đã là ws/wss, đúng host)
+    //  - base tương đối "/api" (web)  -> "/api/realtime" (realtime.ts suy từ location — hành vi cũ)
+    realtimePath: wsUrl('/realtime'),
     getToken() {
       return store.get(TOKEN_KEY);
     },

@@ -2,3 +2,9 @@ node_modules
 dist
 *.local
 *.zip
+
+# Backend .NET 8 (server-dotnet) — build artifacts
+server-dotnet/**/bin/
+server-dotnet/**/obj/
+[Bb]in/
+[Oo]bj/
