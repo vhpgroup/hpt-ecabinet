@@ -132,6 +132,8 @@ export function buildSeed(): Snapshot {
         { id: 'a4', order: 4, title: 'Thảo luận, biểu quyết thông qua dự thảo Nghị quyết phiên họp', presenterId: 'u-tk', durationMinutes: 15, documentIds: ['d5'] },
       ],
       currentAgendaItemId: 'a2',
+      // Phiên chất vấn đang mở để demo nghiệp vụ (E-HSMT mục 34/45/46)
+      questionSession: 'open',
       conclusions: [
         { id: 'c1', content: 'Thông qua Báo cáo KT-XH 6 tháng đầu năm 2026. Giao Sở KH&ĐT hoàn thiện, trình HĐND tỉnh tại kỳ họp giữa năm. Biểu dương kết quả thu hút đầu tư 12.450 tỷ đồng.', agendaItemId: 'a1', createdAt: iso(minAgo(10)) },
       ],
@@ -370,6 +372,16 @@ export function buildSeed(): Snapshot {
     { id: 'sr3', meetingId: 'm1', userId: 'u-gtvt', topic: 'Tiến độ GPMB đường vành đai', status: 'waiting', requestedAt: iso(minAgo(2)) },
   ] as Snapshot['speakRequests'];
 
+  // ---------------- Đăng ký chất vấn (m1) ----------------
+  const questions = [
+    // 1 lượt đã chất vấn xong (đã gọi)
+    { id: 'q0', meetingId: 'm1', userId: 'u-tnmt', targetName: 'Sở Giao thông vận tải', topic: 'Trách nhiệm chậm giải phóng mặt bằng đường vành đai phía Đông', content: 'Đề nghị Sở GTVT làm rõ nguyên nhân chậm GPMB và cam kết mốc hoàn thành cụ thể.', status: 'done', order: 1, createdAt: iso(minAgo(20)), calledAt: iso(minAgo(18)), endedAt: iso(minAgo(12)) },
+    // 1 lượt đang chờ gọi (chưa gọi)
+    { id: 'q1', meetingId: 'm1', userId: 'u-yt', targetName: 'Sở Tài chính', topic: 'Bố trí vốn cho y tế cơ sở trong phương án phân bổ đợt 2', content: 'Vì sao tỷ trọng vốn cho y tế tuyến huyện còn thấp so với nhu cầu thực tế?', status: 'pending', order: 2, createdAt: iso(minAgo(5)) },
+    // 1 lượt đang chờ gọi thứ hai
+    { id: 'q2', meetingId: 'm1', userId: 'u-gd', targetName: 'Sở Kế hoạch và Đầu tư', topic: 'Tiến độ giải ngân vốn cho các dự án trường học', status: 'pending', order: 3, createdAt: iso(minAgo(3)) },
+  ] as Snapshot['questions'];
+
   // ---------------- Trao đổi (m1) ----------------
   const messages = [
     { id: 'msg1', meetingId: 'm1', fromId: 'u-tk', toId: null, content: 'Kính gửi các đại biểu: tài liệu mục 2 (Tờ trình phân bổ vốn) đã được cập nhật phiên bản mới.', sentAt: iso(minAgo(12)) },
@@ -419,6 +431,6 @@ export function buildSeed(): Snapshot {
       { id: 'an4', docId: 'd3', userId: 'u-yt', content: 'Thống nhất phương án; đề nghị ưu tiên giải ngân sớm cho 02 bệnh viện tuyến huyện.', isPublic: true, createdAt: iso(minAgo(6)) },
       { id: 'an5', docId: 'd1', userId: 'u-gd', content: 'Đề nghị bổ sung số liệu về giáo dục nghề nghiệp vào mục I.4.', isPublic: true, createdAt: iso(minAgo(16)) },
     ],
-    votes, speakRequests, messages, tasks, notifications, audit,
+    votes, speakRequests, questions, messages, tasks, notifications, audit,
   };
 }

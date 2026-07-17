@@ -20,7 +20,7 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 // giá trị không phải mảng). Sai kiểu -> 400, KHÔNG lưu.
 // ============================================================
 const SCHEMA = {
-  meetings: { code: 'string', title: 'string', description: 'string', startTime: 'string', endTime: 'string', roomId: 'string', isOnline: 'boolean', status: 'string', chairId: 'string', secretaryId: 'string', participants: 'array', agenda: 'array', currentAgendaItemId: 'string|null', conclusions: 'array', minutes: 'object|null', invitedAt: 'string' },
+  meetings: { code: 'string', title: 'string', description: 'string', startTime: 'string', endTime: 'string', roomId: 'string', isOnline: 'boolean', status: 'string', chairId: 'string', secretaryId: 'string', participants: 'array', agenda: 'array', currentAgendaItemId: 'string|null', conclusions: 'array', minutes: 'object|null', invitedAt: 'string', questionSession: 'string' },
   votes: { kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', title: 'string', description: 'string', options: 'array', ballots: 'array', eligibleIds: 'array', documentIds: 'array', secret: 'boolean', status: 'string', deadline: 'string|null' },
   documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string' },
   annotations: { docId: 'string', content: 'string', isPublic: 'boolean' },
@@ -30,6 +30,7 @@ const SCHEMA = {
   units: { name: 'string', short: 'string', order: 'number' },
   rooms: { name: 'string', location: 'string', capacity: 'number', equipment: 'array', supportsOnline: 'boolean', status: 'string' },
   speakRequests: { meetingId: 'string', topic: 'string', status: 'string' },
+  questions: { meetingId: 'string', userId: 'string', targetName: 'string', topic: 'string', content: 'string', status: 'string', order: 'number', calledAt: 'string', endedAt: 'string' },
   messages: { meetingId: 'string', content: 'string', toId: 'string|null' },
 };
 
@@ -84,6 +85,16 @@ export function validatePatch(col, body) {
   if (col === 'tasks' && typeof body.progress === 'number' && (body.progress < 0 || body.progress > 100)) {
     throw httpError(400, 'Tiến độ phải trong khoảng 0–100');
   }
+  // Chất vấn: trạng thái phải nằm trong tập hợp lệ (chống ghi giá trị rác)
+  if (col === 'questions' && body.status !== undefined
+      && !['pending', 'called', 'done', 'rejected'].includes(body.status)) {
+    throw httpError(400, 'Trạng thái chất vấn không hợp lệ');
+  }
+  // Phiên chất vấn của phiên họp: chỉ nhận 3 giá trị hợp lệ
+  if (col === 'meetings' && body.questionSession !== undefined
+      && !['closed', 'open', 'paused'].includes(body.questionSession)) {
+    throw httpError(400, 'Trạng thái phiên chất vấn không hợp lệ');
+  }
 }
 
 /**
@@ -92,7 +103,42 @@ export function validatePatch(col, body) {
 export function guardPatch(col, existing, patch, user) {
   if (col === 'votes') return guardVotes(patch, user);
   if (col === 'meetings') return guardMeetings(existing, patch, user);
+  if (col === 'questions') return guardQuestions(existing, patch, user);
   return patch;
+}
+
+/**
+ * CHẤT VẤN — siết cập nhật (E-HSMT mục 34/45/46):
+ * - Quản lý (chủ trì/thư ký/admin): điều hành lượt chất vấn (đổi status
+ *   pending/called/done/rejected + calledAt/endedAt). Không cho đổi người
+ *   đăng ký (userId) hay phiên (meetingId).
+ * - Đại biểu thường: KHÔNG được tự đổi status/order/mốc thời gian; chỉ được
+ *   sửa nội dung (topic/content/targetName) của CHÍNH MÌNH khi đang chờ
+ *   (pending). Hủy đăng ký thực hiện bằng DELETE (ACL: chính chủ khi pending).
+ */
+function guardQuestions(existing, patch, user) {
+  const isManage = MANAGE.includes(user.role);
+  const p = { ...patch };
+  // không ai được đổi khóa liên kết qua PATCH
+  delete p.meetingId;
+  delete p.userId;
+
+  if (isManage) return p; // quản lý điều hành đầy đủ (server logic đã kiểm tra chuyển trạng thái hợp lệ)
+
+  // đại biểu thường: chỉ thao tác trên lượt của CHÍNH MÌNH
+  if (existing.userId !== user.sub) {
+    throw httpError(403, 'Bạn chỉ được sửa lượt chất vấn của chính mình');
+  }
+  // KHÔNG được tự chuyển trạng thái / thứ tự / mốc thời gian (chỉ chủ tọa gọi/kết thúc)
+  // -> chặn thẳng để phản hồi rõ ràng, không âm thầm bỏ qua.
+  if (p.status !== undefined || p.order !== undefined || p.calledAt !== undefined || p.endedAt !== undefined) {
+    throw httpError(403, 'Đại biểu không được tự đổi trạng thái lượt chất vấn — việc gọi/kết thúc do chủ tọa điều hành');
+  }
+  // chỉ được sửa nội dung khi đang chờ gọi
+  if (existing.status !== 'pending' && (p.topic !== undefined || p.content !== undefined || p.targetName !== undefined)) {
+    throw httpError(403, 'Chỉ sửa được nội dung chất vấn khi đang chờ gọi');
+  }
+  return p;
 }
 
 function guardVotes(patch, user) {
@@ -115,6 +161,12 @@ function guardMeetings(existing, patch, user) {
   // trạng thái phiên họp: chỉ qua /actions (start / invite / end)
   delete p.status;
   delete p.invitedAt;
+
+  // Phiên chất vấn (E-HSMT mục 45/89): CHỈ chủ trì/thư ký/admin điều hành.
+  // Đại biểu thường gửi lên -> chặn thẳng (không âm thầm bỏ qua).
+  if (p.questionSession !== undefined && !isManage) {
+    throw httpError(403, 'Chỉ chủ tọa/thư ký được điều hành phiên chất vấn');
+  }
 
   // biên bản: chữ ký & khóa chỉ qua /actions/sign; đã khóa là bất biến
   if (p.minutes !== undefined) {

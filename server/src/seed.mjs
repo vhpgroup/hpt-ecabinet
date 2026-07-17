@@ -237,6 +237,8 @@ Ch\u01B0\u01A1ng IV. Tr\xE1ch nhi\u1EC7m c\u1EE7a th\u1EE7 tr\u01B0\u1EDFng c\u0
         { id: "a4", order: 4, title: "Th\u1EA3o lu\u1EADn, bi\u1EC3u quy\u1EBFt th\xF4ng qua d\u1EF1 th\u1EA3o Ngh\u1ECB quy\u1EBFt phi\xEAn h\u1ECDp", presenterId: "u-tk", durationMinutes: 15, documentIds: ["d5"] }
       ],
       currentAgendaItemId: "a2",
+      // Phiên chất vấn đang mở để demo nghiệp vụ (E-HSMT mục 34/45/46)
+      questionSession: "open",
       conclusions: [
         { id: "c1", content: "Th\xF4ng qua B\xE1o c\xE1o KT-XH 6 th\xE1ng \u0111\u1EA7u n\u0103m 2026. Giao S\u1EDF KH&\u0110T ho\xE0n thi\u1EC7n, tr\xECnh H\u0110ND t\u1EC9nh t\u1EA1i k\u1EF3 h\u1ECDp gi\u1EEFa n\u0103m. Bi\u1EC3u d\u01B0\u01A1ng k\u1EBFt qu\u1EA3 thu h\xFAt \u0111\u1EA7u t\u01B0 12.450 t\u1EF7 \u0111\u1ED3ng.", agendaItemId: "a1", createdAt: iso(minAgo(10)) }
       ],
@@ -582,6 +584,14 @@ Bi\xEAn b\u1EA3n \u0111\u01B0\u1EE3c l\u1EADp v\xE0 k\xFD s\u1ED1 tr\xEAn H\u1EC
     { id: "sr2", meetingId: "m1", userId: "u-tnmt", topic: "Ki\u1EBFn ngh\u1ECB b\u1ED5 sung v\u1ED1n x\u1EED l\xFD r\xE1c th\u1EA3i", status: "waiting", requestedAt: iso(minAgo(4)) },
     { id: "sr3", meetingId: "m1", userId: "u-gtvt", topic: "Ti\u1EBFn \u0111\u1ED9 GPMB \u0111\u01B0\u1EDDng v\xE0nh \u0111ai", status: "waiting", requestedAt: iso(minAgo(2)) }
   ];
+  const questions = [
+    // 1 lượt đã chất vấn xong (đã gọi)
+    { id: "q0", meetingId: "m1", userId: "u-tnmt", targetName: "S\u1EDF Giao th\xF4ng v\u1EADn t\u1EA3i", topic: "Tr\xE1ch nhi\u1EC7m ch\u1EADm gi\u1EA3i ph\xF3ng m\u1EB7t b\u1EB1ng \u0111\u01B0\u1EDDng v\xE0nh \u0111ai ph\xEDa \u0110\xF4ng", content: "\u0110\u1EC1 ngh\u1ECB S\u1EDF GTVT l\xE0m r\xF5 nguy\xEAn nh\xE2n ch\u1EADm GPMB v\xE0 cam k\u1EBFt m\u1ED1c ho\xE0n th\xE0nh c\u1EE5 th\u1EC3.", status: "done", order: 1, createdAt: iso(minAgo(20)), calledAt: iso(minAgo(18)), endedAt: iso(minAgo(12)) },
+    // 1 lượt đang chờ gọi (chưa gọi)
+    { id: "q1", meetingId: "m1", userId: "u-yt", targetName: "S\u1EDF T\xE0i ch\xEDnh", topic: "B\u1ED1 tr\xED v\u1ED1n cho y t\u1EBF c\u01A1 s\u1EDF trong ph\u01B0\u01A1ng \xE1n ph\xE2n b\u1ED5 \u0111\u1EE3t 2", content: "V\xEC sao t\u1EF7 tr\u1ECDng v\u1ED1n cho y t\u1EBF tuy\u1EBFn huy\u1EC7n c\xF2n th\u1EA5p so v\u1EDBi nhu c\u1EA7u th\u1EF1c t\u1EBF?", status: "pending", order: 2, createdAt: iso(minAgo(5)) },
+    // 1 lượt đang chờ gọi thứ hai
+    { id: "q2", meetingId: "m1", userId: "u-gd", targetName: "S\u1EDF K\u1EBF ho\u1EA1ch v\xE0 \u0110\u1EA7u t\u01B0", topic: "Ti\u1EBFn \u0111\u1ED9 gi\u1EA3i ng\xE2n v\u1ED1n cho c\xE1c d\u1EF1 \xE1n tr\u01B0\u1EDDng h\u1ECDc", status: "pending", order: 3, createdAt: iso(minAgo(3)) }
+  ];
   const messages = [
     { id: "msg1", meetingId: "m1", fromId: "u-tk", toId: null, content: "K\xEDnh g\u1EEDi c\xE1c \u0111\u1EA1i bi\u1EC3u: t\xE0i li\u1EC7u m\u1EE5c 2 (T\u1EDD tr\xECnh ph\xE2n b\u1ED5 v\u1ED1n) \u0111\xE3 \u0111\u01B0\u1EE3c c\u1EADp nh\u1EADt phi\xEAn b\u1EA3n m\u1EDBi.", sentAt: iso(minAgo(12)) },
     { id: "msg2", meetingId: "m1", fromId: "u-khdt", toId: null, content: "\u0110\u1EC1 ngh\u1ECB S\u1EDF T\xE0i ch\xEDnh l\xE0m r\xF5 th\xEAm c\u01A1 c\u1EA5u ngu\u1ED3n v\u1ED1n \u0111\u1ED1i \u1EE9ng c\u1EE7a c\xE1c d\u1EF1 \xE1n y t\u1EBF.", sentAt: iso(minAgo(9)) },
@@ -629,6 +639,7 @@ Bi\xEAn b\u1EA3n \u0111\u01B0\u1EE3c l\u1EADp v\xE0 k\xFD s\u1ED1 tr\xEAn H\u1EC
     ],
     votes,
     speakRequests,
+    questions,
     messages,
     tasks,
     notifications,

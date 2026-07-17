@@ -20,6 +20,7 @@ export const COLLECTIONS = {
   annotations: 'c_annotations',
   votes: 'c_votes',
   speakRequests: 'c_speak_requests',
+  questions: 'c_questions',
   messages: 'c_messages',
   tasks: 'c_tasks',
   notifications: 'c_notifications',

@@ -24,6 +24,7 @@ Hệ thống phòng họp không giấy đầy đủ chức năng theo mô hình
 | **Quản lý tài liệu** | Tài liệu chính theo từng mục chương trình, tài liệu tham khảo, tài liệu cá nhân; tải tệp lên hoặc soạn nội dung; đánh dấu tài liệu **Mật**; phiên bản; chia sẻ có kiểm soát; **ghi chú cá nhân** và **góp ý công khai** trên từng tài liệu; **tự động thông báo khi có tài liệu mới cần xử lý**. |
 | **Điểm danh** | Tự điểm danh khi họp, thư ký điểm danh hộ, mã QR điểm danh (mô phỏng), thống kê có mặt/vắng theo thời gian thực. |
 | **Đăng ký phát biểu** | Đại biểu đăng ký kèm chủ đề; chủ tọa mời phát biểu theo hàng đợi, kết thúc/từ chối lượt. |
+| **Chất vấn** | Đại biểu đăng ký/hủy chất vấn (người được chất vấn, chủ đề, nội dung), xem danh sách & nội dung chất vấn; chủ tọa điều hành phiên chất vấn (bắt đầu/tạm dừng/kết thúc), duyệt danh sách đã gọi/chưa gọi, gọi/từ chối chất vấn — hiển thị người đang chất vấn trên màn hình TV. |
 | **Biểu quyết** | Tạo nội dung biểu quyết theo mục họp, phương án tùy chỉnh, biểu quyết kín/công khai, mở–đóng biểu quyết, kết quả cột phần trăm **cập nhật trực tiếp**, tổng hợp ý kiến kèm theo. |
 | **Lấy ý kiến (ngoài họp)** | Phiếu xin ý kiến kèm tài liệu + hạn phản hồi, **nút gửi nhắc người chưa phản hồi**, cảnh báo sắp đến hạn trên trang chủ, tổng hợp ý kiến góp ý tự động. |
 | **Trao đổi** | Nhắn tin chung cả phòng họp hoặc riêng từng đại biểu ngay trong phiên họp. |

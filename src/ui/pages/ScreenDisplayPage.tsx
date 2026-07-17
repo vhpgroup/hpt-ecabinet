@@ -51,6 +51,8 @@ export default function ScreenDisplayPage() {
   const currentItem = m.agenda.find((a) => a.id === m.currentAgendaItemId) ?? m.agenda[0];
   const openVote = s.votes.find((v) => v.meetingId === m.id && v.status === 'open');
   const speaking = s.speakRequests.find((r) => r.meetingId === m.id && r.status === 'speaking');
+  // Lượt chất vấn đang diễn ra (E-HSMT — hiển thị trên màn hình TV phòng họp)
+  const questioning = s.questions.find((q) => q.meetingId === m.id && q.status === 'called');
   const present = m.participants.filter((p) => p.checkedInAt).length;
   const room = s.rooms.find((r) => r.id === m.roomId);
 
@@ -99,6 +101,14 @@ export default function ScreenDisplayPage() {
                 <div className="tv-speaking">
                   <Icon name="mic" size={20} />
                   Đang phát biểu: <b>{users.get(speaking.userId)?.fullName}</b>{speaking.topic ? ` — ${speaking.topic}` : ''}
+                </div>
+              )}
+              {questioning && (
+                <div className="tv-speaking" style={{ marginTop: speaking ? 10 : undefined }}>
+                  <Icon name="mic" size={20} />
+                  Đang chất vấn: <b>{users.get(questioning.userId)?.fullName}</b>
+                  {questioning.targetName ? <> → <b>{questioning.targetName}</b></> : null}
+                  {questioning.topic ? ` — ${questioning.topic}` : ''}
                 </div>
               )}
             </div>

@@ -1,5 +1,5 @@
 // Nhãn tiếng Việt + màu trạng thái dùng chung toàn hệ thống
-import type { AttendStatus, MeetingStatus, Role, VoteStatus } from './types';
+import type { AttendStatus, MeetingStatus, QuestionStatus, Role, VoteStatus } from './types';
 
 export const ROLE_LABEL: Record<Role, string> = {
   admin: 'Quản trị viên',
@@ -27,6 +27,21 @@ export const VOTE_STATUS: Record<VoteStatus, { label: string; color: string }> =
   pending: { label: 'Chưa mở', color: 'gray' },
   open: { label: 'Đang mở', color: 'green' },
   closed: { label: 'Đã đóng', color: 'navy' },
+};
+
+// Trạng thái lượt đăng ký chất vấn (E-HSMT mục 34/45/46)
+export const QUESTION_STATUS: Record<QuestionStatus, { label: string; color: string }> = {
+  pending: { label: 'Chờ gọi', color: 'amber' },
+  called: { label: 'Đang chất vấn', color: 'green' },
+  done: { label: 'Đã chất vấn', color: 'navy' },
+  rejected: { label: 'Từ chối', color: 'red' },
+};
+
+// Trạng thái phiên chất vấn (chủ tọa điều hành)
+export const QUESTION_SESSION: Record<string, { label: string; color: string }> = {
+  closed: { label: 'Chưa mở', color: 'gray' },
+  open: { label: 'Đang mở', color: 'green' },
+  paused: { label: 'Tạm dừng', color: 'amber' },
 };
 
 export const TASK_STATUS: Record<string, { label: string; color: string }> = {

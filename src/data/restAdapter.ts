@@ -148,6 +148,7 @@ export function createRestDataSource(baseUrl: string): DataSource {
     annotations: new RestRepo('annotations'),
     votes: new RestRepo('votes'),
     speakRequests: new RestRepo('speakRequests'),
+    questions: new RestRepo('questions'),
     messages: new RestRepo('messages'),
     tasks: new RestRepo('tasks'),
     notifications: new RestRepo('notifications'),

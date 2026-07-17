@@ -103,6 +103,14 @@ export interface Meeting {
   createdBy: string;
   createdAt: string;
   invitedAt?: string;
+  /**
+   * Phiên chất vấn do chủ tọa điều hành (E-HSMT mục 45/89):
+   * - undefined / 'closed' : chưa mở (mặc định, tương thích dữ liệu cũ)
+   * - 'open'   : đang cho phép đại biểu đăng ký chất vấn
+   * - 'paused' : tạm dừng đăng ký (đã bắt đầu nhưng dừng nhận đăng ký mới)
+   * OPTIONAL để tương thích ngược dữ liệu cũ + round-trip JSONB.
+   */
+  questionSession?: 'closed' | 'open' | 'paused';
   // ---- Thể thức văn bản biên bản theo NĐ 30/2020 (P0-B). OPTIONAL ----
   /** Số & ký hiệu văn bản biên bản, vd "Số: 06/BB-UBND" */
   documentNumber?: string;
@@ -204,6 +212,30 @@ export interface SpeakRequest {
   endedAt?: string;
 }
 
+// ---------------- Chất vấn (E-HSMT mục 34/45/46/80/89/90) ----------------
+/**
+ * Trạng thái một lượt đăng ký chất vấn:
+ * - pending  : đã đăng ký, chờ chủ tọa gọi
+ * - called   : đang được chủ tọa gọi chất vấn (tại 1 thời điểm chỉ 1 lượt 'called')
+ * - done     : đã kết thúc lượt chất vấn
+ * - rejected : chủ tọa từ chối lượt đăng ký
+ */
+export type QuestionStatus = 'pending' | 'called' | 'done' | 'rejected';
+
+export interface QuestionRequest {
+  id: string;
+  meetingId: string;
+  userId: string; // đại biểu đăng ký chất vấn (người chất vấn)
+  targetName?: string; // người / đơn vị được chất vấn
+  topic: string; // chủ đề chất vấn
+  content?: string; // nội dung chi tiết
+  status: QuestionStatus;
+  order?: number; // thứ tự đăng ký (dự phòng sắp xếp)
+  createdAt: string;
+  calledAt?: string; // thời điểm được gọi
+  endedAt?: string; // thời điểm kết thúc lượt / bị từ chối
+}
+
 export interface ChatMessage {
   id: string;
   meetingId: string;
@@ -258,6 +290,7 @@ export interface Snapshot {
   annotations: Annotation[];
   votes: Vote[];
   speakRequests: SpeakRequest[];
+  questions: QuestionRequest[];
   messages: ChatMessage[];
   tasks: TaskItem[];
   notifications: Notification[];

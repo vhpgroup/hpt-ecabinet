@@ -7,7 +7,7 @@
 // ============================================================
 import type {
   Annotation, AuditEntry, ChatMessage, DocFile, Meeting, Notification,
-  Room, SpeakRequest, TaskItem, Unit, User, Vote,
+  QuestionRequest, Room, SpeakRequest, TaskItem, Unit, User, Vote,
 } from '../domain/types';
 
 export interface Repo<T extends { id: string }> {
@@ -51,6 +51,7 @@ export interface DataSource {
   annotations: Repo<Annotation>;
   votes: Repo<Vote>;
   speakRequests: Repo<SpeakRequest>;
+  questions: Repo<QuestionRequest>;
   messages: Repo<ChatMessage>;
   tasks: Repo<TaskItem>;
   notifications: Repo<Notification>;

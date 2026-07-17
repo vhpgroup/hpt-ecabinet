@@ -47,6 +47,7 @@ const MANAGE = ['admin', 'secretary', 'chairman'];
 // 'adminOrSelf'    : admin hoặc chính chủ (users)
 // 'ownerOrManage'  : chủ sở hữu bản ghi (ownerId) hoặc admin/thư ký/chủ trì
 // 'owner:<field>'  : bản ghi có <field> === user hiện tại
+// 'ownerOrManage:<field>' : bản ghi có <field> === user hiện tại HOẶC quản lý
 // 'self:<field>'   : dữ liệu gửi lên có <field> === user hiện tại
 // 'assigneeOrManage': người được giao (assigneeId) hoặc quản lý
 // 'none'           : cấm qua API chung
@@ -59,6 +60,10 @@ const ACL = {
   annotations:   { create: 'self:userId', update: 'owner:userId', remove: 'owner:userId' },
   votes:         { create: MANAGE, update: 'any', remove: MANAGE },
   speakRequests: { create: 'self:userId', update: 'any', remove: 'any' },
+  // Chất vấn: đại biểu tạo cho CHÍNH MÌNH; cập nhật 'any' nhưng guard siết
+  // (chỉ manage đổi trạng thái gọi/xong/từ chối, chính chủ chỉ sửa nội dung khi
+  // đang chờ); xóa = chính chủ (hủy đăng ký) HOẶC quản lý.
+  questions:     { create: 'self:userId', update: 'any', remove: 'ownerOrManage:userId' },
   messages:      { create: 'self:fromId', update: 'none', remove: 'none' },
   tasks:         { create: MANAGE, update: 'assigneeOrManage', remove: MANAGE },
   notifications: { create: 'any', update: 'owner:userId', remove: 'owner:userId' },
@@ -75,6 +80,7 @@ function allowed(rule, req, existing, body) {
   if (rule === 'adminOrSelf') return role === 'admin' || existing?.id === sub;
   if (rule === 'ownerOrManage') return MANAGE.includes(role) || existing?.ownerId === sub;
   if (rule === 'assigneeOrManage') return MANAGE.includes(role) || existing?.assigneeId === sub;
+  if (rule.startsWith('ownerOrManage:')) return MANAGE.includes(role) || existing?.[rule.slice(14)] === sub;
   if (rule.startsWith('owner:')) return existing?.[rule.slice(6)] === sub;
   if (rule.startsWith('self:')) return body?.[rule.slice(5)] === sub;
   return false;

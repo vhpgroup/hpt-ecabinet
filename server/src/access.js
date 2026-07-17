@@ -17,6 +17,7 @@ const isManage = (user) => MANAGE.includes(user.role);
 const SENSITIVE = new Set([
   'documents', 'votes', 'messages', 'notifications', 'annotations',
   'meetings', 'tasks', 'speakRequests', // GĐ8 (vá P0): chống rò biên bản/kết luận & dữ liệu ngoài phiên
+  'questions', // chất vấn: chỉ thành phần phiên họp (hoặc quản lý) mới đọc được
 ]);
 
 export const needsAccessFilter = (collection) => SENSITIVE.has(collection);
@@ -111,6 +112,12 @@ export function canReadSpeak(s, user, ctx) {
   return ctx.myMeetingIds.has(s.meetingId);
 }
 
+/** Đăng ký chất vấn: quản lý / người đăng ký / thành phần phiên đó */
+export function canReadQuestion(q, user, ctx) {
+  if (isManage(user) || q.userId === user.sub) return true;
+  return ctx.myMeetingIds.has(q.meetingId);
+}
+
 // ---------------- Bộ lọc chung ----------------
 
 /** Lọc danh sách theo quyền đọc (async vì cần ctx). Trả về mảng đã lọc/chiếu. */
@@ -146,6 +153,8 @@ function applyFilter(collection, rows, user, ctx) {
       return rows.filter((t) => canReadTask(t, user, ctx));
     case 'speakRequests':
       return rows.filter((s) => canReadSpeak(s, user, ctx));
+    case 'questions':
+      return rows.filter((q) => canReadQuestion(q, user, ctx));
     default:
       return rows;
   }

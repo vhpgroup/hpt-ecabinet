@@ -5,12 +5,14 @@
 // ============================================================
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { DocFile } from '../../domain/types';
+import type { DocFile, QuestionRequest } from '../../domain/types';
+import { QUESTION_STATUS, QUESTION_SESSION } from '../../domain/labels';
 import { useApp } from '../../store/AppContext';
 import { Avatar, Badge, Icon, Modal, QRSvg } from '../components';
 import { can } from '../../services/authService';
 import * as meetingService from '../../services/meetingService';
 import * as chatService from '../../services/chatService';
+import * as questionService from '../../services/questionService';
 import { simulateLiveTick } from '../../services/sim';
 import { db } from '../../data/db';
 import { realtime } from '../../data/realtime';
@@ -23,7 +25,7 @@ export default function LiveMeetingPage() {
   const { user, s, refresh, toast } = useApp();
   const nav = useNavigate();
   const m = s.meetings.find((x) => x.id === id);
-  const [rightTab, setRightTab] = useState<'attend' | 'speak' | 'chat'>('attend');
+  const [rightTab, setRightTab] = useState<'attend' | 'speak' | 'question' | 'chat'>('attend');
   const [viewDoc, setViewDoc] = useState<DocFile | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [clock, setClock] = useState('');
@@ -79,6 +81,10 @@ export default function LiveMeetingPage() {
   const speaking = speakReqs.find((r) => r.status === 'speaking');
   const waiting = speakReqs.filter((r) => r.status === 'waiting').sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
   const present = m.participants.filter((p) => p.checkedInAt).length;
+  // ----- Chất vấn (E-HSMT mục 34/45/46) -----
+  const qPending = questionService.pendingQuestions(s.questions, m.id);
+  const qActive = questionService.activeQuestion(s.questions, m.id);
+  const qSession = questionService.sessionState(m);
 
   const act = async (fn: () => Promise<unknown>, msg?: string) => {
     try { await fn(); await refresh(); if (msg) toast(msg); }
@@ -198,6 +204,9 @@ export default function LiveMeetingPage() {
               <button className={'tab' + (rightTab === 'speak' ? ' active' : '')} onClick={() => setRightTab('speak')}>
                 Phát biểu <Badge color="amber">{waiting.length}</Badge>
               </button>
+              <button className={'tab' + (rightTab === 'question' ? ' active' : '')} onClick={() => setRightTab('question')}>
+                Chất vấn {qActive ? <Badge color="green">•</Badge> : qPending.length > 0 ? <Badge color="amber">{qPending.length}</Badge> : null}
+              </button>
               <button className={'tab' + (rightTab === 'chat' ? ' active' : '')} onClick={() => setRightTab('chat')}>Trao đổi</button>
             </div>
 
@@ -235,6 +244,9 @@ export default function LiveMeetingPage() {
             )}
 
             {rightTab === 'speak' && <SpeakPane meetingId={m.id} chairCtl={chairCtl} speaking={speaking} waiting={waiting} act={act} />}
+            {rightTab === 'question' && (
+              <QuestionPane meetingId={m.id} chairCtl={chairCtl} session={qSession} active={qActive} pending={qPending} act={act} />
+            )}
             {rightTab === 'chat' && <ChatPane meetingId={m.id} />}
           </div>
         </div>
@@ -315,6 +327,191 @@ function SpeakPane({ meetingId, chairCtl, speaking, waiting, act }: {
         </div>
       ))}
       {waiting.length === 0 && !speaking && <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>Chưa có đại biểu đăng ký phát biểu.</p>}
+    </div>
+  );
+}
+
+// ---------------- Chất vấn (E-HSMT mục 34/45/46) ----------------
+function QuestionPane({ meetingId, chairCtl, session, active, pending, act }: {
+  meetingId: string; chairCtl: boolean;
+  session: 'closed' | 'open' | 'paused';
+  active?: QuestionRequest;
+  pending: QuestionRequest[];
+  act: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+}) {
+  const { user, s } = useApp();
+  const users = indexBy(s.users);
+  const [open, setOpen] = useState(false); // modal đăng ký
+  const [view, setView] = useState<QuestionRequest | null>(null); // modal xem nội dung
+  const [form, setForm] = useState({ targetName: '', topic: '', content: '' });
+
+  // toàn bộ lượt đã gọi (đang/xong/từ chối) để "xem danh sách đã gọi"
+  const called = questionService.calledQuestions(s.questions, meetingId);
+  const myPending = pending.find((q) => q.userId === user?.id);
+  const iAmInvolved = !!myPending || active?.userId === user?.id;
+
+  const submit = () => act(async () => {
+    await questionService.registerQuestion(user!, meetingId, form);
+    setForm({ targetName: '', topic: '', content: '' });
+    setOpen(false);
+  }, 'Đã đăng ký chất vấn');
+
+  const sess = QUESTION_SESSION[session];
+
+  return (
+    <div className="tabpane">
+      {/* Trạng thái phiên + điều khiển của chủ tọa */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Phiên chất vấn:</span>
+        <Badge color={sess.color}>{sess.label}</Badge>
+        {chairCtl && (
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+            {session !== 'open' && (
+              <button className="btn success sm" onClick={() => act(() => questionService.openSession(user!, meetingId), 'Đã bắt đầu phiên chất vấn')}>
+                <Icon name="check" size={13} />Bắt đầu
+              </button>
+            )}
+            {session === 'open' && (
+              <button className="btn outline sm" onClick={() => act(() => questionService.pauseSession(user!, meetingId), 'Đã tạm dừng nhận đăng ký chất vấn')}>
+                Tạm dừng
+              </button>
+            )}
+            {session !== 'closed' && (
+              <button className="btn danger sm" onClick={() => act(() => questionService.closeSession(user!, meetingId), 'Đã kết thúc phiên chất vấn')}>
+                Kết thúc
+              </button>
+            )}
+          </span>
+        )}
+      </div>
+
+      {/* Lượt ĐANG chất vấn — nổi bật */}
+      {active && (
+        <div className="speaking-now" style={{ background: 'rgba(29,158,95,.1)', borderColor: 'rgba(29,158,95,.35)' }}>
+          <div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>
+            <Avatar user={users.get(active.userId)} size={34} />
+            <div style={{ minWidth: 0 }}>
+              <b style={{ fontSize: 13, color: '#10643c' }}><Icon name="mic" size={13} /> Đang chất vấn: {users.get(active.userId)?.fullName}</b>
+              {active.targetName && <div style={{ fontSize: 12, color: '#42775c' }}>→ Được chất vấn: <b>{active.targetName}</b></div>}
+              <div style={{ fontSize: 12, color: '#42775c' }}>{active.topic}</div>
+              {active.calledAt && <div style={{ fontSize: 11, color: '#42775c' }}>Bắt đầu {fmtTime(active.calledAt)}</div>}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            <button className="btn ghost sm" onClick={() => setView(active)}><Icon name="eye" size={13} />Xem nội dung</button>
+            {chairCtl && (
+              <button className="btn outline sm" onClick={() => act(() => questionService.endQuestion(user!, active.id), 'Đã kết thúc lượt chất vấn')}>
+                Kết thúc lượt
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Đại biểu: đăng ký / trạng thái của mình */}
+      {!chairCtl && (
+        <div style={{ marginBottom: 12 }}>
+          {session !== 'open' ? (
+            <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>
+              <Icon name="info" size={13} /> Phiên chất vấn {session === 'paused' ? 'đang tạm dừng' : 'chưa mở'} — vui lòng chờ chủ tọa.
+            </p>
+          ) : iAmInvolved ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Badge color={myPending ? 'amber' : 'green'}>{myPending ? 'Bạn đang chờ được gọi' : 'Bạn đang chất vấn'}</Badge>
+              {myPending && (
+                <button className="btn outline sm" onClick={() => act(() => questionService.cancelQuestion(user!, myPending.id), 'Đã hủy đăng ký chất vấn')}>
+                  Hủy đăng ký
+                </button>
+              )}
+            </div>
+          ) : (
+            <button className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={() => setOpen(true)}>
+              <Icon name="hand" size={15} />Đăng ký chất vấn
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Danh sách CHƯA GỌI */}
+      <b style={{ fontSize: 12.5, color: 'var(--muted)' }}>Chưa gọi ({pending.length})</b>
+      {pending.map((q, i) => (
+        <div className="speak-row" key={q.id}>
+          <span className="agenda-no" style={{ width: 22, height: 22, fontSize: 11.5 }}>{i + 1}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 12.8 }}>{users.get(q.userId)?.fullName}</div>
+            {q.targetName && <div style={{ fontSize: 11.5, color: 'var(--blue)' }}>→ {q.targetName}</div>}
+            <div style={{ fontSize: 11.5, color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{q.topic}</div>
+            <div style={{ fontSize: 10.5, color: '#93a5ba' }}>{timeAgo(q.createdAt)}</div>
+          </div>
+          <button className="icon-btn" title="Xem nội dung" onClick={() => setView(q)}><Icon name="eye" size={14} /></button>
+          {chairCtl && (
+            <>
+              <button className="btn success sm" title="Gọi chất vấn" onClick={() => act(() => questionService.callQuestion(user!, q.id), 'Đã gọi chất vấn')}><Icon name="mic" size={13} /></button>
+              <button className="icon-btn" title="Từ chối" onClick={() => act(() => questionService.rejectQuestion(user!, q.id), 'Đã từ chối lượt chất vấn')}><Icon name="x" size={14} /></button>
+            </>
+          )}
+        </div>
+      ))}
+      {pending.length === 0 && <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>Chưa có đại biểu đăng ký chất vấn.</p>}
+
+      {/* Danh sách ĐÃ GỌI */}
+      {called.length > 0 && (
+        <>
+          <b style={{ fontSize: 12.5, color: 'var(--muted)', display: 'block', marginTop: 14 }}>Đã gọi ({called.length})</b>
+          {called.map((q) => (
+            <div className="speak-row" key={q.id} style={{ opacity: q.status === 'called' ? 1 : 0.85 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 12.8 }}>{users.get(q.userId)?.fullName}</div>
+                {q.targetName && <div style={{ fontSize: 11.5, color: 'var(--blue)' }}>→ {q.targetName}</div>}
+                <div style={{ fontSize: 11.5, color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{q.topic}</div>
+              </div>
+              <Badge color={QUESTION_STATUS[q.status].color}>{QUESTION_STATUS[q.status].label}</Badge>
+              <button className="icon-btn" title="Xem nội dung" onClick={() => setView(q)}><Icon name="eye" size={14} /></button>
+            </div>
+          ))}
+        </>
+      )}
+
+      {/* Modal đăng ký chất vấn */}
+      {open && (
+        <Modal title="Đăng ký chất vấn" onClose={() => setOpen(false)} width={460} footer={
+          <>
+            <button className="btn outline" onClick={() => setOpen(false)}>Hủy</button>
+            <button className="btn" onClick={submit} disabled={!form.topic.trim()}>Gửi đăng ký</button>
+          </>
+        }>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <label style={{ fontSize: 12.5, fontWeight: 600 }}>Người / đơn vị được chất vấn
+              <input className="inp" style={{ marginTop: 5 }} placeholder="VD: Sở Tài chính…" value={form.targetName}
+                onChange={(e) => setForm({ ...form, targetName: e.target.value })} />
+            </label>
+            <label style={{ fontSize: 12.5, fontWeight: 600 }}>Chủ đề chất vấn <span style={{ color: 'var(--red)' }}>*</span>
+              <input className="inp" style={{ marginTop: 5 }} placeholder="Nội dung ngắn gọn của câu hỏi chất vấn" value={form.topic}
+                onChange={(e) => setForm({ ...form, topic: e.target.value })} />
+            </label>
+            <label style={{ fontSize: 12.5, fontWeight: 600 }}>Nội dung chi tiết
+              <textarea className="inp" style={{ marginTop: 5, minHeight: 90, resize: 'vertical' }} placeholder="Diễn giải chi tiết (tùy chọn)" value={form.content}
+                onChange={(e) => setForm({ ...form, content: e.target.value })} />
+            </label>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal xem nội dung chất vấn */}
+      {view && (
+        <Modal title="Nội dung chất vấn" onClose={() => setView(null)} width={480}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13.5 }}>
+            <div><b>Người chất vấn:</b> {users.get(view.userId)?.fullName} — {users.get(view.userId)?.title}</div>
+            {view.targetName && <div><b>Được chất vấn:</b> {view.targetName}</div>}
+            <div><b>Chủ đề:</b> {view.topic}</div>
+            {view.content && <div style={{ whiteSpace: 'pre-wrap', background: 'var(--bg)', padding: 12, borderRadius: 8 }}>{view.content}</div>}
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+              Trạng thái: {QUESTION_STATUS[view.status].label} · Đăng ký {fmtTime(view.createdAt)}
+              {view.calledAt ? ` · Gọi ${fmtTime(view.calledAt)}` : ''}
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
