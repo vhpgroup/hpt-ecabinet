@@ -1,5 +1,5 @@
 # HỒ SƠ BÀN GIAO DỰ ÁN eCabinet (HPT TECH)
-*Cập nhật: 17/07/2026 23:35 (+07). Tài liệu này giúp bất kỳ AI agent / dev mới nắm toàn bộ dự án trong 5 phút.*
+*Cập nhật: 18/07/2026 01:15 (+07) — sau ca "hội đồng rà soát tổng + thực hiện" qua đêm (6 vai: TechLeader, BA, bên mời thầu giả định, chuyên gia phân tích hệ thống, FE/BE/DevOps dev, chuyên viên hồ sơ, Tester). Tài liệu này giúp bất kỳ AI agent / dev mới nắm toàn bộ dự án trong 5 phút.*
 
 ## 1. Dự án là gì
 Phần mềm **phòng họp không giấy** (tương đương VNPT eCabinet), xây để **dự thầu gói "Thuê phần mềm Họp không giấy tờ cho các xã, phường, đặc khu"** — Sở KH&CN TP Hải Phòng (thuê dịch vụ CNTT 60 tháng, chuẩn bị ≤3 tháng, 500 user/90 CCU, đặt tại Trung tâm dữ liệu TP, ATTT cấp độ 3).
@@ -33,17 +33,20 @@ React SPA (1 mã nguồn) ──► Web · PWA · Android · iOS (Capacitor — 
 
 Tài khoản demo (mật khẩu chung `123456`): `chutich` (chủ trì) · `thuky` · `quantri` (admin) · `qtdonvi` (quản trị đơn vị) · `sokhdt`/`soyt`/… (đại biểu). Họp video: đặt env `LIVEKIT_URL/API_KEY/API_SECRET` (LiveKit Cloud). Khóa Open API demo: `ecab_demo_qlvb_2026` (THU HỒI khi chạy thật).
 
-## 4. Trạng thái so với HSMT (thời điểm bàn giao)
-- **Chức năng (mục 3.4):** web **58/59** mục đáp ứng — còn duy nhất **ký số PKI thật (mục 30, đang mô phỏng)**. Mobile: đủ nghiệp vụ qua PWA/Capacitor; chờ làm rõ HSMT có bắt buộc app native trên store không.
-- **Nền tảng .NET + SQL Server (gap G1):** ĐÃ port xong, 72/72 test. Chưa test tích hợp trên MSSQL instance thật (chạy compose dotnet là kiểm được).
-- **Còn lại để thắng thầu (chưa làm):**
+## 4. Trạng thái so với HSMT (cập nhật 18/07/2026 — sau ca rà soát & thực hiện qua đêm)
+- **Chức năng (mục 3.4):** web **58/59** — còn duy nhất **ký số PKI thật (mục 30, đang mô phỏng; đã mở rộng ký mô phỏng cho cả Ý KIẾN VĂN BẢN đúng quy trình HSMT)**. Ma trận 97 mục kèm bằng chứng file/dòng: `docs/ra-soat/2026-07-18/ba-compliance-matrix.md`. Đêm 17→18/07 vá thêm: mục 8 (danh mục loại tài liệu CRUD) · 13 (phiếu nháp chưa gửi) · 21 (lọc đơn vị chủ trì) · 48/53/92/97 (thống kê ý kiến văn bản + xuất CSV) · 51 (sửa/xóa + đính kèm kết luận) · module **Phản hồi người dùng** (tiêu chí 5.1–5.4) · Cán bộ theo dõi phiếu ý kiến · loại đơn vị xã/phường/đặc khu · whitelist định dạng tệp TT 39/2017.
+- **Bảo mật đa đơn vị (multi-tenant) — vá lỗ hổng lớn nhất:** API nội bộ ĐÃ cô lập dữ liệu theo đơn vị (meetings/votes/feedbacks — trước đây user xã A thấy họp xã B); unit_admin tạo phiên họp + gửi giấy mời + xử lý phản hồi TRONG ĐƠN VỊ MÌNH; Thành viên dự họp duyệt tài liệu (đúng quy trình HSMT dòng 354–358). Test sau vá QA: **.NET 119/119 PASS** · **Node smoke 70/70 PASS** (`node server/test/smoke.mjs`).
+- **Nền tảng (nói trung thực):** .NET 8 ✅ · SQL Server 🟡 mã sẵn sàng nhưng CHƯA test trên instance MSSQL thật · Windows Server + IIS 🔴 mới có outline. Đã bổ sung: backup/restore MSSQL (`deploy/backup-mssql.sh`), diễn tập DR (`deploy/test-restore.sh` + `docs/dr-runbook.md`), TLS profile cho compose .NET, script loadtest 90 CCU (`scripts/loadtest.mjs` + `docs/loadtest.md`), IPv6 dual-stack nginx.
+- **Hồ sơ thầu:** bộ **12 tài liệu** tại `docs/ho-so/` (mục lục, cam kết bảo mật, cam kết SLA, kịch bản vận hành thử, quy trình quản trị vận hành 8 quy trình con, quy trình bảo trì, chuyển giao dữ liệu, nâng cấp theo quy định mới, giáo trình đào tạo, kế hoạch 12 tuần, văn bản làm rõ HSMT, khung HDSD) — CẦN pháp nhân điền placeholder [Họ tên/Chức vụ/Ngày] + ký. **Website công bố sản phẩm**: `website/index.html` (điều kiện dự thầu — cần đăng lên domain công khai).
+- **Tư liệu:** HSMT Chương V toàn văn `docs/hsmt-chuong-v.md` (trích từ DOCX gốc chủ dự án cấp 17/07). 9 báo cáo hội đồng rà soát: `docs/ra-soat/2026-07-18/` (đọc `tester-qa.md` trước — có danh sách lỗi P2 còn ghi nhận).
+- **Còn lại để thắng thầu (cần pháp nhân/bên ngoài, KHÔNG code được):**
   1. 🔴 **Ký số VGCA / VNPT SmartCA thật** — cần tài khoản/thiết bị CA (việc pháp nhân)
   2. 🔴 **Hồ sơ ATTT cấp độ 3** + pentest độc lập (6-8 tuần, cần đơn vị kiểm định)
   3. 🔴 **Chương I/III E-HSMT** (năng lực, kinh nghiệm, tiêu chuẩn đánh giá) — CHƯA đọc, quyết định bid/no-bid; cân nhắc liên danh
-  4. 🟠 Câu hỏi làm rõ gửi bên mời thầu (PWA vs native? chuẩn CA? đặc tả LGSP/IOC?)
-  5. 🟠 Đấu LGSP/IOC thật (đã có Open API + OpenAPI spec, chờ đặc tả TP)
-  6. 🟠 Website công bố sản phẩm (điều kiện dự thầu) · hồ sơ tài liệu (HDSD, kịch bản kiểm thử, quy trình vận hành, cam kết SLA, phương án chuyển giao dữ liệu)
-  7. 🟡 Hội đồng rà soát tổng (BA + Tester + chủ đầu tư giả định + FE/BE dev) — đã lên kế hoạch, chưa chạy
+  4. 🟠 **GỬI** văn bản làm rõ HSMT — đã soạn sẵn `docs/ho-so/10-van-ban-lam-ro-hsmt.md` (PWA vs native, chuẩn CA, LGSP XML/JSON, cấu hình 4 tầng Windows, số lượng xã/phường…)
+  5. 🟠 Đấu LGSP/IOC thật (chờ đặc tả TP) · test compose MSSQL instance thật · triển khai thử Windows/IIS · build app native lên store (cần máy có npm + Android Studio/Xcode)
+  6. 🟠 Đăng website công bố lên domain công khai · pháp nhân hoàn thiện + ký bộ `docs/ho-so/`
+  7. 🟡 Lỗi P2 ghi nhận làm sau (chi tiết `docs/ra-soat/2026-07-18/tester-qa.md`): quyền sửa kết luận lệch FE (id-match) vs BE (role-match); `signedCount` đếm trên dữ liệu đã ẩn danh; `server-dotnet` Program.cs bind IPv4-only.
 
 ## 5. Ghi chú cho AI agent tiếp quản (kinh nghiệm xương máu)
 - Sandbox chặn registry npm → build frontend bằng `scripts/build-cdn.mjs` (esbuild + deps tải sẵn `scripts/fetch-deps.mjs`). NuGet + dotnet SDK cài được (`dot.net/v1/dotnet-install.sh`).
@@ -52,6 +55,7 @@ Tài khoản demo (mật khẩu chung `123456`): `chutich` (chủ trì) · `thuk
 - 2 file PNG icon PWA không có trong repo (nhị phân) — sinh lại được, không chặn build.
 - Agent chạy nền (`run_in_background`) chết khi lượt kết thúc → việc dài chạy đồng bộ trong lượt.
 - Icon UI: nét mảnh = Lucide (nhúng tĩnh trong `components.tsx`); icon màu 3D = Fluent Emoji base64 (`emojiIcons.ts`, component `ColorIcon`).
+- Làm tính năng FE + BE song song bằng nhiều agent: CHỐT HỢP ĐỒNG FIELD trước khi phát lệnh (tên field/endpoint/mã lỗi — xem `docs/ra-soat/2026-07-18/dev-backend.md`), phân vùng file nghiêm ngặt cho từng agent, và LUÔN cho Tester đối chiếu chéo 2 phía trước khi commit — đêm 18/07 bước này bắt được 1 lỗi P0 (docType bị guard chặn) + 1 lỗi P1 (lệch quyền feedbacks) trước khi lên GitHub.
 
 ## 6. Prompt khởi động cho thread mới (dán nguyên văn)
 > Tôi đang tiếp tục dự án eCabinet — phần mềm phòng họp không giấy của HPT TECH để dự thầu gói "Thuê phần mềm Họp không giấy tờ cho các xã, phường, đặc khu" (Sở KH&CN TP Hải Phòng). Toàn bộ mã nguồn và ngữ cảnh ở repo GitHub vhpgroup/hpt-ecabinet. Hãy đọc kỹ `docs/HANDOVER.md`, `docs/phan-tich-hsmt-BA.md`, `docs/phan-tich-hsmt-TechLeader.md` và `README.md` trước, tóm tắt lại hiện trạng cho tôi, rồi đề xuất việc tiếp theo theo mục 4 của HANDOVER.
