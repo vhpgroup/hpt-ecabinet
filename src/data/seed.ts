@@ -4,6 +4,7 @@
 // để demo luôn có: 1 phiên đang diễn ra, phiên sắp tới, phiên đã kết thúc.
 // ============================================================
 import type { Snapshot } from '../domain/types';
+import { sha256Hex } from '../services/sha256';
 
 export function buildSeed(): Snapshot {
   // Ngày giờ tính TẠI THỜI ĐIỂM GỌI — server reset lúc nào cũng có dữ liệu "sống"
@@ -482,9 +483,29 @@ export function buildSeed(): Snapshot {
     },
   ] as Snapshot['guides'];
 
+  // ---------------- Khóa API bên thứ 3 (RỔ B — E-HSMT mục 54–59) ----------------
+  // 1 khóa demo cố định để thử nghiệm nhanh. keyHash tính SẴN bằng sha256 TS
+  // (esbuild bundle hàm sha256Hex vào seed.mjs -> server & client cùng 1 hash).
+  // CẢNH BÁO: key thô cố định -> CHỈ DÙNG DEMO, KHÔNG dùng môi trường thật.
+  const DEMO_API_KEY_RAW = 'ecab_demo_qlvb_2026';
+  const apiKeys = [
+    {
+      id: 'apk-demo-qlvb',
+      name: 'Hệ thống QLVB (demo)',
+      prefix: DEMO_API_KEY_RAW.slice(0, 8),
+      keyHash: sha256Hex(DEMO_API_KEY_RAW),
+      scopes: ['meetings', 'documents'],
+      active: true,
+      createdAt: iso(minAgo(60 * 24 * 10)),
+      createdById: 'u-admin',
+      callCount: 0,
+      note: 'CHỈ DÙNG DEMO — key thô cố định "ecab_demo_qlvb_2026". Tạo khóa mới khi triển khai thật.',
+    },
+  ] as Snapshot['apiKeys'];
+
   return {
     users, units, rooms, meetings, documents,
-    catalogs, guides,
+    catalogs, guides, apiKeys,
     annotations: [
       { id: 'an1', docId: 'd3', userId: 'u-ct', content: 'Lưu ý: cân nhắc tăng tỷ trọng cho y tế cơ sở theo kiến nghị Sở Y tế.', createdAt: iso(minAgo(7)) },
       { id: 'an2', docId: 'd1', userId: 'u-ct', content: 'Số liệu thu hút đầu tư tốt — biểu dương tại phần kết luận.', createdAt: iso(minAgo(20)) },

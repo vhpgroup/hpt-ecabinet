@@ -41,6 +41,7 @@ Hệ thống phòng họp không giấy đầy đủ chức năng theo mô hình
 - Quản lý **đơn vị**, **phòng họp** (thiết bị, sức chứa, **sơ đồ phòng họp** cấu hình được)
 - **Quản trị danh mục** (E-HSMT mục 6, 7, 10): danh mục **chức vụ / loại phiên họp / cơ quan ban hành** — CRUD, bật-tắt, sắp thứ tự; gắn thẳng vào nghiệp vụ (chức vụ người dùng, loại phiên họp trên lịch/danh sách, cơ quan ban hành trên tài liệu)
 - **Tài liệu hướng dẫn sử dụng** (E-HSMT mục 4): admin soạn nội dung/tải tệp, giới hạn theo vai trò; người dùng xem HDSD dành cho vai trò mình tại menu **Hướng dẫn sử dụng**
+- **API & Tích hợp** (E-HSMT mục 54–59): quản lý **khóa API** cấp cho hệ thống bên thứ 3, **danh mục mô tả API** (quản lý mô tả API) và hướng dẫn **đấu nối LGSP** — xem mục [10](#10-api-công-bố-cho-bên-thứ-3-lgsp-ready)
 - **Nhật ký hệ thống** (audit log) lưu vết mọi thao tác — lọc theo **tài khoản** + **khoảng thời gian**, admin **xóa nhật ký** (E-HSMT mục 3)
 - **Báo cáo thống kê**: số phiên họp theo tháng, tỷ lệ tham dự, lượt biểu quyết, nhiệm vụ, ước tính giấy/chi phí tiết kiệm
 
@@ -273,6 +274,55 @@ Truy cập bằng Chrome/Edge → biểu tượng **Cài đặt** trên thanh đ
 - **Chế độ máy chủ (GĐ2–GĐ4)**: dữ liệu tập trung PostgreSQL, JWT 1h + refresh token xoay vòng, phân quyền server-side + endpoint nghiệp vụ kiểm tra sâu + guard CRUD + rate-limit; **realtime WebSocket** (polling chỉ là dự phòng); tệp ≤ 15MB (base64 trong JSONB)
 - **Họp trực tuyến WebRTC (LiveKit)**: hoạt động thật khi đã cấu hình `LIVEKIT_*` + trình duyệt cho phép camera/micro (xem mục 6). Chưa cấu hình / bị chặn quyền → tự dùng giao diện mô phỏng.
 - Ký số/QR vẫn là mô phỏng ở cả hai chế độ (GĐ3)
+- **API công bố cho bên thứ 3**: hoạt động ở **chế độ máy chủ** (cần `VITE_API_URL`); chế độ demo trình duyệt chỉ minh họa quản lý khóa cục bộ, không phục vụ endpoint mở
+
+---
+
+## 10. API công bố cho bên thứ 3 (LGSP-ready)
+
+Bộ API REST chia sẻ **dữ liệu cuộc họp** cho các hệ thống khác của thành phố (E-HSMT mục **54–59**), sẵn sàng đấu nối **Nền tảng tích hợp và chia sẻ dữ liệu LGSP**. Quản trị tại menu **Quản trị hệ thống → API & Tích hợp** (3 tab: Khóa API · Danh mục API · Đấu nối LGSP). *Chỉ phục vụ ở chế độ máy chủ.*
+
+### Xác thực
+Mọi endpoint nghiệp vụ yêu cầu **khóa API** gửi qua header:
+
+```
+X-API-Key: ecab_xxxxxxxx...            # hoặc:  Authorization: ApiKey ecab_xxxx...
+```
+
+Khóa do admin cấp (endpoint `POST /api/apikeys/create`, key sinh **phía máy chủ**, chỉ hiện **1 lần** — hệ thống chỉ lưu **SHA-256**, không lưu key thô). Mỗi khóa có phạm vi (**scope**): `meetings` và/hoặc `documents`; có thể **thu hồi** tức thời. Rate-limit theo khóa (mặc định 120 lượt/phút — env `OPEN_RATE_MAX`). Phản hồi **JSON UTF-8**, thời gian **ISO 8601**, phân trang `?page=1&size=20` (tối đa 100/trang), CORS mở cho GET.
+
+### 6 endpoint (mục 54–59)
+
+| Mục | Method | Đường dẫn | Quyền | Mô tả |
+|---|---|---|---|---|
+| 54 | GET | `/api/open/v1/units/{unitId}/meetings/upcoming` | meetings | DS cuộc họp **đơn vị sắp diễn ra** |
+| 55 | GET | `/api/open/v1/users/{userId}/meetings/upcoming` | meetings | DS cuộc họp **cá nhân sắp diễn ra** |
+| 56 | GET | `/api/open/v1/units/{unitId}/meetings/past` | meetings | DS cuộc họp **đơn vị đã diễn ra** |
+| 57 | GET | `/api/open/v1/users/{userId}/meetings/past` | meetings | DS cuộc họp **cá nhân đã diễn ra** |
+| 58 | GET | `/api/open/v1/meetings/{id}` | meetings | **Thông tin cuộc họp** (meta + chương trình + thành phần + thống kê biểu quyết) |
+| 59 | GET | `/api/open/v1/meetings/{id}/documents` | documents | **DS tài liệu** đã duyệt & không mật (kèm `contentUrl`) |
+
+Phụ trợ: `GET /api/open/v1/documents/{id}/content` (tải nội dung tài liệu — scope `documents`); `GET /api/open/v1/spec` (**OpenAPI 3.0** tự sinh, công khai — đăng ký dịch vụ trên LGSP); `GET /api/open/v1/health` (thăm dò, cần khóa).
+
+> Mục 58 (58) còn gồm **"quản lý mô tả API"** — trang **Danh mục API** hiển thị mô tả/tham số từng endpoint + ví dụ curl + nút tải OpenAPI JSON.
+
+### Bảo mật dữ liệu
+API **KHÔNG** trả biên bản, kết luận chi tiết hay phiếu biểu quyết cá nhân; tài liệu chỉ gồm bản **đã duyệt** và **không mật**.
+
+### Ví dụ (curl)
+
+```bash
+curl -H "X-API-Key: ecab_demo_qlvb_2026" \
+  "https://<host>/api/open/v1/units/un-vp/meetings/upcoming?page=1&size=20"
+
+curl -H "X-API-Key: ecab_demo_qlvb_2026" \
+  "https://<host>/api/open/v1/meetings/m1/documents"
+
+# Đặc tả OpenAPI (không cần khóa):
+curl "https://<host>/api/open/v1/spec"
+```
+
+*(Khóa demo `ecab_demo_qlvb_2026` chỉ dùng thử — cấp khóa mới khi triển khai thật.)*
 
 ---
 

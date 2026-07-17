@@ -1,3 +1,143 @@
+// src/services/sha256.ts
+var K = [
+  1116352408,
+  1899447441,
+  3049323471,
+  3921009573,
+  961987163,
+  1508970993,
+  2453635748,
+  2870763221,
+  3624381080,
+  310598401,
+  607225278,
+  1426881987,
+  1925078388,
+  2162078206,
+  2614888103,
+  3248222580,
+  3835390401,
+  4022224774,
+  264347078,
+  604807628,
+  770255983,
+  1249150122,
+  1555081692,
+  1996064986,
+  2554220882,
+  2821834349,
+  2952996808,
+  3210313671,
+  3336571891,
+  3584528711,
+  113926993,
+  338241895,
+  666307205,
+  773529912,
+  1294757372,
+  1396182291,
+  1695183700,
+  1986661051,
+  2177026350,
+  2456956037,
+  2730485921,
+  2820302411,
+  3259730800,
+  3345764771,
+  3516065817,
+  3600352804,
+  4094571909,
+  275423344,
+  430227734,
+  506948616,
+  659060556,
+  883997877,
+  958139571,
+  1322822218,
+  1537002063,
+  1747873779,
+  1955562222,
+  2024104815,
+  2227730452,
+  2361852424,
+  2428436474,
+  2756734187,
+  3204031479,
+  3329325298
+];
+function utf8Bytes(str) {
+  if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(str);
+  const out = [];
+  for (let i = 0; i < str.length; i++) {
+    let c = str.charCodeAt(i);
+    if (c < 128) out.push(c);
+    else if (c < 2048) {
+      out.push(192 | c >> 6, 128 | c & 63);
+    } else if (c >= 55296 && c <= 56319) {
+      const c2 = str.charCodeAt(++i);
+      c = 65536 + ((c & 1023) << 10) + (c2 & 1023);
+      out.push(240 | c >> 18, 128 | c >> 12 & 63, 128 | c >> 6 & 63, 128 | c & 63);
+    } else {
+      out.push(224 | c >> 12, 128 | c >> 6 & 63, 128 | c & 63);
+    }
+  }
+  return new Uint8Array(out);
+}
+var rotr = (x, n) => x >>> n | x << 32 - n;
+function sha256Hex(input) {
+  const msg = utf8Bytes(input);
+  const bitLen = msg.length * 8;
+  const withOne = msg.length + 1;
+  const total = withOne + (56 - withOne % 64 + 64) % 64 + 8;
+  const buf = new Uint8Array(total);
+  buf.set(msg);
+  buf[msg.length] = 128;
+  const hi = Math.floor(bitLen / 4294967296);
+  const lo = bitLen >>> 0;
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(total - 8, hi, false);
+  dv.setUint32(total - 4, lo, false);
+  let h0 = 1779033703, h1 = 3144134277, h2 = 1013904242, h3 = 2773480762;
+  let h4 = 1359893119, h5 = 2600822924, h6 = 528734635, h7 = 1541459225;
+  const w = new Uint32Array(64);
+  for (let off = 0; off < total; off += 64) {
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, false);
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ w[i - 15] >>> 3;
+      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ w[i - 2] >>> 10;
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1 >>> 0;
+    }
+    let a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+    for (let i = 0; i < 64; i++) {
+      const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const ch = e & f ^ ~e & g;
+      const t1 = h + S1 + ch + K[i] + w[i] >>> 0;
+      const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const maj = a & b ^ a & c ^ b & c;
+      const t2 = S0 + maj >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = d + t1 >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = t1 + t2 >>> 0;
+    }
+    h0 = h0 + a >>> 0;
+    h1 = h1 + b >>> 0;
+    h2 = h2 + c >>> 0;
+    h3 = h3 + d >>> 0;
+    h4 = h4 + e >>> 0;
+    h5 = h5 + f >>> 0;
+    h6 = h6 + g >>> 0;
+    h7 = h7 + h >>> 0;
+  }
+  const toHex = (n) => (n >>> 0).toString(16).padStart(8, "0");
+  return toHex(h0) + toHex(h1) + toHex(h2) + toHex(h3) + toHex(h4) + toHex(h5) + toHex(h6) + toHex(h7);
+}
+
+// src/data/seed.ts
 function buildSeed() {
   const now = /* @__PURE__ */ new Date();
   const iso = (d) => d.toISOString();
@@ -699,6 +839,21 @@ Bi\xEAn b\u1EA3n \u0111\u01B0\u1EE3c l\u1EADp v\xE0 k\xFD s\u1ED1 tr\xEAn H\u1EC
       updatedAt: iso(minAgo(60 * 24 * 18))
     }
   ];
+  const DEMO_API_KEY_RAW = "ecab_demo_qlvb_2026";
+  const apiKeys = [
+    {
+      id: "apk-demo-qlvb",
+      name: "H\u1EC7 th\u1ED1ng QLVB (demo)",
+      prefix: DEMO_API_KEY_RAW.slice(0, 8),
+      keyHash: sha256Hex(DEMO_API_KEY_RAW),
+      scopes: ["meetings", "documents"],
+      active: true,
+      createdAt: iso(minAgo(60 * 24 * 10)),
+      createdById: "u-admin",
+      callCount: 0,
+      note: 'CH\u1EC8 D\xD9NG DEMO \u2014 key th\xF4 c\u1ED1 \u0111\u1ECBnh "ecab_demo_qlvb_2026". T\u1EA1o kh\xF3a m\u1EDBi khi tri\u1EC3n khai th\u1EADt.'
+    }
+  ];
   return {
     users,
     units,
@@ -707,6 +862,7 @@ Bi\xEAn b\u1EA3n \u0111\u01B0\u1EE3c l\u1EADp v\xE0 k\xFD s\u1ED1 tr\xEAn H\u1EC
     documents,
     catalogs,
     guides,
+    apiKeys,
     annotations: [
       { id: "an1", docId: "d3", userId: "u-ct", content: "L\u01B0u \xFD: c\xE2n nh\u1EAFc t\u0103ng t\u1EF7 tr\u1ECDng cho y t\u1EBF c\u01A1 s\u1EDF theo ki\u1EBFn ngh\u1ECB S\u1EDF Y t\u1EBF.", createdAt: iso(minAgo(7)) },
       { id: "an2", docId: "d1", userId: "u-ct", content: "S\u1ED1 li\u1EC7u thu h\xFAt \u0111\u1EA7u t\u01B0 t\u1ED1t \u2014 bi\u1EC3u d\u01B0\u01A1ng t\u1EA1i ph\u1EA7n k\u1EBFt lu\u1EADn.", createdAt: iso(minAgo(20)) },

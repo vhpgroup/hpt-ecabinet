@@ -22,6 +22,7 @@ import CatalogsAdminPage from './ui/pages/admin/CatalogsAdminPage';
 import GuidesAdminPage from './ui/pages/admin/GuidesAdminPage';
 import AuditLogPage from './ui/pages/admin/AuditLogPage';
 import ReportsPage from './ui/pages/admin/ReportsPage';
+import ApiAdminPage from './ui/pages/admin/ApiAdminPage';
 
 function Boot() {
   return <div className="boot"><div className="boot-logo">eC</div><p>Đang khởi động hệ thống…</p></div>;
@@ -82,6 +83,7 @@ export default function App() {
         <Route path="/admin/rooms" element={<RequireAdmin><RoomsAdminPage /></RequireAdmin>} />
         <Route path="/admin/catalogs" element={<RequireAdmin><CatalogsAdminPage /></RequireAdmin>} />
         <Route path="/admin/guides" element={<RequireAdmin><GuidesAdminPage /></RequireAdmin>} />
+        <Route path="/admin/api" element={<RequireAdmin><ApiAdminPage /></RequireAdmin>} />
         <Route path="/admin/audit" element={<RequireAdmin><AuditLogPage /></RequireAdmin>} />
         <Route path="/admin/reports" element={<RequireAdmin><ReportsPage /></RequireAdmin>} />
       </Route>

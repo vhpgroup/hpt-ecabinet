@@ -61,6 +61,7 @@ const COLLECTIONS = [
   'users', 'units', 'rooms', 'meetings', 'documents', 'annotations',
   'votes', 'speakRequests', 'questions', 'messages', 'tasks', 'notifications', 'audit',
   'catalogs', 'guides', // ĐỢT 3: danh mục chung + tài liệu HDSD
+  'apiKeys',            // RỔ B: khóa API bên thứ 3
 ] as const;
 
 function seedIfEmpty(force = false) {
@@ -90,6 +91,7 @@ export function createDataSource(): DataSource {
     audit: new LocalRepo('audit'),
     catalogs: new LocalRepo('catalogs'),
     guides: new LocalRepo('guides'),
+    apiKeys: new LocalRepo('apiKeys'),
     async reset() {
       seedIfEmpty(true);
     },

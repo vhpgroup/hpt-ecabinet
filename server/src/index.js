@@ -24,9 +24,11 @@ import { attachRealtime, broadcast, clientCount } from './ws.js';
 import { registerActions } from './actions.js';
 import { guardPatch, validatePatch } from './guard.js';
 import { filterList, readOne } from './access.js';
+import { ACL, MANAGE, allowed } from './acl.js';
 import { clientIp, hit } from './ratelimit.js';
 import { issueRefreshToken, revokeRefreshToken, rotateRefreshToken } from './sessions.js';
 import { mintLiveKitToken, rtcConfigured, rtcUrl } from './rtc.js';
+import { registerOpenApi } from './open.js';
 
 // GĐ4: rate-limit
 const RATE_MAX = Number(process.env.RATE_LIMIT_MAX ?? 300);            // yêu cầu / IP / cửa sổ
@@ -39,65 +41,13 @@ const notifyChange = (collection, action, id) =>
   broadcast({ type: 'change', collection, action, id, at: new Date().toISOString() });
 
 const PORT = Number(process.env.PORT ?? 3000);
-const MANAGE = ['admin', 'secretary', 'chairman'];
 
-// ---------------- Ma trận phân quyền theo bộ dữ liệu ----------------
-// 'any'            : mọi người dùng đã đăng nhập
-// [roles]          : vai trò trong danh sách
-// 'adminOrSelf'    : admin hoặc chính chủ (users)
-// 'ownerOrManage'  : chủ sở hữu bản ghi (ownerId) hoặc admin/thư ký/chủ trì
-// 'owner:<field>'  : bản ghi có <field> === user hiện tại
-// 'ownerOrManage:<field>' : bản ghi có <field> === user hiện tại HOẶC quản lý
-// 'self:<field>'   : dữ liệu gửi lên có <field> === user hiện tại
-// 'assigneeOrManage': người được giao (assigneeId) hoặc quản lý
-// 'none'           : cấm qua API chung
-const ACL = {
-  // Quản trị đơn vị (unit_admin) được tạo/sửa người dùng TRONG đơn vị mình.
-  // Kiểm tra sâu (cùng đơn vị, không đụng admin, không tự đổi unitId) nằm ở
-  // enforceUserWrite() — đọc unitId từ DB, KHÔNG tin body. Xóa vẫn CHỈ admin.
-  users:         { create: ['admin', 'unit_admin'], update: 'adminOrSelfOrUnitAdmin', remove: ['admin'] },
-  units:         { create: ['admin'], update: ['admin'], remove: ['admin'] },
-  rooms:         { create: ['admin'], update: ['admin'], remove: ['admin'] },
-  meetings:      { create: MANAGE, update: 'any', remove: MANAGE },
-  documents:     { create: 'any', update: 'ownerOrManage', remove: 'ownerOrManage' },
-  annotations:   { create: 'self:userId', update: 'owner:userId', remove: 'owner:userId' },
-  votes:         { create: MANAGE, update: 'any', remove: MANAGE },
-  speakRequests: { create: 'self:userId', update: 'any', remove: 'any' },
-  // Chất vấn: đại biểu tạo cho CHÍNH MÌNH; cập nhật 'any' nhưng guard siết
-  // (chỉ manage đổi trạng thái gọi/xong/từ chối, chính chủ chỉ sửa nội dung khi
-  // đang chờ); xóa = chính chủ (hủy đăng ký) HOẶC quản lý.
-  questions:     { create: 'self:userId', update: 'any', remove: 'ownerOrManage:userId' },
-  messages:      { create: 'self:fromId', update: 'none', remove: 'none' },
-  tasks:         { create: MANAGE, update: 'assigneeOrManage', remove: MANAGE },
-  notifications: { create: 'any', update: 'owner:userId', remove: 'owner:userId' },
-  // Nhật ký (E-HSMT mục 3): ai cũng ghi được (server tự ghi khi thao tác); KHÔNG sửa;
-  // GIỜ CHO admin XÓA (trước là 'none') để "Xóa nhật ký đăng nhập hệ thống".
-  audit:         { create: 'any', update: 'none', remove: ['admin'] },
-  // ĐỢT 3 — Danh mục chung (E-HSMT mục 6, 7, 10): đọc = mọi người đăng nhập;
-  // tạo/sửa/xóa CHỈ admin (Quản trị hệ thống quản trị danh mục).
-  catalogs:      { create: ['admin'], update: ['admin'], remove: ['admin'] },
-  // ĐỢT 3 — Tài liệu HDSD (E-HSMT mục 4): đọc = mọi người (access.js lọc theo roleScope);
-  // tạo/sửa/xóa CHỈ admin.
-  guides:        { create: ['admin'], update: ['admin'], remove: ['admin'] },
-};
+// Ma trận phân quyền (ACL) + hàm allowed() ĐÃ TÁCH sang server/src/acl.js
+// để kiểm thử mức hàm (index.js có side-effect khởi động server). Logic giữ nguyên.
 
 const sanitizeUser = (u) => { const { password, ...rest } = u ?? {}; return { ...rest, password: '' }; };
-
-function allowed(rule, req, existing, body) {
-  const { sub, role } = req.user;
-  if (rule === 'any') return true;
-  if (rule === 'none') return false;
-  if (Array.isArray(rule)) return rule.includes(role);
-  if (rule === 'adminOrSelf') return role === 'admin' || existing?.id === sub;
-  // Quản trị đơn vị: admin | chính chủ | unit_admin (phạm vi đơn vị kiểm sâu ở enforceUserWrite)
-  if (rule === 'adminOrSelfOrUnitAdmin') return role === 'admin' || existing?.id === sub || role === 'unit_admin';
-  if (rule === 'ownerOrManage') return MANAGE.includes(role) || existing?.ownerId === sub;
-  if (rule === 'assigneeOrManage') return MANAGE.includes(role) || existing?.assigneeId === sub;
-  if (rule.startsWith('ownerOrManage:')) return MANAGE.includes(role) || existing?.[rule.slice(14)] === sub;
-  if (rule.startsWith('owner:')) return existing?.[rule.slice(6)] === sub;
-  if (rule.startsWith('self:')) return body?.[rule.slice(5)] === sub;
-  return false;
-}
+// RỔ B: KHÔNG trả keyHash ra ngoài (kể cả cho admin UI) — chỉ cần prefix để nhận diện.
+const sanitizeApiKey = (k) => { const { keyHash, ...rest } = k ?? {}; return rest; };
 
 function tableOf(req, res) {
   const table = COLLECTIONS[req.params.collection];
@@ -279,6 +229,76 @@ app.add('POST', '/api/rtc/token', requireAuth, async (req, res) => {
   send(res, 200, { url: rtcUrl(), token, room, identity: req.user.sub });
 });
 
+// ---------------- Khóa API cho bên thứ 3 (RỔ B — E-HSMT mục 54–59) ----------------
+// Endpoint NGHIỆP VỤ tạo/thu hồi/kích hoạt khóa API. Key thô sinh SERVER-SIDE,
+// CHỈ trả về đúng 1 lần lúc tạo; DB chỉ lưu SHA-256 (keyHash) + prefix.
+// LƯU Ý thứ tự: đăng ký TRƯỚC CRUD chung /api/:collection để không bị bắt nhầm.
+const genApiKeyRaw = () => `ecab_${crypto.randomBytes(24).toString('base64url')}`;
+const sha256hex = (t) => crypto.createHash('sha256').update(String(t), 'utf8').digest('hex');
+
+app.add('POST', '/api/apikeys/create', requireAuth, requireAdmin, async (req, res) => {
+  const body = (await readBody(req)) ?? {};
+  const name = String(body.name ?? '').trim();
+  if (!name) return send(res, 400, { error: 'Vui lòng nhập tên hệ thống/đơn vị tích hợp' });
+  const scopes = Array.isArray(body.scopes) ? body.scopes.filter((s) => s === 'meetings' || s === 'documents') : [];
+  if (scopes.length === 0) return send(res, 400, { error: 'Chọn ít nhất một phạm vi (meetings / documents)' });
+
+  const raw = genApiKeyRaw();
+  const record = {
+    id: crypto.randomUUID(),
+    name,
+    prefix: raw.slice(0, 8),          // 8 ký tự đầu để nhận diện
+    keyHash: sha256hex(raw),          // TUYỆT ĐỐI không lưu key thô
+    scopes,
+    active: true,
+    createdAt: new Date().toISOString(),
+    createdById: req.user.sub,
+    callCount: 0,
+    note: typeof body.note === 'string' ? body.note.trim().slice(0, 1000) : undefined,
+  };
+  await query(`INSERT INTO c_apikeys (id, data) VALUES ($1, $2::jsonb)`, [record.id, JSON.stringify(record)]);
+  await query(`INSERT INTO c_audit (id, data) VALUES ($1, $2::jsonb)`, [
+    crypto.randomUUID(),
+    JSON.stringify({ id: crypto.randomUUID(), userId: req.user.sub, userName: req.user.name, action: 'Tạo khóa API', detail: `Cấp khóa API cho "${name}" (prefix ${record.prefix}…, scope ${scopes.join(', ')})`, at: new Date().toISOString() }),
+  ]);
+  notifyChange('apiKeys', 'create', record.id);
+  // Trả key THÔ đúng 1 lần + bản ghi (không kèm keyHash để tránh lộ thừa)
+  const { keyHash, ...safe } = record;
+  send(res, 201, { key: raw, record: safe });
+});
+
+app.add('POST', '/api/apikeys/:id/revoke', requireAuth, requireAdmin, async (req, res) => {
+  const data = await getExisting('c_apikeys', req.params.id);
+  if (!data) return send(res, 404, { error: 'Không tìm thấy khóa API' });
+  const next = { ...data, active: false };
+  await query(`UPDATE c_apikeys SET data = $2::jsonb, updated_at = now() WHERE id = $1`, [req.params.id, JSON.stringify(next)]);
+  await query(`INSERT INTO c_audit (id, data) VALUES ($1, $2::jsonb)`, [
+    crypto.randomUUID(),
+    JSON.stringify({ id: crypto.randomUUID(), userId: req.user.sub, userName: req.user.name, action: 'Thu hồi khóa API', detail: `Thu hồi khóa API "${data.name}" (prefix ${data.prefix}…)`, at: new Date().toISOString() }),
+  ]);
+  notifyChange('apiKeys', 'update', req.params.id);
+  const { keyHash, ...safe } = next;
+  send(res, 200, safe);
+});
+
+app.add('POST', '/api/apikeys/:id/enable', requireAuth, requireAdmin, async (req, res) => {
+  const data = await getExisting('c_apikeys', req.params.id);
+  if (!data) return send(res, 404, { error: 'Không tìm thấy khóa API' });
+  const next = { ...data, active: true };
+  await query(`UPDATE c_apikeys SET data = $2::jsonb, updated_at = now() WHERE id = $1`, [req.params.id, JSON.stringify(next)]);
+  await query(`INSERT INTO c_audit (id, data) VALUES ($1, $2::jsonb)`, [
+    crypto.randomUUID(),
+    JSON.stringify({ id: crypto.randomUUID(), userId: req.user.sub, userName: req.user.name, action: 'Kích hoạt khóa API', detail: `Kích hoạt lại khóa API "${data.name}" (prefix ${data.prefix}…)`, at: new Date().toISOString() }),
+  ]);
+  notifyChange('apiKeys', 'update', req.params.id);
+  const { keyHash, ...safe } = next;
+  send(res, 200, safe);
+});
+
+// ---------------- BỘ API CÔNG BỐ CHO BÊN THỨ 3 (mục 54–59) ----------------
+// Mount /api/open/v1/... TRƯỚC CRUD chung /api/:collection (router khớp theo thứ tự).
+registerOpenApi(app);
+
 // ---------------- Quản trị ----------------
 app.add('POST', '/api/admin/reset', requireAuth, requireAdmin, async (req, res) => {
   await seedIfEmpty(true);
@@ -296,6 +316,7 @@ app.add('GET', '/api/:collection', requireAuth, async (req, res) => {
   const r = await query(`SELECT data FROM ${table} ORDER BY updated_at ASC, id ASC`);
   let rows = r.rows.map((x) => x.data);
   if (col === 'users') rows = rows.map(sanitizeUser);
+  if (col === 'apiKeys') rows = rows.map(sanitizeApiKey); // RỔ B: ẩn keyHash
   // GĐ6 (P0-1): lọc quyền đọc theo bản ghi phía server
   rows = await filterList(col, rows, req.user);
   send(res, 200, rows);
@@ -309,7 +330,8 @@ app.add('GET', '/api/:collection/:id', requireAuth, async (req, res) => {
   const data = await getExisting(table, req.params.id);
   if (!data) return send(res, 404, { error: 'Không tìm thấy bản ghi' });
   // GĐ6 (P0-1): kiểm quyền đọc; không có quyền -> 404 để không lộ tồn tại
-  const readable = await readOne(col, col === 'users' ? sanitizeUser(data) : data, req.user);
+  const projected = col === 'users' ? sanitizeUser(data) : col === 'apiKeys' ? sanitizeApiKey(data) : data;
+  const readable = await readOne(col, projected, req.user);
   if (!readable) return send(res, 404, { error: 'Không tìm thấy bản ghi' });
   send(res, 200, readable);
 });
@@ -391,7 +413,7 @@ app.add('PATCH', '/api/:collection/:id', requireAuth, async (req, res) => {
   const merged = { ...existing, ...patch };
   await query(`UPDATE ${table} SET data = $2::jsonb, updated_at = now() WHERE id = $1`, [req.params.id, JSON.stringify(merged)]);
   notifyChange(col, 'update', req.params.id);
-  send(res, 200, merged);
+  send(res, 200, col === 'apiKeys' ? sanitizeApiKey(merged) : merged); // RỔ B: ẩn keyHash
 });
 
 app.add('DELETE', '/api/:collection/:id', requireAuth, async (req, res) => {

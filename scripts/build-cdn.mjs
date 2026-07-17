@@ -23,7 +23,9 @@ if (!existsSync(BIN)) {
 }
 
 // 2) Đồng bộ seed dùng chung cho server (1 nguồn dữ liệu mẫu duy nhất)
-execFileSync(BIN, ['src/data/seed.ts', '--format=esm', '--outfile=server/src/seed.mjs', '--log-level=warning'], { stdio: 'inherit' });
+//    --bundle: gộp mọi phụ thuộc runtime của seed.ts vào 1 tệp (vd sha256Hex dùng
+//    tính sẵn keyHash khóa API demu) -> seed.mjs TỰ CHỨA, không import ngoài server/.
+execFileSync(BIN, ['src/data/seed.ts', '--bundle', '--format=esm', '--outfile=server/src/seed.mjs', '--log-level=warning'], { stdio: 'inherit' });
 console.log('✔ Đồng bộ server/src/seed.mjs');
 
 // 3) Bundle ứng dụng (đặt VITE_API_URL=/api để build bản chạy với máy chủ)

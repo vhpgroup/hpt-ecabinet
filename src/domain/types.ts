@@ -387,6 +387,43 @@ export interface AuditEntry {
   at: string;
 }
 
+// ---------------- Khóa API cho bên thứ 3 (E-HSMT mục 54–59) ----------------
+/**
+ * Quyền (scope) của khóa API mở:
+ * - 'meetings'  : gọi được các API danh sách/thông tin cuộc họp (mục 54–58).
+ * - 'documents' : gọi được API danh sách + nội dung tài liệu cuộc họp (mục 59).
+ */
+export type ApiScope = 'meetings' | 'documents';
+
+/**
+ * Khóa API cấp cho hệ thống bên thứ 3 (vd Hệ thống QLVB) đấu nối qua LGSP.
+ * BẢO MẬT: KHÔNG bao giờ lưu key thô — chỉ lưu SHA-256 (keyHash) + 8 ký tự đầu
+ * (prefix) để nhận diện. Key thô CHỈ hiển thị đúng 1 lần lúc tạo.
+ * OPTIONAL các trường phụ để tương thích ngược + round-trip JSONB/localStorage.
+ */
+export interface ApiKey {
+  id: string;
+  /** Tên hệ thống / đơn vị tích hợp (vd "Hệ thống QLVB tỉnh") */
+  name: string;
+  /** 8 ký tự đầu của key thô — chỉ để nhận diện, KHÔNG đủ để xác thực */
+  prefix: string;
+  /** SHA-256 hex của key thô — dùng đối chiếu khi xác thực (không lưu key gốc) */
+  keyHash: string;
+  /** Phạm vi quyền của khóa */
+  scopes: ApiScope[];
+  /** Còn hiệu lực không (thu hồi = false) */
+  active: boolean;
+  createdAt: string;
+  /** Người tạo (id người dùng) */
+  createdById?: string;
+  /** Lần gọi API gần nhất (ISO) — server cập nhật fire-and-forget */
+  lastUsedAt?: string;
+  /** Tổng số lượt gọi đã ghi nhận */
+  callCount?: number;
+  /** Ghi chú (vd môi trường sử dụng, đầu mối liên hệ) */
+  note?: string;
+}
+
 // Gói dữ liệu tổng (dùng cho snapshot state & seed)
 export interface Snapshot {
   users: User[];
@@ -405,6 +442,8 @@ export interface Snapshot {
   // ĐỢT 3 — OPTIONAL trong tương thích ngược nhưng luôn có ở snapshot mới:
   catalogs: CatalogItem[];   // danh mục chức vụ / loại phiên họp / cơ quan ban hành
   guides: GuideDoc[];        // tài liệu hướng dẫn sử dụng
+  // RỔ B — Khóa API cấp cho bên thứ 3 (E-HSMT mục 54–59)
+  apiKeys: ApiKey[];
 }
 
 export const uid = (): string =>

@@ -19,6 +19,7 @@ const SENSITIVE = new Set([
   'meetings', 'tasks', 'speakRequests', // GĐ8 (vá P0): chống rò biên bản/kết luận & dữ liệu ngoài phiên
   'questions', // chất vấn: chỉ thành phần phiên họp (hoặc quản lý) mới đọc được
   'guides',    // ĐỢT 3: tài liệu HDSD lọc theo roleScope (vai trò người đọc)
+  'apiKeys',   // RỔ B: khóa API — CHỈ admin đọc (chứa keyHash nhạy cảm)
 ]);
 
 export const needsAccessFilter = (collection) => SENSITIVE.has(collection);
@@ -131,6 +132,11 @@ export function canReadGuide(g, user) {
   return g.roleScope.includes(user.role);
 }
 
+/** RỔ B: khóa API — CHỈ Quản trị hệ thống đọc được (chứa dữ liệu nhạy cảm). */
+export function canReadApiKey(user) {
+  return user.role === 'admin';
+}
+
 // ---------------- Bộ lọc chung ----------------
 
 /** Lọc danh sách theo quyền đọc (async vì cần ctx). Trả về mảng đã lọc/chiếu. */
@@ -170,6 +176,9 @@ function applyFilter(collection, rows, user, ctx) {
       return rows.filter((q) => canReadQuestion(q, user, ctx));
     case 'guides':
       return rows.filter((g) => canReadGuide(g, user));
+    case 'apiKeys':
+      // RỔ B: khóa API chỉ dành cho Quản trị hệ thống. Người khác nhận [].
+      return canReadApiKey(user) ? rows : [];
     default:
       return rows;
   }

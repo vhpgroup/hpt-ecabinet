@@ -39,6 +39,8 @@ const SCHEMA = {
   catalogs: { type: 'string', name: 'string', description: 'string', order: 'number', active: 'boolean' },
   // ĐỢT 3 — Tài liệu HDSD (E-HSMT mục 4)
   guides: { title: 'string', content: 'string', fileName: 'string', fileData: 'string', roleScope: 'array', updatedAt: 'string' },
+  // RỔ B — Khóa API bên thứ 3 (E-HSMT mục 54–59). keyHash/prefix bất biến (guard chặn sửa).
+  apiKeys: { name: 'string', prefix: 'string', keyHash: 'string', scopes: 'array', active: 'boolean', createdAt: 'string', createdById: 'string', lastUsedAt: 'string', callCount: 'number', note: 'string' },
 };
 
 // Vai trò hợp lệ + trạng thái duyệt tài liệu hợp lệ (chống ghi giá trị rác vào enum)
@@ -173,6 +175,12 @@ export function validatePatch(col, body) {
       throw httpError(400, 'Phạm vi vai trò của tài liệu hướng dẫn không hợp lệ');
     }
   }
+  // RỔ B — Khóa API: scopes chỉ nhận 'meetings' | 'documents'
+  if (col === 'apiKeys' && body.scopes !== undefined) {
+    if (!Array.isArray(body.scopes) || body.scopes.some((s) => s !== 'meetings' && s !== 'documents')) {
+      throw httpError(400, 'Phạm vi (scope) của khóa API không hợp lệ (chỉ meetings / documents)');
+    }
+  }
 }
 
 /**
@@ -183,7 +191,25 @@ export function guardPatch(col, existing, patch, user) {
   if (col === 'meetings') return guardMeetings(existing, patch, user);
   if (col === 'questions') return guardQuestions(existing, patch, user);
   if (col === 'documents') return guardDocuments(existing, patch, user);
+  if (col === 'apiKeys') return guardApiKeys(patch);
   return patch;
+}
+
+/**
+ * KHÓA API — danh tính khóa BẤT BIẾN: không cho sửa keyHash/prefix qua PATCH.
+ * (Key thô sinh server-side lúc tạo; đổi hash/prefix sẽ làm sai lệch xác thực.)
+ * Cũng chặn tự đặt lastUsedAt/callCount (server ghi nhận, không tin client).
+ * Cho phép: name, scopes, active, note.
+ */
+function guardApiKeys(patch) {
+  const p = { ...patch };
+  delete p.keyHash;
+  delete p.prefix;
+  delete p.createdAt;
+  delete p.createdById;
+  delete p.lastUsedAt;
+  delete p.callCount;
+  return p;
 }
 
 /**

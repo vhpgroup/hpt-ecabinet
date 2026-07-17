@@ -155,9 +155,24 @@ export function createRestDataSource(baseUrl: string): DataSource {
     audit: new RestRepo('audit'),
     catalogs: new RestRepo('catalogs'), // ĐỢT 3: danh mục chung
     guides: new RestRepo('guides'),     // ĐỢT 3: tài liệu HDSD
+    apiKeys: new RestRepo('apiKeys'),   // RỔ B: khóa API bên thứ 3
 
     async reset() {
       await call('POST', '/admin/reset', {});
+    },
+
+    /**
+     * RỔ B: endpoint nghiệp vụ khóa API (/api/apikeys/...). Key thô sinh SERVER-SIDE.
+     * Chỉ có ở REST adapter; demo cục bộ sinh key phía client (apiKeyService).
+     */
+    apiKeyCreate(body: { name: string; scopes: string[]; note?: string }) {
+      return call<{ key: string; record: unknown }>('POST', '/apikeys/create', body);
+    },
+    apiKeyRevoke(id: string) {
+      return call('POST', `/apikeys/${encodeURIComponent(id)}/revoke`, {});
+    },
+    apiKeyEnable(id: string) {
+      return call('POST', `/apikeys/${encodeURIComponent(id)}/enable`, {});
     },
 
     /** GĐ4: gọi endpoint nghiệp vụ /api/actions/... — server kiểm tra sâu */

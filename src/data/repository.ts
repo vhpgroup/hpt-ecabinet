@@ -6,7 +6,7 @@
 // services & UI giữ nguyên.
 // ============================================================
 import type {
-  Annotation, AuditEntry, CatalogItem, ChatMessage, DocFile, GuideDoc, Meeting, Notification,
+  Annotation, ApiKey, AuditEntry, CatalogItem, ChatMessage, DocFile, GuideDoc, Meeting, Notification,
   QuestionRequest, Room, SpeakRequest, TaskItem, Unit, User, Vote,
 } from '../domain/types';
 
@@ -43,6 +43,14 @@ export interface DataSource {
    */
   rtcConfig?(): Promise<{ enabled: boolean }>;
   rtcToken?(meetingId: string): Promise<{ url: string; token: string; room?: string; identity?: string }>;
+  /**
+   * RỔ B — Khóa API bên thứ 3 (E-HSMT mục 54–59). CHỈ có ở REST adapter:
+   * key thô sinh SERVER-SIDE, trả về đúng 1 lần lúc tạo. Demo cục bộ (localStorage)
+   * KHÔNG có các hàm này -> apiKeyService tự sinh key + sha256 phía client.
+   */
+  apiKeyCreate?(body: { name: string; scopes: string[]; note?: string }): Promise<{ key: string; record: unknown }>;
+  apiKeyRevoke?(id: string): Promise<unknown>;
+  apiKeyEnable?(id: string): Promise<unknown>;
   users: Repo<User>;
   units: Repo<Unit>;
   rooms: Repo<Room>;
@@ -58,6 +66,7 @@ export interface DataSource {
   audit: Repo<AuditEntry>;
   catalogs: Repo<CatalogItem>; // danh mục chung (E-HSMT mục 6, 7, 10)
   guides: Repo<GuideDoc>;      // tài liệu hướng dẫn sử dụng (E-HSMT mục 4)
+  apiKeys: Repo<ApiKey>;       // khóa API bên thứ 3 (E-HSMT mục 54–59)
   /** Xóa toàn bộ và nạp lại dữ liệu mẫu */
   reset(): Promise<void>;
   /** Khóa/giá trị phiên đăng nhập (giai đoạn 2: token JWT) */

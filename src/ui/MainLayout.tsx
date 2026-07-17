@@ -83,6 +83,7 @@ export default function MainLayout() {
               <NavLink to="/admin/rooms" className={linkCls}><Icon name="room" />Phòng họp</NavLink>
               <NavLink to="/admin/catalogs" className={linkCls}><Icon name="tag" />Danh mục</NavLink>
               <NavLink to="/admin/guides" className={linkCls}><Icon name="book" />Tài liệu HDSD</NavLink>
+              <NavLink to="/admin/api" className={linkCls}><Icon name="share" />API & Tích hợp</NavLink>
               <NavLink to="/admin/audit" className={linkCls}><Icon name="list" />Nhật ký hệ thống</NavLink>
               <NavLink to="/admin/reports" className={linkCls}><Icon name="chart" />Báo cáo thống kê</NavLink>
             </>
