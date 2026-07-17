@@ -22,6 +22,27 @@ const MANAGE = ['admin', 'secretary', 'chairman'];
 const nowIso = () => new Date().toISOString();
 const sha256 = (t) => crypto.createHash('sha256').update(t, 'utf8').digest('hex');
 
+// P0-4 — Mã PIN ký số ý kiến văn bản (ballot): CHUỖI ĐÚNG 6 CHỮ SỐ (giống PIN ký biên
+// bản họp, nhưng field riêng `signPin` — tách biệt 2 nghiệp vụ ký số theo đúng HSMT).
+// EXPORT để test (Node smoke) khẳng định đúng định dạng mà không cần mở HTTP.
+export const SIGN_PIN_RE = /^\d{6}$/;
+
+/**
+ * P0-4 — Tính CHỮ KÝ MÔ PHỎNG gắn vào 1 ballot (ý kiến văn bản), tách khỏi route handler
+ * để THUẦN/TEST ĐƯỢC không cần HTTP (Node smoke test import trực tiếp hàm này).
+ * hash = SHA-256(voteId|userId|optionId|comment) TÍNH TẠI SERVER (không tin client).
+ * serialNumber sinh ngẫu nhiên theo CÙNG khuôn dạng chữ ký biên bản họp hiện có
+ * (VN-DEMO-CA:<4 số>:<6 hex>) — mô phỏng, GĐ sau gọi CA thật (VNPT SmartCA/VGCA).
+ */
+export function buildBallotSignature({ voteId, userId, optionId, comment, signerName }) {
+  return {
+    signedAt: nowIso(),
+    serialNumber: `VN-DEMO-CA:${Math.floor(1000 + Math.random() * 9000)}:${crypto.randomBytes(3).toString('hex')}`,
+    hash: sha256(`${voteId}|${userId}|${optionId}|${comment ?? ''}`),
+    signerName,
+  };
+}
+
 // ---------- helpers ----------
 async function getDoc(table, id) {
   const r = await query(`SELECT data FROM ${table} WHERE id = $1`, [id]);
@@ -55,16 +76,32 @@ export function registerActions(app) {
   // ---------------- BỎ PHIẾU / CHO Ý KIẾN ----------------
   // GĐ8 (vá P0): ghi phiếu NGUYÊN TỬ bằng mutateDoc (CAS) — chống mất phiếu khi
   // nhiều đại biểu bỏ phiếu ĐỒNG THỜI (trước đây read-modify-write ghi đè nhau).
+  // P0-4: nhận thêm optional `signPin` (6 số) — nếu có, gắn chữ ký mô phỏng vào ballot.
+  // P1-5: phiếu ở trạng thái 'draft' (chưa mở) -> thông điệp RIÊNG "Phiếu chưa mở".
   app.add('POST', '/api/actions/vote/:id/ballot', requireAuth, async (req, res) => {
     const body = (await readBody(req)) ?? {};
     const userId = req.user.sub;
+    // Kiểm định dạng PIN NGAY (nếu có) — lỗi hình thức đầu vào, kiểm trước khi đụng DB.
+    if (body.signPin !== undefined && !SIGN_PIN_RE.test(String(body.signPin))) {
+      return send(res, 400, { error: 'Mã PIN ký số ý kiến phải gồm 6 chữ số' });
+    }
+    // signerName cần tra hồ sơ user — DB call PHẢI ở NGOÀI mutate() (mutate phải thuần/sync).
+    const signer = body.signPin !== undefined ? await getDoc('c_users', userId) : null;
     const result = await mutateDoc('c_votes', req.params.id, (v) => {
+      if (v.status === 'draft') return { __error: 'Phiếu chưa mở', __status: 400 };
       if (v.status !== 'open') return { __error: 'Nội dung này chưa mở hoặc đã đóng biểu quyết', __status: 400 };
       if (!v.eligibleIds.includes(userId)) return { __error: 'Bạn không thuộc thành phần biểu quyết', __status: 403 };
       if (v.ballots.some((b) => b.userId === userId)) return { __error: 'Bạn đã biểu quyết nội dung này', __status: 400 };
       if (!v.options.some((o) => o.id === body.optionId)) return { __error: 'Phương án biểu quyết không hợp lệ', __status: 400 };
       const comment = typeof body.comment === 'string' && body.comment.trim() ? body.comment.trim().slice(0, 2000) : undefined;
-      v.ballots.push({ userId, optionId: body.optionId, comment, castAt: nowIso() });
+      const ballot = { userId, optionId: body.optionId, comment, castAt: nowIso() };
+      if (body.signPin !== undefined) {
+        ballot.signature = buildBallotSignature({
+          voteId: v.id, userId, optionId: body.optionId, comment,
+          signerName: signer?.fullName ?? req.user.name,
+        });
+      }
+      v.ballots.push(ballot);
       return v;
     });
     if (!result.ok) {
@@ -76,13 +113,16 @@ export function registerActions(app) {
   });
 
   // ---------------- MỞ / ĐÓNG BIỂU QUYẾT ----------------
+  // P1-5: cho phép mở từ 'draft' (nháp, mới) HOẶC 'pending' (đã có, chưa mở) -> 'open'.
   app.add('POST', '/api/actions/vote/:id/open', requireAuth, async (req, res) => {
     const vote = await getDoc('c_votes', req.params.id);
     if (!vote) return send(res, 404, { error: 'Không tìm thấy nội dung biểu quyết' });
     if (!MANAGE.includes(req.user.role) && vote.createdBy !== req.user.sub) {
       return send(res, 403, { error: 'Bạn không có quyền mở biểu quyết này' });
     }
-    if (vote.status !== 'pending') return send(res, 400, { error: 'Chỉ mở được nội dung chưa biểu quyết' });
+    if (!['draft', 'pending'].includes(vote.status)) {
+      return send(res, 400, { error: 'Chỉ mở được nội dung chưa biểu quyết' });
+    }
     vote.status = 'open';
     vote.openedAt = nowIso();
     await saveDoc('c_votes', vote.id, vote);
@@ -143,10 +183,17 @@ export function registerActions(app) {
   });
 
   // ---------------- GỬI GIẤY MỜI ----------------
+  // P0-2: mở thêm cho unit_admin, NHƯNG chỉ với phiên THUỘC ĐƠN VỊ MÌNH (chủ trì của phiên
+  // cùng đơn vị với unit_admin — cùng khái niệm "đơn vị của phiên" dùng khi tạo phiên).
   app.add('POST', '/api/actions/meetings/:id/invite', requireAuth, async (req, res) => {
     const m = await getDoc('c_meetings', req.params.id);
     if (!m) return send(res, 404, { error: 'Không tìm thấy phiên họp' });
-    if (!MANAGE.includes(req.user.role)) return send(res, 403, { error: 'Bạn không có quyền gửi giấy mời' });
+    let allowed = MANAGE.includes(req.user.role);
+    if (!allowed && req.user.role === 'unit_admin') {
+      const [self, chair] = await Promise.all([getDoc('c_users', req.user.sub), getDoc('c_users', m.chairId)]);
+      allowed = !!self?.unitId && self.unitId === chair?.unitId;
+    }
+    if (!allowed) return send(res, 403, { error: 'Bạn không có quyền gửi giấy mời' });
     if (!['draft', 'invited'].includes(m.status)) return send(res, 400, { error: 'Phiên họp không ở trạng thái gửi được giấy mời' });
     m.status = 'invited';
     m.invitedAt = nowIso();

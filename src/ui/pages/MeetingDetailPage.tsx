@@ -4,7 +4,7 @@
 // ============================================================
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import type { DocFile, Meeting, User, Vote } from '../../domain/types';
+import type { Conclusion, DocFile, Meeting, User, Vote } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
 import { Avatar, Badge, EmptyState, Field, Icon, Modal, PageHeader, ProgressBar, QRSvg, SeatGrid, VoteOutcomePanel, VoteResultBars, defaultLayout, seatKey } from '../components';
 import { ATTEND_STATUS, DOC_REVIEW, MEETING_ROLE, MEETING_STATUS, TASK_STATUS } from '../../domain/labels';
@@ -443,6 +443,7 @@ function DocsTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
 function UploadModal({ m, onClose, onDone }: { m: Meeting; onClose: () => void; onDone: () => void }) {
   const { user, s } = useApp();
   const issuingBodies = catalogService.catalogNames(s.catalogs, 'issuingBody');
+  const docTypes = catalogService.catalogsByType(s.catalogs, 'docType', true);
   const [kind, setKind] = useState<'main' | 'reference'>('main');
   const [agendaItemId, setAgendaItemId] = useState(m.agenda[0]?.id ?? '');
   const [mode, setMode] = useState<'file' | 'text'>('file');
@@ -451,25 +452,33 @@ function UploadModal({ m, onClose, onDone }: { m: Meeting; onClose: () => void; 
   const [file, setFile] = useState<File | null>(null);
   const [secret, setSecret] = useState(false);
   const [issuingBody, setIssuingBody] = useState('');
+  const [docTypeId, setDocTypeId] = useState('');
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false); // HSMT dòng 534: thao tác >10s (tải tệp lớn) cần hiện đang xử lý
 
   const submit = async () => {
     if (!user) return;
     setErr('');
+    setBusy(true);
     try {
       let doc: DocFile;
-      const opts = { meetingId: m.id, agendaItemId: kind === 'main' ? agendaItemId : null, secret, issuingBody: issuingBody.trim() || undefined };
+      const opts = {
+        meetingId: m.id, agendaItemId: kind === 'main' ? agendaItemId : null, secret,
+        issuingBody: issuingBody.trim() || undefined, docTypeId: docTypeId || undefined,
+      };
       if (mode === 'file') {
-        if (!file) return setErr('Chọn tệp cần tải lên');
+        if (!file) { setErr('Chọn tệp cần tải lên'); return; }
         doc = await documentService.addFileDocument(user, file, kind, opts);
       } else {
-        if (!name.trim() || !content.trim()) return setErr('Nhập tên và nội dung tài liệu');
+        if (!name.trim() || !content.trim()) { setErr('Nhập tên và nội dung tài liệu'); return; }
         doc = await documentService.addTextDocument(user, name.trim(), content, kind, opts);
       }
       if (kind === 'main' && agendaItemId) await documentService.attachToAgenda(user, doc.id, m.id, agendaItemId);
       onDone();
     } catch (ex) {
       setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -477,8 +486,10 @@ function UploadModal({ m, onClose, onDone }: { m: Meeting; onClose: () => void; 
     <Modal title="Thêm tài liệu phiên họp" onClose={onClose}
       footer={<>
         {err && <span style={{ color: 'var(--red)', fontSize: 13, marginRight: 'auto' }}>{err}</span>}
-        <button className="btn outline" onClick={onClose}>Hủy</button>
-        <button className="btn" onClick={submit}>Thêm tài liệu</button>
+        <button className="btn outline" onClick={onClose} disabled={busy}>Hủy</button>
+        <button className="btn" onClick={submit} disabled={busy}>
+          {busy ? <><Icon name="refresh" size={14} />Đang tải lên…</> : 'Thêm tài liệu'}
+        </button>
       </>}>
       <div className="form-row">
         <Field label="Loại tài liệu">
@@ -509,17 +520,25 @@ function UploadModal({ m, onClose, onDone }: { m: Meeting; onClose: () => void; 
           <Field label="Nội dung"><textarea className="ta" style={{ minHeight: 140 }} value={content} onChange={(e) => setContent(e.target.value)} /></Field>
         </>
       )}
-      <Field label="Cơ quan ban hành">
-        {issuingBodies.length > 0 ? (
-          <select className="sel" value={issuingBody} onChange={(e) => setIssuingBody(e.target.value)}>
-            <option value="">— Không xác định —</option>
-            {issuingBody && !issuingBodies.includes(issuingBody) && <option value={issuingBody}>{issuingBody}</option>}
-            {issuingBodies.map((b) => <option key={b} value={b}>{b}</option>)}
+      <div className="form-row">
+        <Field label="Cơ quan ban hành">
+          {issuingBodies.length > 0 ? (
+            <select className="sel" value={issuingBody} onChange={(e) => setIssuingBody(e.target.value)}>
+              <option value="">— Không xác định —</option>
+              {issuingBody && !issuingBodies.includes(issuingBody) && <option value={issuingBody}>{issuingBody}</option>}
+              {issuingBodies.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          ) : (
+            <input className="inp" placeholder="Nhập cơ quan ban hành (danh mục trống)" value={issuingBody} onChange={(e) => setIssuingBody(e.target.value)} />
+          )}
+        </Field>
+        <Field label="Loại tài liệu (E-HSMT mục 8)">
+          <select className="sel" value={docTypeId} onChange={(e) => setDocTypeId(e.target.value)}>
+            <option value="">— Chưa phân loại —</option>
+            {docTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
-        ) : (
-          <input className="inp" placeholder="Nhập cơ quan ban hành (danh mục trống)" value={issuingBody} onChange={(e) => setIssuingBody(e.target.value)} />
-        )}
-      </Field>
+        </Field>
+      </div>
       <label className="checkline"><input type="checkbox" checked={secret} onChange={(e) => setSecret(e.target.checked)} />Tài liệu mật (chỉ đại biểu phiên họp)</label>
     </Modal>
   );
@@ -763,12 +782,17 @@ function MinutesTab({ m, votes }: { m: Meeting; votes: Vote[] }) {
   const { user, s, refresh, toast } = useApp();
   const [conclusion, setConclusion] = useState('');
   const [conclusionAgenda, setConclusionAgenda] = useState('');
+  const [conclusionDocIds, setConclusionDocIds] = useState<string[]>([]);
   const [minText, setMinText] = useState(m.minutes?.content ?? '');
   const [signOpen, setSignOpen] = useState(false);
+  const [editingConclusion, setEditingConclusion] = useState<Conclusion | null>(null);
   const chairCtl = can.chairControls(user, m.chairId, m.secretaryId);
   const canSign = can.signMinutes(user, m.chairId, m.secretaryId);
   const users = indexBy(s.users);
+  const docById = indexBy(s.documents);
   const alreadySigned = m.minutes?.signatures.some((x) => x.signerId === user?.id);
+  // tài liệu chọn được để đính kèm kết luận: tài liệu của phiên họp này + tài liệu dùng chung
+  const attachableDocs = s.documents.filter((d) => d.meetingId === m.id || (d.kind !== 'personal' && !d.meetingId));
 
   const act = async (fn: () => Promise<unknown>, msg?: string) => {
     try { await fn(); await refresh(); if (msg) toast(msg); }
@@ -809,9 +833,35 @@ function MinutesTab({ m, votes }: { m: Meeting; votes: Vote[] }) {
         <h3 className="card-title"><Icon name="check" size={16} />Kết luận của chủ tọa ({m.conclusions.length})</h3>
         {m.conclusions.map((c, i) => (
           <div key={c.id} style={{ borderLeft: '3px solid var(--primary)', background: '#f4f8fd', borderRadius: '0 9px 9px 0', padding: '9px 13px', marginBottom: 9 }}>
-            <b style={{ fontSize: 12, color: 'var(--primary)' }}>Kết luận {i + 1}{c.agendaItemId ? ` · Mục ${m.agenda.find((a) => a.id === c.agendaItemId)?.order ?? ''}` : ''}</b>
-            <p style={{ fontSize: 13.5 }}>{c.content}</p>
-            <small style={{ color: 'var(--muted)', fontSize: 11.5 }}>{timeAgo(c.createdAt)}</small>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <b style={{ fontSize: 12, color: 'var(--primary)' }}>Kết luận {i + 1}{c.agendaItemId ? ` · Mục ${m.agenda.find((a) => a.id === c.agendaItemId)?.order ?? ''}` : ''}</b>
+                <p style={{ fontSize: 13.5 }}>{c.content}</p>
+                {c.documentIds && c.documentIds.length > 0 && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '4px 0' }}>
+                    {c.documentIds.map((did) => {
+                      const d = docById.get(did);
+                      return d ? (
+                        <span key={did} className="badge badge-blue" style={{ cursor: 'default' }} title={d.name}>
+                          <Icon name="paperclip" size={11} />{d.name}
+                        </span>
+                      ) : null;
+                    })}
+                  </div>
+                )}
+                <small style={{ color: 'var(--muted)', fontSize: 11.5 }}>
+                  {timeAgo(c.createdAt)}{c.updatedAt ? ` · sửa ${timeAgo(c.updatedAt)}` : ''}
+                </small>
+              </div>
+              {chairCtl && (
+                <div style={{ display: 'flex', gap: 2, flex: 'none' }}>
+                  <button className="icon-btn" title="Sửa kết luận" onClick={() => setEditingConclusion(c)}><Icon name="edit" size={14} /></button>
+                  <button className="icon-btn" title="Xóa kết luận" onClick={() => {
+                    if (window.confirm('Xóa kết luận này?')) act(() => meetingService.removeConclusion(user!, m.id, c.id), 'Đã xóa kết luận');
+                  }}><Icon name="trash" size={14} /></button>
+                </div>
+              )}
+            </div>
           </div>
         ))}
         {m.conclusions.length === 0 && <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Chưa có kết luận.</p>}
@@ -824,9 +874,30 @@ function MinutesTab({ m, votes }: { m: Meeting; votes: Vote[] }) {
                 {m.agenda.map((a) => <option key={a.id} value={a.id}>Mục {a.order}. {a.title}</option>)}
               </select>
               <button className="btn" disabled={!conclusion.trim()}
-                onClick={() => act(async () => { await meetingService.addConclusion(user!, m.id, conclusion.trim(), conclusionAgenda || undefined); setConclusion(''); }, 'Đã ghi kết luận')}>
+                onClick={() => act(async () => {
+                  await meetingService.addConclusion(user!, m.id, conclusion.trim(), conclusionAgenda || undefined, conclusionDocIds);
+                  setConclusion(''); setConclusionDocIds([]);
+                }, 'Đã ghi kết luận')}>
                 Ghi kết luận
               </button>
+            </div>
+            {/* E-HSMT mục 51: đính kèm tài liệu vào kết luận (picker kiểu VoteCreateModal) */}
+            <div style={{ marginTop: 8 }}>
+              <select className="sel" value="" onChange={(e) => { if (e.target.value && !conclusionDocIds.includes(e.target.value)) setConclusionDocIds([...conclusionDocIds, e.target.value]); }}>
+                <option value="">— Đính kèm tài liệu (tùy chọn) —</option>
+                {attachableDocs.map((dx) => <option key={dx.id} value={dx.id}>{dx.name}</option>)}
+              </select>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                {conclusionDocIds.map((did) => {
+                  const dx = docById.get(did);
+                  return (
+                    <Badge key={did} color="blue">
+                      {dx?.name}
+                      <a style={{ cursor: 'pointer', marginLeft: 4 }} onClick={() => setConclusionDocIds(conclusionDocIds.filter((x) => x !== did))}>✕</a>
+                    </Badge>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
@@ -919,7 +990,64 @@ function MinutesTab({ m, votes }: { m: Meeting; votes: Vote[] }) {
           setSignOpen(false);
           toast(`Ký số thành công — serial ${sig.serial}`);
         })} />}
+      {editingConclusion && (
+        <ConclusionEditModal m={m} conclusion={editingConclusion} attachableDocs={attachableDocs} docById={docById}
+          onClose={() => setEditingConclusion(null)}
+          onSubmit={(patch) => act(async () => {
+            await meetingService.updateConclusion(user!, m.id, editingConclusion.id, patch);
+            setEditingConclusion(null);
+          }, 'Đã sửa kết luận')} />
+      )}
     </div>
+  );
+}
+
+// ---------------- Modal sửa kết luận (E-HSMT mục 51) ----------------
+function ConclusionEditModal({ m, conclusion, attachableDocs, docById, onClose, onSubmit }: {
+  m: Meeting; conclusion: Conclusion; attachableDocs: DocFile[]; docById: Map<string, DocFile>;
+  onClose: () => void;
+  onSubmit: (patch: { content: string; agendaItemId?: string; documentIds?: string[] }) => void;
+}) {
+  const [content, setContent] = useState(conclusion.content);
+  const [agendaItemId, setAgendaItemId] = useState(conclusion.agendaItemId ?? '');
+  const [docIds, setDocIds] = useState<string[]>(conclusion.documentIds ?? []);
+
+  return (
+    <Modal title="Sửa kết luận" onClose={onClose} width={620}
+      footer={<>
+        <button className="btn outline" onClick={onClose}>Hủy</button>
+        <button className="btn" disabled={!content.trim()}
+          onClick={() => onSubmit({ content: content.trim(), agendaItemId: agendaItemId || undefined, documentIds: docIds })}>
+          Lưu thay đổi
+        </button>
+      </>}>
+      <Field label="Nội dung kết luận" required>
+        <textarea className="ta" value={content} onChange={(e) => setContent(e.target.value)} />
+      </Field>
+      <Field label="Thuộc mục chương trình">
+        <select className="sel" value={agendaItemId} onChange={(e) => setAgendaItemId(e.target.value)}>
+          <option value="">— Kết luận chung —</option>
+          {m.agenda.map((a) => <option key={a.id} value={a.id}>Mục {a.order}. {a.title}</option>)}
+        </select>
+      </Field>
+      <Field label="Tài liệu đính kèm">
+        <select className="sel" value="" onChange={(e) => { if (e.target.value && !docIds.includes(e.target.value)) setDocIds([...docIds, e.target.value]); }}>
+          <option value="">— Chọn tài liệu để đính kèm —</option>
+          {attachableDocs.map((dx) => <option key={dx.id} value={dx.id}>{dx.name}</option>)}
+        </select>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 7 }}>
+          {docIds.map((did) => {
+            const dx = docById.get(did);
+            return (
+              <Badge key={did} color="blue">
+                {dx?.name}
+                <a style={{ cursor: 'pointer', marginLeft: 4 }} onClick={() => setDocIds(docIds.filter((x) => x !== did))}>✕</a>
+              </Badge>
+            );
+          })}
+        </div>
+      </Field>
+    </Modal>
   );
 }
 

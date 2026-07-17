@@ -37,9 +37,19 @@ async function notifyNewMeetingDoc(actor: User, doc: DocFile) {
   );
 }
 
+export interface AddDocOpts {
+  meetingId?: string | null;
+  agendaItemId?: string | null;
+  secret?: boolean;
+  issuingBody?: string;
+  folder?: string;
+  /** Loại tài liệu chọn từ danh mục loại tài liệu (E-HSMT mục 8). OPTIONAL. */
+  docTypeId?: string;
+}
+
 export async function addTextDocument(
   actor: User, name: string, content: string, kind: DocKind,
-  opts: { meetingId?: string | null; agendaItemId?: string | null; secret?: boolean; issuingBody?: string; folder?: string } = {},
+  opts: AddDocOpts = {},
 ): Promise<DocFile> {
   const doc: DocFile = {
     id: uid(), name: name.endsWith('.pdf') || name.includes('.') ? name : name + '.pdf',
@@ -47,7 +57,7 @@ export async function addTextDocument(
     ownerId: actor.id, sharedWith: [], size: content.length * 2, mime: 'application/pdf',
     content, uploadedAt: nowIso(), secret: opts.secret ?? false, version: 1,
     reviewStatus: defaultReviewStatus(actor, kind),
-    issuingBody: opts.issuingBody, folder: opts.folder,
+    issuingBody: opts.issuingBody, folder: opts.folder, docTypeId: opts.docTypeId,
   };
   await db.documents.create(doc);
   await audit(actor, 'Thêm tài liệu', `Thêm "${doc.name}"`);
@@ -58,7 +68,7 @@ export async function addTextDocument(
 
 export async function addFileDocument(
   actor: User, file: File, kind: DocKind,
-  opts: { meetingId?: string | null; agendaItemId?: string | null; secret?: boolean; issuingBody?: string; folder?: string } = {},
+  opts: AddDocOpts = {},
 ): Promise<DocFile> {
   if (file.size > MAX_UPLOAD) {
     throw new Error(`Tệp vượt giới hạn ${MAX_UPLOAD_LABEL}`);
@@ -75,12 +85,18 @@ export async function addFileDocument(
     ownerId: actor.id, sharedWith: [], size: file.size, mime: file.type || 'application/octet-stream',
     dataUrl, uploadedAt: nowIso(), secret: opts.secret ?? false, version: 1,
     reviewStatus: defaultReviewStatus(actor, kind),
-    issuingBody: opts.issuingBody, folder: opts.folder,
+    issuingBody: opts.issuingBody, folder: opts.folder, docTypeId: opts.docTypeId,
   };
   await db.documents.create(doc);
   await audit(actor, 'Tải lên tài liệu', `Tải lên "${doc.name}" (${Math.round(file.size / 1024)} KB)`);
   if (doc.reviewStatus === 'approved') await notifyNewMeetingDoc(actor, doc);
   return doc;
+}
+
+/** Cập nhật loại tài liệu (E-HSMT mục 8) cho tài liệu đã tồn tại. */
+export async function setDocType(actor: User, docId: string, docTypeId: string) {
+  await db.documents.update(docId, { docTypeId: docTypeId || undefined });
+  await audit(actor, 'Cập nhật loại tài liệu', `Cập nhật loại tài liệu #${docId}`);
 }
 
 /**

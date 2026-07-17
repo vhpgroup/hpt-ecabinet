@@ -28,6 +28,7 @@ export const COLLECTIONS = {
   catalogs: 'c_catalogs', // ĐỢT 3: danh mục chung (E-HSMT mục 6, 7, 10)
   guides: 'c_guides',     // ĐỢT 3: tài liệu hướng dẫn sử dụng (E-HSMT mục 4)
   apiKeys: 'c_apikeys',   // RỔ B: khóa API cấp cho bên thứ 3 (E-HSMT mục 54–59)
+  feedbacks: 'c_feedbacks', // P1-6: phản hồi/góp ý người dùng (E-HSMT mục 5.1–5.4)
 };
 
 let _query = null;

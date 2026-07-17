@@ -27,11 +27,13 @@ public static class Guard
             ["invitedAt"] = "string", ["questionSession"] = "string", ["seatAssignments"] = "object",
             ["meetingType"] = "string", ["currentItemStartedAt"] = "string",
         },
+        // + trackerUserId (P1-5, HSMT dòng 372 "Cán bộ theo dõi") — string, OPTIONAL
         ["votes"] = new()
         {
             ["kind"] = "string", ["meetingId"] = "string|null", ["agendaItemId"] = "string|null", ["title"] = "string",
             ["description"] = "string", ["options"] = "array", ["ballots"] = "array", ["eligibleIds"] = "array",
             ["documentIds"] = "array", ["secret"] = "boolean", ["status"] = "string", ["deadline"] = "string|null",
+            ["trackerUserId"] = "string",
         },
         ["documents"] = new()
         {
@@ -77,13 +79,41 @@ public static class Guard
             ["name"] = "string", ["prefix"] = "string", ["keyHash"] = "string", ["scopes"] = "array", ["active"] = "boolean",
             ["createdAt"] = "string", ["createdById"] = "string", ["lastUsedAt"] = "string", ["callCount"] = "number", ["note"] = "string",
         },
+        // P1-6 — Phản hồi/góp ý người dùng (E-HSMT mục 5.1–5.4). userId/unitId do SERVER
+        // ép lúc tạo (App.cs) — vẫn kiểm kiểu ở đây để chặn giá trị rác.
+        ["feedbacks"] = new()
+        {
+            ["userId"] = "string", ["unitId"] = "string|null", ["category"] = "string", ["content"] = "string",
+            ["status"] = "string", ["response"] = "string", ["handledBy"] = "string|null",
+            ["createdAt"] = "string", ["updatedAt"] = "string",
+        },
     };
 
     private static readonly string[] ValidRoles = { "admin", "chairman", "secretary", "delegate", "unit_admin" };
     private static readonly string[] ValidReview = { "draft", "pending", "approved", "rejected" };
-    private static readonly string[] ValidCatalogTypes = { "position", "meetingType", "issuingBody" };
+    // P1-5 — trạng thái phiếu lấy ý kiến/biểu quyết hợp lệ. 'draft' MỚI (chưa mở, cấm bỏ phiếu).
+    private static readonly string[] ValidVoteStatus = { "draft", "pending", "open", "closed" };
+    private static readonly string[] ValidCatalogTypes = { "position", "meetingType", "issuingBody", "docType" };
+    // P1-6 — loại/trạng thái phản hồi người dùng hợp lệ
+    private static readonly string[] ValidFeedbackCategory = { "bug", "feature", "question", "other" };
+    private static readonly string[] ValidFeedbackStatus = { "new", "processing", "resolved" };
     private static readonly Regex SeatKey = new(@"^\d+-\d+$", RegexOptions.Compiled);
     private static bool IsSeatKey(JsonNode? v) => v is JsonValue && J.Str(v) is string s && SeatKey.IsMatch(s);
+
+    // P1-7 — Whitelist định dạng tệp đính kèm tài liệu theo Phụ lục TT 39/2017/TT-BTTTT.
+    private static readonly string[] AllowedFileExt =
+    {
+        "pdf", "doc", "docx", "odt", "xls", "xlsx", "ods", "csv", "ppt", "pptx", "odp",
+        "txt", "rtf", "jpg", "jpeg", "png", "gif", "tif", "tiff", "bmp", "zip", "rar",
+    };
+
+    /// <summary>Phần mở rộng chữ thường của tên tệp; null nếu không có/không phải chuỗi. Port extOf.</summary>
+    private static string? ExtOf(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return null;
+        var m = System.Text.RegularExpressions.Regex.Match(name.Trim(), @"\.([a-zA-Z0-9]+)$");
+        return m.Success ? m.Groups[1].Value.ToLowerInvariant() : null;
+    }
 
     /// <summary>Kiểm 1 giá trị có khớp spec kiểu ("string|null", "object|null"...). Port typeOk.</summary>
     private static bool TypeOk(JsonNode? val, string spec)
@@ -119,8 +149,12 @@ public static class Guard
     private static bool IsNonEmptyString(JsonNode? n)
         => n is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s);
 
-    /// <summary>Kiểm kiểu cho PATCH/POST. Ném 400 khi sai. Áp cho mọi collection. Port validatePatch.</summary>
-    public static void ValidatePatch(string col, JsonNode? bodyNode)
+    /// <summary>
+    /// Kiểm kiểu cho PATCH/POST. Ném 400 khi sai. Áp cho mọi collection. Port validatePatch.
+    /// `existing` (P1-7, OPTIONAL): bản ghi HIỆN CÓ khi đây là PATCH (null khi POST/tạo mới)
+    /// — dùng để suy ra trạng thái HIỆU LỰC (existing + patch) của documents.name/dataUrl.
+    /// </summary>
+    public static void ValidatePatch(string col, JsonNode? bodyNode, JsonObject? existing = null)
     {
         if (bodyNode is not JsonObject body)
             throw Err(400, "Dữ liệu gửi lên không hợp lệ (phải là đối tượng JSON)");
@@ -198,6 +232,26 @@ public static class Guard
             var rs = J.Str(body, "reviewStatus");
             if (rs is null || !ValidReview.Contains(rs)) throw Err(400, "Trạng thái duyệt tài liệu không hợp lệ");
         }
+        // P1-5 — trạng thái phiếu lấy ý kiến/biểu quyết: chỉ nhận enum hợp lệ (gồm 'draft' mới)
+        if (col == "votes" && J.Has(body, "status"))
+        {
+            var vs = J.Str(body, "status");
+            if (vs is null || !ValidVoteStatus.Contains(vs)) throw Err(400, "Trạng thái phiếu lấy ý kiến/biểu quyết không hợp lệ");
+        }
+        // P1-7 — TT 39/2017/TT-BTTTT: whitelist định dạng tệp đính kèm tài liệu. Chỉ kiểm khi
+        // BẢN GHI HIỆU LỰC (existing hợp nhất với patch) có file thật (dataUrl khác rỗng) —
+        // tài liệu chỉ có `content` (soạn trực tiếp, không upload) KHÔNG bị áp whitelist này.
+        if (col == "documents")
+        {
+            var effDataUrl = J.Has(body, "dataUrl") ? J.Str(body, "dataUrl") : (existing != null ? J.Str(existing, "dataUrl") : null);
+            if (!string.IsNullOrEmpty(effDataUrl))
+            {
+                var effName = J.Has(body, "name") ? J.Str(body, "name") : (existing != null ? J.Str(existing, "name") : null);
+                var ext = ExtOf(effName);
+                if (ext is null || !AllowedFileExt.Contains(ext))
+                    throw Err(400, $"Định dạng tệp không hợp lệ. Định dạng cho phép: {string.Join(", ", AllowedFileExt)}");
+            }
+        }
         if (col == "users" && J.Has(body, "role"))
         {
             var role = J.Str(body, "role");
@@ -220,7 +274,7 @@ public static class Guard
             {
                 var t = J.Str(body, "type");
                 if (t is null || !ValidCatalogTypes.Contains(t))
-                    throw Err(400, "Loại danh mục không hợp lệ (chỉ chức vụ / loại phiên họp / cơ quan ban hành)");
+                    throw Err(400, "Loại danh mục không hợp lệ (chỉ chức vụ / loại phiên họp / cơ quan ban hành / loại tài liệu)");
             }
             if (J.Has(body, "name") && !IsNonEmptyString(body["name"]))
                 throw Err(400, "Tên danh mục không được để trống");
@@ -238,19 +292,43 @@ public static class Guard
             if (sc is null || sc.Any(s => J.Str(s) is not "meetings" and not "documents"))
                 throw Err(400, "Phạm vi (scope) của khóa API không hợp lệ (chỉ meetings / documents)");
         }
+        // P1-6 — Phản hồi/góp ý người dùng: category/status theo enum; nội dung không rỗng
+        if (col == "feedbacks")
+        {
+            if (J.Has(body, "category"))
+            {
+                var cat = J.Str(body, "category");
+                if (cat is null || !ValidFeedbackCategory.Contains(cat))
+                    throw Err(400, "Loại phản hồi không hợp lệ (chỉ: lỗi / đề xuất tính năng / câu hỏi / khác)");
+            }
+            if (J.Has(body, "status"))
+            {
+                var fs = J.Str(body, "status");
+                if (fs is null || !ValidFeedbackStatus.Contains(fs))
+                    throw Err(400, "Trạng thái phản hồi không hợp lệ");
+            }
+            if (J.Has(body, "content") && !IsNonEmptyString(body["content"]))
+                throw Err(400, "Nội dung phản hồi không được để trống");
+        }
     }
 
     // ---------------- guardPatch ----------------
-    /// <summary>Trả patch đã làm sạch; ném 403 khi bị cấm. Port guardPatch.</summary>
-    public static JsonObject GuardPatch(string col, JsonObject existing, JsonObject patch, JwtPayload user)
+    /// <summary>
+    /// Trả patch đã làm sạch; ném 403 khi bị cấm. Port guardPatch.
+    /// `meeting` (OPTIONAL, P0-3): phiên họp chứa tài liệu (nếu col == "documents" và có
+    /// meetingId) — nạp trước ở App.cs từ existing["meetingId"] để GuardDocuments biết ai
+    /// là "thành phần phiên" được phép duyệt, không chỉ nhóm MANAGE toàn cục.
+    /// </summary>
+    public static JsonObject GuardPatch(string col, JsonObject existing, JsonObject patch, JwtPayload user, JsonObject? meeting = null, string? actorUnitId = null)
     {
         return col switch
         {
             "votes" => GuardVotes(patch, user),
             "meetings" => GuardMeetings(existing, patch, user),
             "questions" => GuardQuestions(existing, patch, user),
-            "documents" => GuardDocuments(existing, patch, user),
+            "documents" => GuardDocuments(existing, patch, user, meeting),
             "apiKeys" => GuardApiKeys(patch),
+            "feedbacks" => GuardFeedbacks(existing, patch, user, actorUnitId),
             _ => patch,
         };
     }
@@ -263,9 +341,66 @@ public static class Guard
         return p;
     }
 
-    private static JsonObject GuardDocuments(JsonObject existing, JsonObject patch, JwtPayload user)
+    /// <summary>
+    /// P1-6 — PHẢN HỒI/GÓP Ý NGƯỜI DÙNG (vá QA 18/07): status/response/handledBy do admin
+    /// (toàn hệ thống) HOẶC unit_admin với phản hồi TRONG ĐƠN VỊ MÌNH (actorUnitId đọc từ
+    /// DB tại App.cs — JWT không mang unitId; vai trò HSMT "Quản trị đơn vị: nhận & phân
+    /// phối yêu cầu"). KHÔNG áp dụng cho secretary/chairman. Người không phải người xử lý:
+    /// chỉ sửa phản hồi CỦA CHÍNH MÌNH, KHÔNG đụng userId/unitId (bất biến, server ép lúc
+    /// tạo). handledBy luôn bị SERVER ép = chính người đang xử lý.
+    /// </summary>
+    private static JsonObject GuardFeedbacks(JsonObject existing, JsonObject patch, JwtPayload user, string? actorUnitId = null)
+    {
+        var p = J.CloneObj(patch);
+        var isHandler = user.Role == "admin"
+            || (user.Role == "unit_admin" && J.Str(existing, "unitId") is string fu && fu == actorUnitId);
+        if (!isHandler)
+        {
+            if (J.Has(p, "status") || J.Has(p, "response") || J.Has(p, "handledBy"))
+                throw Err(403, "Chỉ Quản trị hệ thống hoặc Quản trị đơn vị (trong đơn vị mình) được cập nhật trạng thái/phản hồi góp ý");
+            if (J.Str(existing, "userId") != user.Sub)
+                throw Err(403, "Bạn không được sửa phản hồi của người khác");
+        }
+        p.Remove("userId");
+        p.Remove("unitId");
+        if (J.Has(p, "handledBy")) p["handledBy"] = user.Sub;
+        return p;
+    }
+
+    /// <summary>
+    /// P0-3 — BYPASS HẸP cho ACL thô Acl.Rules["documents"].Update = "ownerOrManage". ACL cấp
+    /// collection chạy TRƯỚC GuardDocuments; nếu giữ nguyên "ownerOrManage", một "Thành viên
+    /// dự họp" (không phải owner, không phải MANAGE toàn cục) sẽ bị 403 ngay tại ACL,
+    /// GuardDocuments không bao giờ được gọi tới. Thay vì MỞ RỘNG ACL chung (rủi ro: field
+    /// khác của mọi tài liệu sẽ bị bất kỳ ai PATCH được), thêm 1 lối đi HẸP: cho qua ACL CHỈ
+    /// KHI đúng là 1 yêu cầu DUYỆT hợp lệ (patch CHỈ chứa reviewStatus/reviewNote, chuyển
+    /// pending -> approved|rejected, người gọi là thành phần phiên, KHÔNG phải owner).
+    /// GuardDocuments vẫn ĐỘC LẬP kiểm tra lại (defense-in-depth) — hàm này chỉ quyết định
+    /// có cho "đi qua cổng ACL" hay không. Port canReviewDocumentAsMeetingMember.
+    /// </summary>
+    public static bool CanReviewDocumentAsMeetingMember(JsonObject doc, JsonObject patch, JwtPayload user, JsonObject? meeting)
+    {
+        if (meeting is null) return false;
+        if (J.Str(doc, "ownerId") == user.Sub) return false; // owner không được lách qua đường này
+        var isMember = user.Sub == J.Str(meeting, "chairId")
+            || user.Sub == J.Str(meeting, "secretaryId")
+            || (J.Arr(meeting, "participants") ?? new JsonArray()).OfType<JsonObject>().Any(p => J.Str(p, "userId") == user.Sub);
+        if (!isMember) return false;
+        var allowedKeys = new HashSet<string> { "reviewStatus", "reviewNote" };
+        if (!patch.Select(kv => kv.Key).All(k => allowedKeys.Contains(k))) return false; // không cho lách sửa field khác kèm theo
+        var cur = J.Has(doc, "reviewStatus") ? (J.Str(doc, "reviewStatus") ?? "approved") : "approved";
+        var next = J.Str(patch, "reviewStatus");
+        return cur == "pending" && (next == "approved" || next == "rejected");
+    }
+
+    private static JsonObject GuardDocuments(JsonObject existing, JsonObject patch, JwtPayload user, JsonObject? meeting)
     {
         var isManage = Manage.Contains(user.Role);
+        var isMeetingMember = meeting != null && (
+            user.Sub == J.Str(meeting, "chairId")
+            || user.Sub == J.Str(meeting, "secretaryId")
+            || (J.Arr(meeting, "participants") ?? new JsonArray()).OfType<JsonObject>().Any(p => J.Str(p, "userId") == user.Sub)
+        );
         var p = J.CloneObj(patch);
         var cur = J.Has(existing, "reviewStatus") ? (J.Str(existing, "reviewStatus") ?? "approved") : "approved";
 
@@ -274,8 +409,11 @@ public static class Guard
             var next = J.Str(p, "reviewStatus");
             var isOwner = J.Str(existing, "ownerId") == user.Sub;
             var allowedOwner = isOwner && (cur == "draft" || cur == "rejected") && next == "pending";
-            var allowedManage = isManage && cur == "pending" && (next == "approved" || next == "rejected");
-            if (!allowedOwner && !allowedManage)
+            // QUAN TRỌNG: !isOwner — người trình KHÔNG được tự duyệt tài liệu CỦA CHÍNH
+            // MÌNH dù họ CÓ là thành phần phiên họp đó — nếu không chặn riêng, "cùng phiên"
+            // sẽ vô tình mở lại đúng lỗ hổng "tự duyệt" mà allowedOwner đang ngăn.
+            var allowedApprover = (isManage || isMeetingMember) && !isOwner && cur == "pending" && (next == "approved" || next == "rejected");
+            if (!allowedOwner && !allowedApprover)
                 throw Err(403, "Không được chuyển trạng thái duyệt tài liệu như vậy");
             if (next == "rejected")
             {
@@ -283,7 +421,7 @@ public static class Guard
                 if (string.IsNullOrEmpty(note)) throw Err(400, "Phải nhập lý do khi từ chối tài liệu");
                 p["reviewNote"] = note.Length > 2000 ? note.Substring(0, 2000) : note;
             }
-            if (allowedManage)
+            if (allowedApprover)
             {
                 p["reviewedById"] = user.Sub;
                 p["reviewedAt"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");

@@ -378,6 +378,21 @@ public static class App
                 var chk = await EnforceUserWrite(store, c.User!, "create", null, body);
                 if (chk is not null) { await HttpUtil.SendError(c.Res, chk.Value.status, chk.Value.error); return; }
             }
+            // P0-2: quản trị đơn vị tạo phiên họp — chủ trì/thư ký PHẢI thuộc đơn vị mình
+            if (col == "meetings")
+            {
+                var chk = await EnforceMeetingWrite(store, c.User!, "create", body);
+                if (chk is not null) { await HttpUtil.SendError(c.Res, chk.Value.status, chk.Value.error); return; }
+            }
+            // P1-6 — Phản hồi/góp ý: SERVER ép danh tính người gửi + phạm vi đơn vị (KHÔNG
+            // tin client) — chống giả danh gửi hộ người khác hoặc lách phạm vi đơn vị.
+            if (col == "feedbacks")
+            {
+                body["userId"] = c.User!.Sub;
+                var self = await store.GetByIdAsync("c_users", c.User.Sub);
+                body["unitId"] = self is not null ? J.Str(self, "unitId") : null;
+                if (!J.Has(body, "status")) body["status"] = "new";
+            }
             Guard.ValidatePatch(col, body); // ném 400 nếu sai kiểu
             try
             {
@@ -409,14 +424,37 @@ public static class App
             var existing = await store.GetByIdAsync(table, c.Params["id"]);
             if (existing is null) { await HttpUtil.SendError(c.Res, 404, "Không tìm thấy bản ghi"); return; }
             var patch = await HttpUtil.ReadBodyObj(c.Req);
-            if (!Acl.Allowed(Acl.Rules[col].Update, c.User!, existing, patch)) { await HttpUtil.SendError(c.Res, 403, "Bạn không có quyền cập nhật bản ghi này"); return; }
+            var aclOk = Acl.Allowed(Acl.Rules[col].Update, c.User!, existing, patch);
+            // P0-3: tài liệu — ACL thô "ownerOrManage" sẽ chặn "Thành viên dự họp" (không phải
+            // owner/MANAGE) TRƯỚC KHI GuardDocuments có cơ hội chạy. Mở lối đi HẸP: cho qua ACL
+            // NẾU đây đúng là 1 yêu cầu DUYỆT hợp lệ của thành phần phiên.
+            JsonObject? meetingForDocs = null;
+            if (!aclOk && col == "documents" && J.Str(existing, "meetingId") is string mid1)
+            {
+                meetingForDocs = await store.GetByIdAsync("c_meetings", mid1);
+                aclOk = Guard.CanReviewDocumentAsMeetingMember(existing, patch, c.User!, meetingForDocs);
+            }
+            if (!aclOk) { await HttpUtil.SendError(c.Res, 403, "Bạn không có quyền cập nhật bản ghi này"); return; }
             if (col == "users")
             {
                 var chk = await EnforceUserWrite(store, c.User!, "update", existing, patch);
                 if (chk is not null) { await HttpUtil.SendError(c.Res, chk.Value.status, chk.Value.error); return; }
             }
-            Guard.ValidatePatch(col, patch);
-            patch = Guard.GuardPatch(col, existing, patch, c.User!);
+            Guard.ValidatePatch(col, patch, existing); // P1-7: chặn kiểu sai + định dạng tệp trước khi ghi
+            // P0-3: tài liệu gắn phiên họp — nạp phiên đó (tái dùng nếu đã nạp ở bước ACL trên)
+            // để GuardDocuments biết ai là "thành phần phiên" được phép duyệt, không chỉ MANAGE.
+            // GuardDocuments ĐỘC LẬP kiểm tra lại toàn bộ điều kiện (defense-in-depth).
+            JsonObject? meetingCtx = meetingForDocs;
+            if (col == "documents" && meetingCtx is null && J.Str(existing, "meetingId") is string mid)
+                meetingCtx = await store.GetByIdAsync("c_meetings", mid);
+            // P1-6 (vá QA 18/07): unit_admin xử lý phản hồi TRONG ĐƠN VỊ MÌNH — unitId đọc từ DB (JWT không mang unitId).
+            string? actorUnitId = null;
+            if (col == "feedbacks" && c.User!.Role == "unit_admin")
+            {
+                var selfU = await store.GetByIdAsync("c_users", c.User.Sub);
+                actorUnitId = selfU is null ? null : J.Str(selfU, "unitId");
+            }
+            patch = Guard.GuardPatch(col, existing, patch, c.User!, meetingCtx, actorUnitId);
 
             if (col == "users")
             {
@@ -525,6 +563,36 @@ public static class App
         {
             if (J.Str(body, "unitId") != myUnit)
                 return (403, "Chỉ được tạo người dùng trong đơn vị của mình");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// P0-2 — KIỂM TRA SÂU khi QUẢN TRỊ ĐƠN VỊ (unit_admin) TẠO phiên họp (HSMT dòng
+    /// 354-355). Meeting KHÔNG có field unitId riêng — "đơn vị của phiên" suy ra từ đơn vị
+    /// của chủ trì/thư ký (giống Open API/Access.cs). unitId của unit_admin ĐỌC TỪ store
+    /// (không tin body); chairId/secretaryId gửi lên cũng tra unitId THẬT từ store.
+    /// admin/secretary/chairman: bỏ qua (đã được ACL cho tạo tự do như trước). Chỉ áp cho
+    /// op "create" — PHẠM VI P0-2 không mở rộng quyền SỬA meeting cho unit_admin.
+    /// </summary>
+    private static async Task<(int status, string error)?> EnforceMeetingWrite(IDocStore store, JwtPayload user, string op, JsonObject body)
+    {
+        if (user.Role != "unit_admin" || op != "create") return null;
+        var self = await store.GetByIdAsync("c_users", user.Sub);
+        var myUnit = self is null ? null : J.Str(self, "unitId");
+        if (string.IsNullOrEmpty(myUnit)) return (403, "Không xác định được đơn vị của bạn");
+
+        var chairId = J.Str(body, "chairId");
+        var chair = !string.IsNullOrEmpty(chairId) ? await store.GetByIdAsync("c_users", chairId) : null;
+        if (chair is null || J.Str(chair, "unitId") != myUnit)
+            return (403, "Chủ trì phiên họp phải thuộc đơn vị của bạn");
+
+        var secId = J.Str(body, "secretaryId");
+        if (!string.IsNullOrEmpty(secId))
+        {
+            var sec = await store.GetByIdAsync("c_users", secId);
+            if (sec is null || J.Str(sec, "unitId") != myUnit)
+                return (403, "Thư ký phiên họp phải thuộc đơn vị của bạn");
         }
         return null;
     }

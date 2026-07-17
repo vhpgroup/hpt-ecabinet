@@ -7,9 +7,10 @@ import { useNavigate } from 'react-router-dom';
 import type { DocFile } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
 import { Badge, EmptyState, Field, Icon, Modal, PageHeader } from '../components';
-import { DOC_REVIEW, MEETING_STATUS } from '../../domain/labels';
+import { MEETING_STATUS } from '../../domain/labels';
 import { can } from '../../services/authService';
 import * as documentService from '../../services/documentService';
+import * as catalogService from '../../services/catalogService';
 import { indexBy } from '../format';
 import { DocReviewControls, DocRow, DocViewerModal } from './shared';
 
@@ -295,35 +296,41 @@ function NewFolderModal({ existing, onClose, onCreate }: { existing: string[]; o
 }
 
 function PersonalDocModal({ folders, onClose, onDone }: { folders: string[]; onClose: () => void; onDone: () => void }) {
-  const { user } = useApp();
+  const { user, s } = useApp();
   const [mode, setMode] = useState<'file' | 'text'>('text');
   const [name, setName] = useState('');
   const [content, setContent] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [folder, setFolder] = useState('');
+  const [docTypeId, setDocTypeId] = useState('');
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false); // HSMT dòng 534: thao tác >10s (tải tệp lớn) cần hiện đang xử lý
+  const docTypes = catalogService.catalogsByType(s.catalogs, 'docType', true);
 
   const submit = async () => {
     if (!user) return;
     setErr('');
+    setBusy(true);
     try {
+      const opts = { folder: folder.trim() || undefined, docTypeId: docTypeId || undefined };
       if (mode === 'file') {
-        if (!file) return setErr('Chọn tệp cần tải lên');
-        await documentService.addFileDocument(user, file, 'personal', { folder: folder.trim() || undefined });
+        if (!file) { setErr('Chọn tệp cần tải lên'); return; }
+        await documentService.addFileDocument(user, file, 'personal', opts);
       } else {
-        if (!name.trim() || !content.trim()) return setErr('Nhập tên và nội dung');
-        await documentService.addTextDocument(user, name.trim(), content, 'personal', { folder: folder.trim() || undefined });
+        if (!name.trim() || !content.trim()) { setErr('Nhập tên và nội dung'); return; }
+        await documentService.addTextDocument(user, name.trim(), content, 'personal', opts);
       }
       onDone();
     } catch (ex) { setErr((ex as Error).message); }
+    finally { setBusy(false); }
   };
 
   return (
     <Modal title="Thêm tài liệu cá nhân" onClose={onClose}
       footer={<>
         {err && <span style={{ color: 'var(--red)', fontSize: 13, marginRight: 'auto' }}>{err}</span>}
-        <button className="btn outline" onClick={onClose}>Hủy</button>
-        <button className="btn" onClick={submit}>Thêm</button>
+        <button className="btn outline" onClick={onClose} disabled={busy}>Hủy</button>
+        <button className="btn" onClick={submit} disabled={busy}>{busy ? 'Đang tải lên…' : 'Thêm'}</button>
       </>}>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         <button className={'btn sm' + (mode === 'text' ? '' : ' outline')} onClick={() => setMode('text')}>Soạn ghi chú / nội dung</button>
@@ -337,10 +344,18 @@ function PersonalDocModal({ folders, onClose, onDone }: { folders: string[]; onC
           <Field label="Nội dung" required><textarea className="ta" style={{ minHeight: 150 }} value={content} onChange={(e) => setContent(e.target.value)} /></Field>
         </>
       )}
-      <Field label="Thư mục (tùy chọn)">
-        <input className="inp" list="folder-list" value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Chọn hoặc nhập thư mục mới…" />
-        <datalist id="folder-list">{folders.map((f) => <option key={f} value={f} />)}</datalist>
-      </Field>
+      <div className="form-row">
+        <Field label="Thư mục (tùy chọn)">
+          <input className="inp" list="folder-list" value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Chọn hoặc nhập thư mục mới…" />
+          <datalist id="folder-list">{folders.map((f) => <option key={f} value={f} />)}</datalist>
+        </Field>
+        <Field label="Loại tài liệu (tùy chọn)">
+          <select className="sel" value={docTypeId} onChange={(e) => setDocTypeId(e.target.value)}>
+            <option value="">— Chưa phân loại —</option>
+            {docTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </Field>
+      </div>
     </Modal>
   );
 }

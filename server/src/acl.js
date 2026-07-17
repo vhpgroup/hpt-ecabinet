@@ -24,7 +24,12 @@ export const ACL = {
   users:         { create: ['admin', 'unit_admin'], update: 'adminOrSelfOrUnitAdmin', remove: ['admin'] },
   units:         { create: ['admin'], update: ['admin'], remove: ['admin'] },
   rooms:         { create: ['admin'], update: ['admin'], remove: ['admin'] },
-  meetings:      { create: MANAGE, update: 'any', remove: MANAGE },
+  // P0-2 (HSMT dòng 354-355): "Quản trị đơn vị" là actor CHÍNH tạo phiên họp — thêm
+  // unit_admin vào quyền tạo. Kiểm tra sâu (chairId/secretaryId PHẢI thuộc đơn vị
+  // unit_admin, đọc từ DB không tin body) nằm ở enforceMeetingWrite() trong index.js.
+  // update/remove GIỮ NGUYÊN (unit_admin không nằm trong MANAGE cho sửa/xóa — ngoài
+  // phạm vi P0-2, xem báo cáo dev-backend.md mục "rủi ro còn lại").
+  meetings:      { create: [...MANAGE, 'unit_admin'], update: 'any', remove: MANAGE },
   documents:     { create: 'any', update: 'ownerOrManage', remove: 'ownerOrManage' },
   annotations:   { create: 'self:userId', update: 'owner:userId', remove: 'owner:userId' },
   votes:         { create: MANAGE, update: 'any', remove: MANAGE },
@@ -50,6 +55,12 @@ export const ACL = {
   //  không cho client tự đặt keyHash). update/remove CHỈ admin; guard chặn sửa keyHash/prefix.
   //  Đọc: access.js xếp apiKeys vào SENSITIVE -> chỉ admin thấy.
   apiKeys:       { create: 'none', update: ['admin'], remove: ['admin'] },
+  // P1-6 — Phản hồi/góp ý người dùng (E-HSMT mục 5.1–5.4): bất kỳ ai đăng nhập tạo được
+  // (server ép userId/unitId = chính mình, không tin body — xem index.js). update = 'any'
+  // để guardFeedbacks() (guard.js) làm toàn bộ việc siết field theo vai trò (status/
+  // response/handledBy CHỈ admin; không ai sửa được phản hồi NGƯỜI KHÁC trừ admin) — cùng
+  // triết lý với votes/meetings/questions (ACL lỏng, GUARD siết field). remove: chỉ admin.
+  feedbacks:     { create: 'any', update: 'any', remove: ['admin'] },
 };
 
 /** Kiểm quyền theo rule + ngữ cảnh request. Trả boolean. */

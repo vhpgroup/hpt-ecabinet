@@ -1,8 +1,11 @@
 // ============================================================
 // PHIẾU LẤY Ý KIẾN — xin ý kiến ngoài phiên họp, có thời hạn
+// E-HSMT mục 11-13 (DS văn bản đang gửi/đã xong/chưa gửi + sửa nội dung),
+// mục 30 (ký số ý kiến), quy trình lấy ý kiến văn bản (dòng 367-374:
+// cán bộ theo dõi, ký số ý kiến, thư ký tổng hợp/thống kê).
 // ============================================================
 import React, { useMemo, useState } from 'react';
-import type { DocFile, Vote } from '../../domain/types';
+import type { DocFile, User, Vote } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
 import { Badge, EmptyState, Field, Icon, Modal, PageHeader, VoteOutcomePanel, VoteResultBars } from '../components';
 import { can } from '../../services/authService';
@@ -12,17 +15,24 @@ import { DocViewerModal } from './shared';
 
 export default function PollsPage() {
   const { user, s, refresh, toast } = useApp();
-  const [filter, setFilter] = useState<'open' | 'closed' | 'all'>('open');
+  const [filter, setFilter] = useState<'open' | 'closed' | 'draft' | 'all'>('open');
   const [createOpen, setCreateOpen] = useState(false);
   const [viewDoc, setViewDoc] = useState<DocFile | null>(null);
   const docById = indexBy(s.documents);
+  const users = indexBy(s.users);
 
   const polls = useMemo(() => {
     let arr = s.votes.filter((v) => v.kind === 'poll');
     if (filter === 'open') arr = arr.filter((v) => v.status === 'open');
-    if (filter === 'closed') arr = arr.filter((v) => v.status === 'closed');
+    else if (filter === 'closed') arr = arr.filter((v) => v.status === 'closed');
+    // E-HSMT mục 13: "DS văn bản CHƯA lấy ý kiến" — phiếu đã soạn nhưng chưa gửi (chỉ quản lý)
+    else if (filter === 'draft') arr = arr.filter((v) => v.status === 'draft');
+    // 'all': không lộ phiếu nháp của người khác cho thành viên thường
+    else if (!can.manageMeetings(user)) arr = arr.filter((v) => v.status !== 'draft');
     return arr.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [s.votes, filter]);
+  }, [s.votes, filter, user]);
+
+  const draftCount = s.votes.filter((v) => v.kind === 'poll' && v.status === 'draft').length;
 
   return (
     <div>
@@ -31,42 +41,58 @@ export default function PollsPage() {
           <button className="btn" onClick={() => setCreateOpen(true)}><Icon name="plus" size={15} />Tạo phiếu lấy ý kiến</button>
         )} />
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         <button className={'btn sm' + (filter === 'open' ? '' : ' outline')} onClick={() => setFilter('open')}>Đang mở</button>
         <button className={'btn sm' + (filter === 'closed' ? '' : ' outline')} onClick={() => setFilter('closed')}>Đã kết thúc</button>
+        {can.manageMeetings(user) && (
+          <button className={'btn sm' + (filter === 'draft' ? '' : ' outline')} onClick={() => setFilter('draft')}>
+            Chưa gửi{draftCount > 0 && <Badge color="amber">{draftCount}</Badge>}
+          </button>
+        )}
         <button className={'btn sm' + (filter === 'all' ? '' : ' outline')} onClick={() => setFilter('all')}>Tất cả</button>
       </div>
 
       {polls.length === 0 && <div className="card"><EmptyState icon="vote" text="Không có phiếu lấy ý kiến nào" /></div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {polls.map((p) => (
-          <PollCard key={p.id} p={p} onViewDoc={(did) => { const d = docById.get(did); if (d) setViewDoc(d); }} />
+          <PollCard key={p.id} p={p} usersMap={users} onViewDoc={(did) => { const d = docById.get(did); if (d) setViewDoc(d); }} />
         ))}
       </div>
 
-      {createOpen && <PollCreateModal onClose={() => setCreateOpen(false)} onDone={async () => { setCreateOpen(false); await refresh(); toast('Đã gửi phiếu lấy ý kiến đến các thành viên'); }} />}
+      {createOpen && <PollCreateModal onClose={() => setCreateOpen(false)}
+        onDone={async (asDraft) => { setCreateOpen(false); await refresh(); toast(asDraft ? 'Đã lưu nháp phiếu lấy ý kiến (chưa gửi)' : 'Đã gửi phiếu lấy ý kiến đến các thành viên'); }} />}
       {viewDoc && <DocViewerModal doc={viewDoc} onClose={() => setViewDoc(null)} />}
     </div>
   );
 }
 
-function PollCard({ p, onViewDoc }: { p: Vote; onViewDoc: (docId: string) => void }) {
-  const { user, s, refresh, toast } = useApp();
+function PollCard({ p, usersMap, onViewDoc }: { p: Vote; usersMap: Map<string, User>; onViewDoc: (docId: string) => void }) {
+  const { user, refresh, toast } = useApp();
   const [optionId, setOptionId] = useState('');
   const [comment, setComment] = useState('');
-  const users = indexBy(s.users);
+  const [signOpen, setSignOpen] = useState(false);
+  const users = usersMap;
   const myBallot = p.ballots.find((b) => b.userId === user?.id);
   const eligible = !!user && p.eligibleIds.includes(user.id);
   const canRespond = p.status === 'open' && eligible && !myBallot;
   const isOwner = p.createdBy === user?.id || can.manageMeetings(user);
   const overdue = p.deadline && new Date(p.deadline).getTime() < Date.now();
-  const showResults = p.status === 'closed' || myBallot || isOwner;
+  // Nháp (chưa gửi) chưa có ai được xin ý kiến -> không hiện khối kết quả/thống kê
+  const showResults = p.status !== 'draft' && (p.status === 'closed' || myBallot || isOwner);
   const comments = p.ballots.filter((b) => b.comment);
+  const isDraft = p.status === 'draft';
+  const signedCount = p.ballots.filter((b) => b.signature).length;
 
   const act = async (fn: () => Promise<unknown>, msg?: string) => {
     try { await fn(); await refresh(); if (msg) toast(msg); }
     catch (ex) { toast((ex as Error).message, 'error'); }
   };
+
+  const submitPlain = () => act(async () => { await voteService.castBallot(user!, p.id, optionId, comment.trim() || undefined); setComment(''); }, 'Đã gửi ý kiến của bạn');
+  const submitSigned = (pin: string) => act(async () => {
+    await voteService.castBallotSigned(user!, p.id, optionId, comment.trim() || undefined, pin);
+    setComment(''); setSignOpen(false);
+  }, 'Đã ký số & gửi ý kiến của bạn');
 
   return (
     <div className="card card-pad">
@@ -75,15 +101,25 @@ function PollCard({ p, onViewDoc }: { p: Vote; onViewDoc: (docId: string) => voi
           <b style={{ color: 'var(--navy)', fontSize: 15 }}>{p.title}</b>
           {p.description && <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 3 }}>{p.description}</p>}
           <div style={{ display: 'flex', gap: 8, marginTop: 7, flexWrap: 'wrap', alignItems: 'center' }}>
-            <Badge color={p.status === 'open' ? 'green' : 'navy'}>{p.status === 'open' ? 'Đang lấy ý kiến' : 'Đã kết thúc'}</Badge>
-            {p.deadline && (
+            <Badge color={isDraft ? 'gray' : p.status === 'open' ? 'green' : 'navy'}>
+              {isDraft ? 'Nháp — chưa gửi' : p.status === 'open' ? 'Đang lấy ý kiến' : 'Đã kết thúc'}
+            </Badge>
+            {p.deadline && !isDraft && (
               <Badge color={overdue && p.status === 'open' ? 'red' : 'amber'}>
                 Hạn: {fmtDT(p.deadline)}
               </Badge>
             )}
-            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-              {users.get(p.createdBy)?.fullName} gửi {timeAgo(p.createdAt)} · {p.ballots.length}/{p.eligibleIds.length} phản hồi
-            </span>
+            {!isDraft && (
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                {users.get(p.createdBy)?.fullName} gửi {timeAgo(p.createdAt)} · {p.ballots.length}/{p.eligibleIds.length} phản hồi
+                {signedCount > 0 && ` · ${signedCount} ý kiến đã ký số`}
+              </span>
+            )}
+            {p.trackerUserId && (
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                <Icon name="eye" size={12} /> Cán bộ theo dõi: <b>{users.get(p.trackerUserId)?.fullName ?? '—'}</b>
+              </span>
+            )}
           </div>
           {p.documentIds.length > 0 && (
             <div style={{ display: 'flex', gap: 7, marginTop: 8, flexWrap: 'wrap' }}>
@@ -95,6 +131,11 @@ function PollCard({ p, onViewDoc }: { p: Vote; onViewDoc: (docId: string) => voi
             </div>
           )}
         </div>
+        {isOwner && isDraft && (
+          <button className="btn success sm" onClick={() => act(() => voteService.openVote(user!, p.id), 'Đã gửi phiếu lấy ý kiến đến các thành viên')}>
+            <Icon name="send" size={13} />Gửi lấy ý kiến
+          </button>
+        )}
         {isOwner && p.status === 'open' && (
           <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
             {p.ballots.length < p.eligibleIds.length && (
@@ -123,18 +164,24 @@ function PollCard({ p, onViewDoc }: { p: Vote; onViewDoc: (docId: string) => voi
               </label>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input className="inp" placeholder="Nội dung góp ý (không bắt buộc)…" value={comment} onChange={(e) => setComment(e.target.value)} />
-            <button className="btn" disabled={!optionId}
-              onClick={() => act(async () => { await voteService.castBallot(user!, p.id, optionId, comment.trim() || undefined); setComment(''); }, 'Đã gửi ý kiến của bạn')}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input className="inp" style={{ flex: 1, minWidth: 180 }} placeholder="Nội dung góp ý (không bắt buộc)…" value={comment} onChange={(e) => setComment(e.target.value)} />
+            <button className="btn outline" disabled={!optionId} onClick={submitPlain}>
               Gửi ý kiến
             </button>
+            <button className="btn success" disabled={!optionId} onClick={() => setSignOpen(true)} title="Ký số mô phỏng — chờ tích hợp chứng thư số (CA) thật">
+              <Icon name="pen" size={14} />Ký số & gửi ý kiến
+            </button>
           </div>
+          <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>
+            Ký số ở đây là <b>mô phỏng</b> (chưa tích hợp chứng thư số CA thật) — dùng để minh họa quy trình chủ trì/thành viên ký số ý kiến trước khi gửi thư ký tổng hợp.
+          </p>
         </div>
       )}
       {myBallot && (
-        <p style={{ fontSize: 12.5, marginTop: 10, color: 'var(--green)', fontWeight: 600 }}>
+        <p style={{ fontSize: 12.5, marginTop: 10, color: 'var(--green)', fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center' }}>
           ✓ Bạn đã cho ý kiến: {p.options.find((o) => o.id === myBallot.optionId)?.label}
+          {myBallot.signature && <Badge color="green"><Icon name="pen" size={10} /> Đã ký số</Badge>}
         </p>
       )}
       {p.status === 'open' && eligible && !myBallot && p.deadline && (
@@ -154,18 +201,45 @@ function PollCard({ p, onViewDoc }: { p: Vote; onViewDoc: (docId: string) => voi
               {comments.map((b, i) => (
                 <div key={i} className="anno" style={{ marginTop: 6 }}>
                   {b.comment}
-                  <small>{users.get(b.userId)?.fullName} · {timeAgo(b.castAt)}</small>
+                  <small>
+                    {p.secret ? 'Đại biểu (ẩn danh — phiếu kín)' : users.get(b.userId)?.fullName} · {timeAgo(b.castAt)}
+                    {b.signature && !p.secret && <> · <Badge color="green">Đã ký số</Badge></>}
+                  </small>
                 </div>
               ))}
             </div>
           )}
         </div>
       )}
+
+      {signOpen && (
+        <PollSignModal onClose={() => setSignOpen(false)} onSubmit={submitSigned} />
+      )}
     </div>
   );
 }
 
-function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+/** Modal ký số PIN 6 số cho ý kiến văn bản (tái dùng pattern SignModal ký biên bản). */
+function PollSignModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (pin: string) => void }) {
+  const [pin, setPin] = useState('');
+  return (
+    <Modal title="Ký số ý kiến (mô phỏng — chờ tích hợp CA)" onClose={onClose} width={420}
+      footer={<>
+        <button className="btn outline" onClick={onClose}>Hủy</button>
+        <button className="btn success" disabled={pin.length !== 6} onClick={() => onSubmit(pin)}><Icon name="pen" size={15} />Xác nhận ký & gửi</button>
+      </>}>
+      <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
+        Nhập mã PIN 6 chữ số của chứng thư số để ký ý kiến trước khi gửi thư ký tổng hợp.
+        Đây là <b>ký số mô phỏng</b>, chưa tích hợp chứng thư số CA thật (VNPT-CA / Viettel-CA / SmartCA).
+      </p>
+      <input className="inp pin-inp" type="password" maxLength={6} inputMode="numeric" placeholder="••••••"
+        value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} autoFocus />
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>Gợi ý demo: nhập 6 chữ số bất kỳ, ví dụ 123456.</p>
+    </Modal>
+  );
+}
+
+function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: (asDraft: boolean) => void }) {
   const { user, s } = useApp();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -174,10 +248,11 @@ function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: () 
   const [opts, setOpts] = useState(['Nhất trí', 'Nhất trí, có chỉnh sửa bổ sung', 'Không nhất trí']);
   const [ids, setIds] = useState<string[]>(s.users.filter((u) => u.status === 'active' && u.role !== 'admin' && u.id !== user?.id).map((u) => u.id));
   const [docIds, setDocIds] = useState<string[]>([]);
+  const [trackerUserId, setTrackerUserId] = useState('');
   const [err, setErr] = useState('');
   const attachable = s.documents.filter((dx) => dx.kind !== 'personal' || dx.ownerId === user?.id);
 
-  const submit = async () => {
+  const submit = async (asDraft: boolean) => {
     if (!user) return;
     if (!title.trim()) return setErr('Nhập nội dung xin ý kiến');
     if (!ids.length) return setErr('Chọn ít nhất một thành viên');
@@ -186,8 +261,10 @@ function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: () 
         kind: 'poll', title: title.trim(), description: description.trim() || undefined,
         optionLabels: opts, secret: false, deadline: fromLocalInput(deadline),
         documentIds: docIds, eligibleIds: ids,
+        trackerUserId: trackerUserId || undefined,
+        saveAsDraft: asDraft,
       });
-      onDone();
+      onDone(asDraft);
     } catch (ex) { setErr((ex as Error).message); }
   };
 
@@ -196,13 +273,24 @@ function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: () 
       footer={<>
         {err && <span style={{ color: 'var(--red)', fontSize: 13, marginRight: 'auto' }}>{err}</span>}
         <button className="btn outline" onClick={onClose}>Hủy</button>
-        <button className="btn" onClick={submit}><Icon name="send" size={15} />Gửi phiếu</button>
+        <button className="btn outline" onClick={() => submit(true)} title="Lưu để hoàn thiện sau, chưa thông báo thành viên">
+          <Icon name="clock" size={14} />Lưu nháp (chưa gửi)
+        </button>
+        <button className="btn" onClick={() => submit(false)}><Icon name="send" size={15} />Gửi phiếu</button>
       </>}>
       <Field label="Nội dung xin ý kiến" required>
         <input className="inp" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="VD: Lấy ý kiến dự thảo Quyết định…" />
       </Field>
       <Field label="Mô tả"><textarea className="ta" value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
-      <Field label="Hạn cho ý kiến" required><input type="datetime-local" className="inp" value={deadline} onChange={(e) => setDeadline(e.target.value)} /></Field>
+      <div className="form-row">
+        <Field label="Hạn cho ý kiến" required><input type="datetime-local" className="inp" value={deadline} onChange={(e) => setDeadline(e.target.value)} /></Field>
+        <Field label="Cán bộ theo dõi">
+          <select className="sel" value={trackerUserId} onChange={(e) => setTrackerUserId(e.target.value)}>
+            <option value="">— Không chỉ định —</option>
+            {s.users.filter((u) => u.status === 'active').map((u) => <option key={u.id} value={u.id}>{u.fullName} — {u.title}</option>)}
+          </select>
+        </Field>
+      </div>
       <Field label="Phương án trả lời">
         {opts.map((o, i) => (
           <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>

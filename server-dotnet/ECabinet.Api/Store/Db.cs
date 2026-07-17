@@ -27,6 +27,7 @@ public static class Db
         ("catalogs", "c_catalogs"),
         ("guides", "c_guides"),
         ("apiKeys", "c_apikeys"),
+        ("feedbacks", "c_feedbacks"), // P1-6: phản hồi/góp ý người dùng (E-HSMT mục 5.1–5.4)
     };
 
     /// <summary>Tra bảng theo tên collection; null nếu không tồn tại.</summary>

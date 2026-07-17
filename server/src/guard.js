@@ -22,7 +22,8 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 const SCHEMA = {
   // + meetingType (mục 7), currentItemStartedAt (mục 27) — đều string, OPTIONAL
   meetings: { code: 'string', title: 'string', description: 'string', startTime: 'string', endTime: 'string', roomId: 'string', isOnline: 'boolean', status: 'string', chairId: 'string', secretaryId: 'string', participants: 'array', agenda: 'array', currentAgendaItemId: 'string|null', conclusions: 'array', minutes: 'object|null', invitedAt: 'string', questionSession: 'string', seatAssignments: 'object', meetingType: 'string', currentItemStartedAt: 'string' },
-  votes: { kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', title: 'string', description: 'string', options: 'array', ballots: 'array', eligibleIds: 'array', documentIds: 'array', secret: 'boolean', status: 'string', deadline: 'string|null' },
+  // + trackerUserId (P1-5, HSMT dòng 372 "Cán bộ theo dõi") — string, OPTIONAL
+  votes: { kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', title: 'string', description: 'string', options: 'array', ballots: 'array', eligibleIds: 'array', documentIds: 'array', secret: 'boolean', status: 'string', deadline: 'string|null', trackerUserId: 'string' },
   // + issuingBody (mục 10), folder (mục 14) — đều string, OPTIONAL
   documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string', reviewStatus: 'string', reviewNote: 'string', reviewedById: 'string', reviewedAt: 'string', issuingBody: 'string', folder: 'string' },
   annotations: { docId: 'string', content: 'string', isPublic: 'boolean' },
@@ -41,15 +42,36 @@ const SCHEMA = {
   guides: { title: 'string', content: 'string', fileName: 'string', fileData: 'string', roleScope: 'array', updatedAt: 'string' },
   // RỔ B — Khóa API bên thứ 3 (E-HSMT mục 54–59). keyHash/prefix bất biến (guard chặn sửa).
   apiKeys: { name: 'string', prefix: 'string', keyHash: 'string', scopes: 'array', active: 'boolean', createdAt: 'string', createdById: 'string', lastUsedAt: 'string', callCount: 'number', note: 'string' },
+  // P1-6 — Phản hồi/góp ý người dùng (E-HSMT mục 5.1–5.4). userId/unitId do SERVER ép lúc
+  // tạo (index.js) — vẫn kiểm kiểu ở đây để chặn giá trị rác nếu có nơi khác vô tình ghi.
+  feedbacks: { userId: 'string', unitId: 'string|null', category: 'string', content: 'string', status: 'string', response: 'string', handledBy: 'string|null', createdAt: 'string', updatedAt: 'string' },
 };
 
 // Vai trò hợp lệ + trạng thái duyệt tài liệu hợp lệ (chống ghi giá trị rác vào enum)
 const VALID_ROLES = ['admin', 'chairman', 'secretary', 'delegate', 'unit_admin'];
 const VALID_REVIEW = ['draft', 'pending', 'approved', 'rejected'];
-// ĐỢT 3 — loại danh mục hợp lệ (E-HSMT mục 6, 7, 10)
-const VALID_CATALOG_TYPES = ['position', 'meetingType', 'issuingBody'];
+// P1-5 — trạng thái phiếu lấy ý kiến/biểu quyết hợp lệ. 'draft' MỚI (chưa mở, cấm bỏ phiếu).
+const VALID_VOTE_STATUS = ['draft', 'pending', 'open', 'closed'];
+// ĐỢT 3 — loại danh mục hợp lệ (E-HSMT mục 6, 7, 10) + 'docType' (mục 8 — vá QA 18/07)
+const VALID_CATALOG_TYPES = ['position', 'meetingType', 'issuingBody', 'docType'];
+// P1-6 — loại/trạng thái phản hồi người dùng hợp lệ
+const VALID_FEEDBACK_CATEGORY = ['bug', 'feature', 'question', 'other'];
+const VALID_FEEDBACK_STATUS = ['new', 'processing', 'resolved'];
 /** Khóa ghế hợp lệ: chuỗi "số-số" (vd "10-3"). */
 const isSeatKey = (v) => typeof v === 'string' && /^\d+-\d+$/.test(v);
+
+// P1-7 — Whitelist định dạng tệp đính kèm tài liệu theo Phụ lục TT 39/2017/TT-BTTTT
+// (văn bản/bảng tính/trình chiếu văn phòng phổ biến + ảnh + nén — KHÔNG gồm thực thi/script).
+const ALLOWED_FILE_EXT = [
+  'pdf', 'doc', 'docx', 'odt', 'xls', 'xlsx', 'ods', 'csv', 'ppt', 'pptx', 'odp',
+  'txt', 'rtf', 'jpg', 'jpeg', 'png', 'gif', 'tif', 'tiff', 'bmp', 'zip', 'rar',
+];
+/** Phần mở rộng chữ thường của tên tệp; null nếu không có/không phải chuỗi. */
+function extOf(name) {
+  if (typeof name !== 'string') return null;
+  const m = /\.([a-zA-Z0-9]+)$/.exec(name.trim());
+  return m ? m[1].toLowerCase() : null;
+}
 
 function typeOk(val, spec) {
   for (const t of spec.split('|')) {
@@ -63,8 +85,14 @@ function typeOk(val, spec) {
   return false;
 }
 
-/** Kiểm kiểu cho PATCH/POST. Ném 400 khi sai. Áp cho mọi collection. */
-export function validatePatch(col, body) {
+/**
+ * Kiểm kiểu cho PATCH/POST. Ném 400 khi sai. Áp cho mọi collection.
+ * `existing` (P1-7, OPTIONAL): bản ghi HIỆN CÓ khi đây là PATCH (undefined khi POST/tạo
+ * mới) — dùng để suy ra trạng thái HIỆU LỰC (existing + patch) của các trường liên quan
+ * nhau trong 2 field khác nhau (vd documents.name/documents.dataUrl: một PATCH chỉ đổi
+ * `name` — không kèm `dataUrl` — vẫn phải kiểm lại định dạng tệp nếu bản ghi ĐANG CÓ file).
+ */
+export function validatePatch(col, body, existing) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
     throw httpError(400, 'Dữ liệu gửi lên không hợp lệ (phải là đối tượng JSON)');
   }
@@ -141,6 +169,23 @@ export function validatePatch(col, body) {
   if (col === 'documents' && body.reviewStatus !== undefined && !VALID_REVIEW.includes(body.reviewStatus)) {
     throw httpError(400, 'Trạng thái duyệt tài liệu không hợp lệ');
   }
+  // P1-5 — trạng thái phiếu lấy ý kiến/biểu quyết: chỉ nhận enum hợp lệ (gồm 'draft' mới)
+  if (col === 'votes' && body.status !== undefined && !VALID_VOTE_STATUS.includes(body.status)) {
+    throw httpError(400, 'Trạng thái phiếu lấy ý kiến/biểu quyết không hợp lệ');
+  }
+  // P1-7 — TT 39/2017/TT-BTTTT: whitelist định dạng tệp đính kèm tài liệu. Chỉ kiểm khi
+  // BẢN GHI HIỆU LỰC (existing hợp nhất với patch) có file thật (dataUrl là chuỗi khác rỗng)
+  // — tài liệu chỉ có `content` (soạn trực tiếp, không upload) KHÔNG bị áp whitelist này.
+  if (col === 'documents') {
+    const effectiveDataUrl = body.dataUrl !== undefined ? body.dataUrl : existing?.dataUrl;
+    if (typeof effectiveDataUrl === 'string' && effectiveDataUrl) {
+      const effectiveName = body.name !== undefined ? body.name : existing?.name;
+      const ext = extOf(effectiveName);
+      if (!ext || !ALLOWED_FILE_EXT.includes(ext)) {
+        throw httpError(400, `Định dạng tệp không hợp lệ. Định dạng cho phép: ${ALLOWED_FILE_EXT.join(', ')}`);
+      }
+    }
+  }
   // Vai trò người dùng: chỉ nhận 5 vai trò hợp lệ
   if (col === 'users' && body.role !== undefined && !VALID_ROLES.includes(body.role)) {
     throw httpError(400, 'Vai trò người dùng không hợp lệ');
@@ -157,7 +202,7 @@ export function validatePatch(col, body) {
   // ĐỢT 3 — Danh mục chung (E-HSMT mục 6, 7, 10)
   if (col === 'catalogs') {
     if (body.type !== undefined && !VALID_CATALOG_TYPES.includes(body.type)) {
-      throw httpError(400, 'Loại danh mục không hợp lệ (chỉ chức vụ / loại phiên họp / cơ quan ban hành)');
+      throw httpError(400, 'Loại danh mục không hợp lệ (chỉ chức vụ / loại phiên họp / cơ quan ban hành / loại tài liệu)');
     }
     // tên danh mục: khi có mặt PHẢI là chuỗi không rỗng
     if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim())) {
@@ -181,17 +226,34 @@ export function validatePatch(col, body) {
       throw httpError(400, 'Phạm vi (scope) của khóa API không hợp lệ (chỉ meetings / documents)');
     }
   }
+  // P1-6 — Phản hồi/góp ý người dùng: category/status theo enum; nội dung không rỗng
+  if (col === 'feedbacks') {
+    if (body.category !== undefined && !VALID_FEEDBACK_CATEGORY.includes(body.category)) {
+      throw httpError(400, 'Loại phản hồi không hợp lệ (chỉ: lỗi / đề xuất tính năng / câu hỏi / khác)');
+    }
+    if (body.status !== undefined && !VALID_FEEDBACK_STATUS.includes(body.status)) {
+      throw httpError(400, 'Trạng thái phản hồi không hợp lệ');
+    }
+    if (body.content !== undefined && (typeof body.content !== 'string' || !body.content.trim())) {
+      throw httpError(400, 'Nội dung phản hồi không được để trống');
+    }
+  }
 }
 
 /**
  * Trả về patch đã làm sạch cho collection; ném lỗi 403 khi bị cấm hoàn toàn.
+ * `extra` (OPTIONAL): ngữ cảnh bổ sung KHÔNG lấy được chỉ từ existing/patch — hiện chỉ
+ * dùng cho documents: `{ meeting }` — bản ghi phiên họp chứa tài liệu (nạp trước ở
+ * index.js từ `existing.meetingId`) để guardDocuments biết ai là "thành phần phiên"
+ * (P0-3, HSMT dòng 356-358 "Thành viên dự họp thực hiện duyệt").
  */
-export function guardPatch(col, existing, patch, user) {
+export function guardPatch(col, existing, patch, user, extra) {
   if (col === 'votes') return guardVotes(patch, user);
   if (col === 'meetings') return guardMeetings(existing, patch, user);
   if (col === 'questions') return guardQuestions(existing, patch, user);
-  if (col === 'documents') return guardDocuments(existing, patch, user);
+  if (col === 'documents') return guardDocuments(existing, patch, user, extra?.meeting);
   if (col === 'apiKeys') return guardApiKeys(patch);
+  if (col === 'feedbacks') return guardFeedbacks(existing, patch, user, extra?.actorUnitId);
   return patch;
 }
 
@@ -213,14 +275,50 @@ function guardApiKeys(patch) {
 }
 
 /**
- * TÀI LIỆU — siết quy trình trình–duyệt (E-HSMT mục 24):
+ * P0-3 — BYPASS HẸP cho ACL thô `documents.update = 'ownerOrManage'`.
+ * ACL cấp độ collection (acl.js) chạy TRƯỚC guardPatch/guardDocuments; nếu giữ nguyên
+ * 'ownerOrManage', một "Thành viên dự họp" (không phải owner, không phải MANAGE toàn cục)
+ * sẽ bị chặn 403 ngay tại ACL, guardDocuments không bao giờ được gọi tới — vô hiệu hóa
+ * hoàn toàn tính năng P0-3. Thay vì MỞ RỘNG ACL chung (rủi ro: mọi field khác của mọi
+ * tài liệu sẽ bị bất kỳ ai PATCH được, vì guardDocuments hiện KHÔNG hạn chế field ngoài
+ * reviewStatus), ta thêm 1 lối đi HẸP: cho qua ACL CHỈ KHI đúng là 1 yêu cầu DUYỆT hợp lệ
+ * (patch CHỈ chứa reviewStatus/reviewNote — không kèm field khác — chuyển pending ->
+ * approved|rejected, người gọi là thành phần phiên chứa tài liệu, KHÔNG phải owner).
+ * guardDocuments vẫn ĐỘC LẬP kiểm tra lại toàn bộ điều kiện này (defense-in-depth) —
+ * hàm này chỉ quyết định có cho "đi qua cổng ACL" hay không.
+ */
+export function canReviewDocumentAsMeetingMember(doc, patch, user, meeting) {
+  if (!meeting) return false;
+  if (doc.ownerId === user.sub) return false; // owner không được lách qua đường này
+  const isMember = user.sub === meeting.chairId
+    || user.sub === meeting.secretaryId
+    || (meeting.participants ?? []).some((p) => p.userId === user.sub);
+  if (!isMember) return false;
+  const allowedKeys = new Set(['reviewStatus', 'reviewNote']);
+  if (!Object.keys(patch).every((k) => allowedKeys.has(k))) return false; // không cho lách sửa field khác kèm theo
+  const cur = doc.reviewStatus ?? 'approved';
+  return cur === 'pending' && (patch.reviewStatus === 'approved' || patch.reviewStatus === 'rejected');
+}
+
+/**
+ * TÀI LIỆU — siết quy trình trình–duyệt (E-HSMT mục 24; P0-3 HSMT dòng 356-358):
  * - Người trình (owner) KHÔNG được tự approve. Chỉ chuyển draft/rejected -> pending.
- * - Quản lý (chủ trì/thư ký/admin) duyệt: pending -> approved | rejected.
+ * - Duyệt pending -> approved|rejected: quản lý (chủ trì/thư ký/admin) TOÀN HỆ THỐNG,
+ *   HOẶC bất kỳ ai là THÀNH PHẦN của CHÍNH phiên họp chứa tài liệu này (chủ trì/thư ký/
+ *   participant của `meeting` — tra theo `existing.meetingId`, KHÔNG mở cho "delegate"
+ *   toàn hệ thống một cách chung — đúng nghĩa "Thành viên dự họp thực hiện duyệt").
+ *   Tài liệu KHÔNG gắn phiên họp (meetingId null, vd tài liệu tham khảo/cá nhân) chỉ
+ *   quản lý mới duyệt được (không có "phiên" để làm thành phần).
  * - reviewedById/reviewedAt do SERVER quyết định, không tin client.
  * Vi phạm chuyển trạng thái -> 403 (phản hồi rõ ràng, không âm thầm bỏ qua).
  */
-function guardDocuments(existing, patch, user) {
+function guardDocuments(existing, patch, user, meeting) {
   const isManage = MANAGE.includes(user.role);
+  const isMeetingMember = !!meeting && (
+    user.sub === meeting.chairId
+    || user.sub === meeting.secretaryId
+    || (meeting.participants ?? []).some((p) => p.userId === user.sub)
+  );
   const p = { ...patch };
   // các trường vết duyệt do server ghi (qua service) — chặn client tự đặt tùy tiện
   // (service phía máy chủ không có; client REST gửi trọn gói nên ta chuẩn hóa tại đây)
@@ -229,8 +327,13 @@ function guardDocuments(existing, patch, user) {
   if (p.reviewStatus !== undefined && p.reviewStatus !== cur) {
     const isOwner = existing.ownerId === user.sub;
     const allowedOwner = isOwner && (cur === 'draft' || cur === 'rejected') && p.reviewStatus === 'pending';
-    const allowedManage = isManage && cur === 'pending' && (p.reviewStatus === 'approved' || p.reviewStatus === 'rejected');
-    if (!allowedOwner && !allowedManage) {
+    // QUAN TRỌNG: !isOwner — người trình KHÔNG được tự duyệt tài liệu CỦA CHÍNH MÌNH dù
+    // họ CÓ là thành phần phiên họp đó (vd owner vừa là participant vừa là người trình) —
+    // nếu không chặn riêng, "cùng phiên" sẽ vô tình mở lại đúng lỗ hổng "tự duyệt" mà
+    // allowedOwner phía trên đang ngăn.
+    const allowedApprover = (isManage || isMeetingMember) && !isOwner && cur === 'pending'
+      && (p.reviewStatus === 'approved' || p.reviewStatus === 'rejected');
+    if (!allowedOwner && !allowedApprover) {
       throw httpError(403, 'Không được chuyển trạng thái duyệt tài liệu như vậy');
     }
     if (p.reviewStatus === 'rejected') {
@@ -238,8 +341,8 @@ function guardDocuments(existing, patch, user) {
       if (!note) throw httpError(400, 'Phải nhập lý do khi từ chối tài liệu');
       p.reviewNote = note.slice(0, 2000);
     }
-    // ghi vết duyệt phía server khi là hành động duyệt/từ chối của quản lý
-    if (allowedManage) {
+    // ghi vết duyệt phía server khi là hành động duyệt/từ chối (quản lý HOẶC thành phần phiên)
+    if (allowedApprover) {
       p.reviewedById = user.sub;
       p.reviewedAt = new Date().toISOString();
       if (p.reviewStatus === 'approved') p.reviewNote = undefined;
@@ -286,6 +389,35 @@ function guardQuestions(existing, patch, user) {
   if (existing.status !== 'pending' && (p.topic !== undefined || p.content !== undefined || p.targetName !== undefined)) {
     throw httpError(403, 'Chỉ sửa được nội dung chất vấn khi đang chờ gọi');
   }
+  return p;
+}
+
+/**
+ * P1-6 — PHẢN HỒI/GÓP Ý NGƯỜI DÙNG (E-HSMT mục 5.1–5.4), vá QA 18/07:
+ * - status/response/handledBy: admin (toàn hệ thống) HOẶC unit_admin với phản hồi
+ *   TRONG ĐƠN VỊ MÌNH (actorUnitId đọc từ DB tại index.js — JWT không mang unitId;
+ *   đúng vai trò HSMT "Quản trị đơn vị: nhận & phân phối yêu cầu"). KHÔNG áp dụng
+ *   cho secretary/chairman dù họ thuộc nhóm MANAGE ở các collection khác.
+ * - Người KHÔNG phải người xử lý: chỉ sửa được phản hồi CỦA CHÍNH MÌNH (userId === sub),
+ *   và KHÔNG được đụng userId/unitId (danh tính/phạm vi do server ép lúc tạo, bất biến).
+ * - Người xử lý: khi đặt handledBy, SERVER ép = chính người đang xử lý (không tin client
+ *   khai người xử lý là ai khác); cũng không cho đổi userId (danh tính người gửi gốc).
+ */
+function guardFeedbacks(existing, patch, user, actorUnitId) {
+  const p = { ...patch };
+  const isHandler = user.role === 'admin'
+    || (user.role === 'unit_admin' && existing.unitId != null && existing.unitId === actorUnitId);
+  if (!isHandler) {
+    if (p.status !== undefined || p.response !== undefined || p.handledBy !== undefined) {
+      throw httpError(403, 'Chỉ Quản trị hệ thống hoặc Quản trị đơn vị (trong đơn vị mình) được cập nhật trạng thái/phản hồi góp ý');
+    }
+    if (existing.userId !== user.sub) {
+      throw httpError(403, 'Bạn không được sửa phản hồi của người khác');
+    }
+  }
+  delete p.userId; // danh tính người gửi: bất biến, không cho đổi qua PATCH (admin hay không)
+  delete p.unitId; // phạm vi đơn vị: server ép lúc tạo, bất biến
+  if (p.handledBy !== undefined) p.handledBy = user.sub; // server ép người xử lý = chính người đang PATCH
   return p;
 }
 

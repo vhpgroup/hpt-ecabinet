@@ -75,6 +75,7 @@ export default function MainLayout() {
           <NavLink to="/tasks" className={linkCls}><ColorIcon name="clipboard" />Nhiệm vụ sau họp</NavLink>
           <div className="sb-group">Tiện ích</div>
           <NavLink to="/help" className={linkCls}><ColorIcon name="book" />Hướng dẫn sử dụng</NavLink>
+          <NavLink to="/support" className={linkCls}><ColorIcon name="question" />Hỗ trợ & Phản hồi</NavLink>
           {user?.role === 'admin' && (
             <>
               <div className="sb-group">Quản trị hệ thống</div>
@@ -86,13 +87,24 @@ export default function MainLayout() {
               <NavLink to="/admin/api" className={linkCls}><ColorIcon name="share" />API & Tích hợp</NavLink>
               <NavLink to="/admin/audit" className={linkCls}><ColorIcon name="list" />Nhật ký hệ thống</NavLink>
               <NavLink to="/admin/reports" className={linkCls}><ColorIcon name="chart" />Báo cáo thống kê</NavLink>
+              <NavLink to="/support-admin" className={linkCls}><ColorIcon name="question" />Hỗ trợ & Phản hồi</NavLink>
             </>
           )}
-          {/* Quản trị đơn vị (E-HSMT vai trò thứ 5): CHỈ quản lý người dùng trong đơn vị mình */}
+          {/* Chủ trì/Thư ký: xem báo cáo thống kê (bao gồm thống kê ý kiến văn bản) — không cần vào
+              phân hệ admin. Xử lý phản hồi thuộc admin + quản trị đơn vị (guardFeedbacks, vá QA 18/07). */}
+          {(user?.role === 'chairman' || user?.role === 'secretary') && (
+            <>
+              <div className="sb-group">Báo cáo</div>
+              <NavLink to="/admin/reports" className={linkCls}><ColorIcon name="chart" />Báo cáo thống kê</NavLink>
+            </>
+          )}
+          {/* Quản trị đơn vị (E-HSMT vai trò thứ 5): quản lý người dùng trong đơn vị mình
+              + xử lý phản hồi TRONG ĐƠN VỊ MÌNH (HSMT "nhận & phân phối yêu cầu"). */}
           {user?.role === 'unit_admin' && (
             <>
               <div className="sb-group">Quản trị đơn vị</div>
               <NavLink to="/admin/users" className={linkCls}><ColorIcon name="settings" />Người dùng đơn vị</NavLink>
+              <NavLink to="/support-admin" className={linkCls}><ColorIcon name="question" />Xử lý Hỗ trợ & Phản hồi</NavLink>
             </>
           )}
         </nav>

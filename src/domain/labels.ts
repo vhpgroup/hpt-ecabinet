@@ -1,11 +1,22 @@
 // Nhãn tiếng Việt + màu trạng thái dùng chung toàn hệ thống
-import type { AttendStatus, CatalogType, MeetingStatus, QuestionStatus, Role, VoteStatus } from './types';
+import type {
+  AttendStatus, CatalogType, FeedbackCategory, FeedbackStatus, MeetingStatus,
+  QuestionStatus, Role, UnitAdminType, VoteStatus,
+} from './types';
 
-// Nhãn 3 loại danh mục chung (E-HSMT mục 6, 7, 10)
+// Nhãn 4 loại danh mục chung (E-HSMT mục 6, 7, 8, 10)
 export const CATALOG_TYPE: Record<CatalogType, { label: string; labelPlural: string }> = {
   position: { label: 'Chức vụ', labelPlural: 'Danh mục chức vụ' },
   meetingType: { label: 'Loại phiên họp', labelPlural: 'Danh mục loại phiên họp' },
   issuingBody: { label: 'Cơ quan ban hành', labelPlural: 'Danh mục cơ quan ban hành' },
+  docType: { label: 'Loại tài liệu', labelPlural: 'Danh mục loại tài liệu' },
+};
+
+// Nhãn loại đơn vị hành chính (bối cảnh xã/phường/đặc khu TP Hải Phòng)
+export const UNIT_ADMIN_TYPE: Record<UnitAdminType, { label: string; color: string }> = {
+  xa: { label: 'Xã', color: 'green' },
+  phuong: { label: 'Phường', color: 'blue' },
+  dac_khu: { label: 'Đặc khu', color: 'purple' },
 };
 
 export const ROLE_LABEL: Record<Role, string> = {
@@ -32,10 +43,35 @@ export const ATTEND_STATUS: Record<AttendStatus, { label: string; color: string 
 };
 
 export const VOTE_STATUS: Record<VoteStatus, { label: string; color: string }> = {
+  draft: { label: 'Nháp — chưa gửi', color: 'gray' },
   pending: { label: 'Chưa mở', color: 'gray' },
   open: { label: 'Đang mở', color: 'green' },
   closed: { label: 'Đã đóng', color: 'navy' },
 };
+
+// Phân loại phản hồi/góp ý người dùng (HSMT tiêu chí 5.1–5.4)
+export const FEEDBACK_CATEGORY: Record<FeedbackCategory, string> = {
+  bug: 'Báo lỗi',
+  feature: 'Đề xuất tính năng',
+  question: 'Câu hỏi/hỗ trợ',
+  other: 'Khác',
+};
+
+export const FEEDBACK_STATUS: Record<FeedbackStatus, { label: string; color: string }> = {
+  new: { label: 'Mới', color: 'amber' },
+  processing: { label: 'Đang xử lý', color: 'blue' },
+  resolved: { label: 'Đã trả lời', color: 'green' },
+};
+
+/**
+ * Thông tin kênh hỗ trợ (HSMT mục 5.2 "phương thức ghi nhận ý kiến người dùng":
+ * in-app, hotline, email). Hằng số tĩnh — cập nhật tại đây khi có số/địa chỉ thật.
+ */
+export const SUPPORT_CHANNELS = {
+  hotline: { label: 'Tổng đài hỗ trợ (giờ hành chính)', value: '1900 xxxx' },
+  hotlineAdmin: { label: 'Hỗ trợ quản trị hệ thống (24/7)', value: '0912 000 001' },
+  email: { label: 'Email hỗ trợ', value: 'hotro.ecabinet@hpt.tech' },
+} as const;
 
 // Trạng thái lượt đăng ký chất vấn (E-HSMT mục 34/45/46)
 export const QUESTION_STATUS: Record<QuestionStatus, { label: string; color: string }> = {

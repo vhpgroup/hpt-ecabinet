@@ -2,9 +2,10 @@
 // BIỂU QUYẾT (trong họp) & PHIẾU LẤY Ý KIẾN (ngoài họp)
 // ============================================================
 import { db } from '../data/db';
-import { uid, type PassThreshold, type User, type Vote, type VoteKind, type VoteStatus } from '../domain/types';
+import { uid, type Ballot, type PassThreshold, type User, type Vote, type VoteKind, type VoteStatus } from '../domain/types';
 import { audit } from './adminService';
 import { notify } from './notificationService';
+import { sha256Hex } from './sha256';
 
 const nowIso = () => new Date().toISOString();
 
@@ -25,11 +26,21 @@ export interface VoteDraft {
   approveOptionIndex?: number;
   /** Chỉ số phương án "Ý kiến khác/Phiếu trắng" (không bắt buộc) */
   abstainOptionIndex?: number;
+  /** Cán bộ theo dõi (E-HSMT dòng 372, chỉ có nghĩa với kind='poll'). OPTIONAL. */
+  trackerUserId?: string;
+  /**
+   * E-HSMT mục 13 "Lưu nháp (chưa gửi)": chỉ áp dụng cho kind='poll'.
+   * true  -> tạo ở trạng thái 'draft' (chưa gửi, chưa thông báo thành viên).
+   * false/undefined -> giữ hành vi CŨ: poll mở ngay ('open'), vote chờ mở ('pending').
+   */
+  saveAsDraft?: boolean;
 }
 
 export async function createVote(actor: User, draft: VoteDraft): Promise<Vote> {
   const options = draft.optionLabels.filter(Boolean).map((label, i) => ({ id: 'o' + (i + 1), label }));
   const approveIdx = draft.approveOptionIndex ?? 0;
+  const isDraftPoll = draft.kind === 'poll' && draft.saveAsDraft === true;
+  const status: VoteStatus = isDraftPoll ? 'draft' : draft.kind === 'poll' ? 'open' : 'pending';
   const vote: Vote = {
     id: uid(),
     kind: draft.kind,
@@ -39,26 +50,27 @@ export async function createVote(actor: User, draft: VoteDraft): Promise<Vote> {
     description: draft.description,
     options,
     secret: draft.secret,
-    status: draft.kind === 'poll' ? 'open' : 'pending',
+    status,
     deadline: draft.deadline,
     documentIds: draft.documentIds,
     ballots: [],
     eligibleIds: draft.eligibleIds,
     createdBy: actor.id,
     createdAt: nowIso(),
-    openedAt: draft.kind === 'poll' ? nowIso() : undefined,
+    openedAt: status === 'open' ? nowIso() : undefined,
     // ngưỡng thông qua + phương án tán thành/ý kiến khác
     passThreshold: draft.passThreshold ?? 'majority',
     approveOptionId: options[approveIdx]?.id ?? options[0]?.id,
     abstainOptionId: draft.abstainOptionIndex != null ? options[draft.abstainOptionIndex]?.id : undefined,
+    trackerUserId: draft.trackerUserId || undefined,
   };
   await db.votes.create(vote);
-  if (vote.kind === 'poll') {
+  if (vote.kind === 'poll' && status === 'open') {
     await notify(vote.eligibleIds.filter((x) => x !== actor.id), 'Phiếu lấy ý kiến mới',
       `Đề nghị cho ý kiến: "${vote.title}"${vote.deadline ? ` — hạn ${new Date(vote.deadline).toLocaleString('vi-VN')}` : ''}.`,
       'poll', '#/polls');
   }
-  await audit(actor, vote.kind === 'poll' ? 'Tạo phiếu lấy ý kiến' : 'Tạo biểu quyết', `"${vote.title}"`);
+  await audit(actor, vote.kind === 'poll' ? (isDraftPoll ? 'Lưu nháp phiếu lấy ý kiến' : 'Tạo phiếu lấy ý kiến') : 'Tạo biểu quyết', `"${vote.title}"`);
   return vote;
 }
 
@@ -66,9 +78,11 @@ export async function openVote(actor: User, voteId: string) {
   // GĐ4 — chế độ máy chủ: endpoint nghiệp vụ kiểm tra sâu + tự thông báo/audit
   if (db.action) { await db.action(`/vote/${voteId}/open`); return; }
   const v = await db.votes.update(voteId, { status: 'open', openedAt: nowIso() });
-  await notify(v.eligibleIds, 'Biểu quyết đang mở', `Biểu quyết "${v.title}" đang chờ ý kiến của bạn.`, 'vote',
+  await notify(v.eligibleIds, v.kind === 'poll' ? 'Phiếu lấy ý kiến mới' : 'Biểu quyết đang mở',
+    v.kind === 'poll' ? `Đề nghị cho ý kiến: "${v.title}"${v.deadline ? ` — hạn ${new Date(v.deadline).toLocaleString('vi-VN')}` : ''}.` : `Biểu quyết "${v.title}" đang chờ ý kiến của bạn.`,
+    v.kind === 'poll' ? 'poll' : 'vote',
     v.meetingId ? `#/meetings/${v.meetingId}/live` : '#/polls');
-  await audit(actor, 'Mở biểu quyết', `Mở "${v.title}"`);
+  await audit(actor, v.kind === 'poll' ? 'Gửi phiếu lấy ý kiến' : 'Mở biểu quyết', `${v.kind === 'poll' ? 'Gửi' : 'Mở'} "${v.title}"`);
 }
 
 export async function closeVote(actor: User, voteId: string) {
@@ -88,6 +102,35 @@ export async function castBallot(actor: User, voteId: string, optionId: string, 
   await db.votes.update(voteId, {
     ballots: [...v.ballots, { userId: actor.id, optionId, comment, castAt: nowIso() }],
   });
+}
+
+/**
+ * Ký số & gửi ý kiến (E-HSMT mục 30 + quy trình lấy ý kiến văn bản, dòng 373).
+ * Mô phỏng — CHƯA tích hợp CA thật (khớp mức mô phỏng của ký biên bản).
+ * Chế độ demo: tự tính SHA-256 trên voteId|userId|optionId|comment (sha256.ts sẵn có),
+ * serial ngẫu nhiên theo cùng khuôn mẫu ký biên bản.
+ * Chế độ REST: gửi kèm signPin trong action ballot — server tự tính, không client-side.
+ */
+export async function castBallotSigned(actor: User, voteId: string, optionId: string, comment: string | undefined, signPin: string) {
+  if (!/^\d{6}$/.test(signPin)) throw new Error('Mã PIN ký số phải gồm 6 chữ số');
+  // GĐ4 — chế độ máy chủ: gửi thêm signPin, server tự tính chữ ký (không tin client)
+  if (db.action) { await db.action(`/vote/${voteId}/ballot`, { optionId, comment, signPin }); return; }
+  const v = await db.votes.get(voteId);
+  if (!v) throw new Error('Không tìm thấy nội dung biểu quyết');
+  if (v.status !== 'open') throw new Error('Nội dung này chưa mở hoặc đã đóng biểu quyết');
+  if (!v.eligibleIds.includes(actor.id)) throw new Error('Bạn không thuộc thành phần biểu quyết');
+  if (v.ballots.some((b) => b.userId === actor.id)) throw new Error('Bạn đã cho ý kiến nội dung này');
+  const castAt = nowIso();
+  const hash = sha256Hex(`${voteId}|${actor.id}|${optionId}|${comment ?? ''}`);
+  const signature = {
+    signedAt: castAt,
+    serialNumber: `VN-DEMO-CA:${Math.floor(1000 + Math.random() * 9000)}:${Math.random().toString(16).slice(2, 8)}`,
+    hash,
+    signerName: actor.fullName,
+  };
+  const ballot: Ballot = { userId: actor.id, optionId, comment, castAt, signature };
+  await db.votes.update(voteId, { ballots: [...v.ballots, ballot] });
+  await audit(actor, 'Ký số & gửi ý kiến', `Ký số ý kiến "${v.title}" (serial ${signature.serialNumber})`);
 }
 
 /** VNPT: "Nhắc quá hạn cho ý kiến" — gửi nhắc những người chưa phản hồi */
@@ -189,7 +232,8 @@ export function voteOutcome(v: Vote): VoteOutcome {
   const approvePercentOfEligible = total > 0 ? Math.round((approve / total) * 100) : 0;
 
   let label: string;
-  if (v.status === 'pending') label = 'Chưa đủ điều kiện';
+  if (v.status === 'draft') label = 'Nháp — chưa gửi';
+  else if (v.status === 'pending') label = 'Chưa đủ điều kiện';
   else if (v.status === 'open') label = 'Đang biểu quyết';
   else label = approved ? 'Thông qua' : 'Không thông qua'; // closed
 
@@ -227,4 +271,73 @@ export function voteSummaryLine(v: Vote, withOutcome = false): string {
   const rs = voteResults(v);
   const parts = rs.map((r) => `${r.label}: ${r.count}`).join('; ');
   return `- ${v.title}: ${parts} (tổng ${v.ballots.length}/${v.eligibleIds.length} phiếu)`;
+}
+
+// ============================================================
+// THỐNG KÊ Ý KIẾN VĂN BẢN (E-HSMT mục 48/53, mobile 92/97) — hàm THUẦN.
+// Tổng hợp theo TỪNG văn bản xin ý kiến (poll) trong khoảng thời gian, dùng
+// cho trang Thống kê ý kiến văn bản (biểu đồ + xuất CSV).
+// ============================================================
+
+export interface PollStatRow {
+  voteId: string;
+  title: string;
+  createdAt: string;
+  deadline?: string;
+  status: VoteStatus;
+  totalEligible: number;
+  responded: number;
+  notResponded: number;
+  responseRatePercent: number;
+  /** phân bố theo phương án trả lời — dùng cho BarChart/Donut */
+  optionBreakdown: { label: string; value: number }[];
+}
+
+/**
+ * Lọc phiếu lấy ý kiến (kind='poll') theo khoảng thời gian tạo [from, to] (ISO, inclusive)
+ * rồi dựng dòng thống kê cho từng phiếu. from/to bỏ trống = không giới hạn.
+ */
+export function pollStatsInRange(votes: Vote[], from?: string, to?: string): PollStatRow[] {
+  const fromMs = from ? new Date(from).getTime() : -Infinity;
+  // to là ngày (không giờ) -> lấy hết ngày đó
+  const toMs = to ? new Date(to).setHours(23, 59, 59, 999) : Infinity;
+  return votes
+    .filter((v) => v.kind === 'poll')
+    .filter((v) => {
+      const t = new Date(v.createdAt).getTime();
+      return t >= fromMs && t <= toMs;
+    })
+    .map((v) => {
+      const total = v.eligibleIds.length;
+      const responded = v.ballots.length;
+      return {
+        voteId: v.id,
+        title: v.title,
+        createdAt: v.createdAt,
+        deadline: v.deadline,
+        status: v.status,
+        totalEligible: total,
+        responded,
+        notResponded: Math.max(0, total - responded),
+        responseRatePercent: total > 0 ? Math.round((responded / total) * 100) : 0,
+        optionBreakdown: voteResults(v).map((r) => ({ label: r.label, value: r.count })),
+      };
+    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** Tổng hợp toàn cục (nhiều văn bản) theo tháng — dùng cho BarChart xu hướng theo thời gian. */
+export function pollStatsByMonth(rows: PollStatRow[]): { label: string; value: number }[] {
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    const d = new Date(r.createdAt);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    map.set(key, (map.get(key) ?? 0) + 1);
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([key, value]) => {
+      const [, mm] = key.split('-');
+      return { label: `T${Number(mm)}`, value };
+    });
 }

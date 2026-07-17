@@ -22,7 +22,7 @@ import { hashPassword, requireAuth, requireAdmin, signToken, verifyPassword } fr
 import { COLLECTIONS, initDb, query, seedIfEmpty } from './db.js';
 import { attachRealtime, broadcast, clientCount } from './ws.js';
 import { registerActions } from './actions.js';
-import { guardPatch, validatePatch } from './guard.js';
+import { canReviewDocumentAsMeetingMember, guardPatch, validatePatch } from './guard.js';
 import { filterList, readOne } from './access.js';
 import { ACL, MANAGE, allowed } from './acl.js';
 import { clientIp, hit } from './ratelimit.js';
@@ -113,6 +113,34 @@ async function enforceUserWrite(req, op, existing, body) {
     // (a)(d) người dùng mới phải thuộc đơn vị mình (đọc từ body nhưng ràng buộc === myUnit)
     if (body.unitId !== myUnit) {
       return { status: 403, error: 'Chỉ được tạo người dùng trong đơn vị của mình' };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * P0-2 — KIỂM TRA SÂU khi QUẢN TRỊ ĐƠN VỊ (unit_admin) TẠO phiên họp (HSMT dòng 354-355:
+ * "Quản trị đơn vị nhập thông tin cuộc họp trên hệ thống"). Meeting KHÔNG có field unitId
+ * riêng — "đơn vị của phiên" suy ra từ đơn vị của chủ trì/thư ký (giống Open API/access.js).
+ * An ninh: unitId của unit_admin ĐỌC TỪ DB (không tin body); chairId/secretaryId GỬI LÊN
+ * cũng phải tra unitId THẬT của người đó từ DB (không tin nhãn/role trong body).
+ * admin/secretary/chairman: bỏ qua (đã được ACL cho tạo tự do như trước — không đổi hành vi).
+ * Chỉ áp cho op 'create' — PHẠM VI P0-2 không mở rộng quyền SỬA meeting cho unit_admin
+ * (xem báo cáo dev-backend.md mục "rủi ro còn lại").
+ */
+async function enforceMeetingWrite(req, op, body) {
+  if (req.user.role !== 'unit_admin' || op !== 'create') return { ok: true };
+  const self = await getExisting('c_users', req.user.sub);
+  const myUnit = self?.unitId;
+  if (!myUnit) return { status: 403, error: 'Không xác định được đơn vị của bạn' };
+  const chair = body.chairId ? await getExisting('c_users', body.chairId) : null;
+  if (!chair || chair.unitId !== myUnit) {
+    return { status: 403, error: 'Chủ trì phiên họp phải thuộc đơn vị của bạn' };
+  }
+  if (body.secretaryId) {
+    const sec = await getExisting('c_users', body.secretaryId);
+    if (!sec || sec.unitId !== myUnit) {
+      return { status: 403, error: 'Thư ký phiên họp phải thuộc đơn vị của bạn' };
     }
   }
   return { ok: true };
@@ -350,6 +378,19 @@ app.add('POST', '/api/:collection', requireAuth, async (req, res) => {
     const chk = await enforceUserWrite(req, 'create', null, body);
     if (!chk.ok) return send(res, chk.status, { error: chk.error });
   }
+  // P0-2: quản trị đơn vị tạo phiên họp — chủ trì/thư ký PHẢI thuộc đơn vị mình
+  if (col === 'meetings') {
+    const chk = await enforceMeetingWrite(req, 'create', body);
+    if (!chk.ok) return send(res, chk.status, { error: chk.error });
+  }
+  // P1-6 — Phản hồi/góp ý: SERVER ép danh tính người gửi + phạm vi đơn vị (KHÔNG tin
+  // client) — chống giả danh gửi hộ người khác hoặc gán nhầm/lách phạm vi đơn vị.
+  if (col === 'feedbacks') {
+    body.userId = req.user.sub;
+    const self = await getExisting('c_users', req.user.sub);
+    body.unitId = self?.unitId ?? null;
+    if (body.status === undefined) body.status = 'new';
+  }
   validatePatch(col, body); // GĐ6 (P0-2): chặn kiểu sai ngay khi tạo
   try {
     if (col === 'users') {
@@ -379,7 +420,16 @@ app.add('PATCH', '/api/:collection/:id', requireAuth, async (req, res) => {
   const existing = await getExisting(table, req.params.id);
   if (!existing) return send(res, 404, { error: 'Không tìm thấy bản ghi' });
   let patch = (await readBody(req)) ?? {};
-  if (!allowed(ACL[col].update, req, existing, patch)) {
+  let aclOk = allowed(ACL[col].update, req, existing, patch);
+  // P0-3: tài liệu — ACL thô 'ownerOrManage' sẽ chặn "Thành viên dự họp" (không phải
+  // owner/MANAGE) TRƯỚC KHI guardDocuments có cơ hội chạy. Mở lối đi HẸP: cho qua ACL
+  // NẾU đây đúng là 1 yêu cầu DUYỆT hợp lệ của thành phần phiên (xem canReviewDocumentAsMeetingMember).
+  let meetingForDocs;
+  if (!aclOk && col === 'documents' && existing.meetingId) {
+    meetingForDocs = await getExisting('c_meetings', existing.meetingId);
+    aclOk = canReviewDocumentAsMeetingMember(existing, patch, req.user, meetingForDocs);
+  }
+  if (!aclOk) {
     return send(res, 403, { error: 'Bạn không có quyền cập nhật bản ghi này' });
   }
   // Quản trị đơn vị: kiểm tra sâu phạm vi đơn vị khi sửa người dùng (đọc unitId từ DB)
@@ -387,9 +437,22 @@ app.add('PATCH', '/api/:collection/:id', requireAuth, async (req, res) => {
     const chk = await enforceUserWrite(req, 'update', existing, patch);
     if (!chk.ok) return send(res, chk.status, { error: chk.error });
   }
-  validatePatch(col, patch); // GĐ6 (P0-2): chặn kiểu sai trước khi ghi (tránh hỏng bản ghi + sập 500)
+  validatePatch(col, patch, existing); // GĐ6 (P0-2)/P1-7: chặn kiểu sai + định dạng tệp trước khi ghi
+  // P0-3: tài liệu gắn phiên họp — nạp phiên đó (tái dùng nếu đã nạp ở bước ACL trên) để
+  // guardDocuments biết ai là "thành phần phiên" được phép duyệt, không chỉ MANAGE toàn cục.
+  // guardDocuments ĐỘC LẬP kiểm tra lại toàn bộ điều kiện (defense-in-depth, không chỉ tin ACL).
+  let extra;
+  if (col === 'documents' && existing.meetingId) {
+    extra = { meeting: meetingForDocs ?? (await getExisting('c_meetings', existing.meetingId)) };
+  }
+  // P1-6 (vá QA 18/07): Quản trị đơn vị xử lý phản hồi TRONG ĐƠN VỊ MÌNH — unitId của
+  // người gọi đọc từ DB (JWT không mang unitId); guardFeedbacks đối chiếu existing.unitId.
+  if (col === 'feedbacks' && req.user.role === 'unit_admin') {
+    const self = await getExisting('c_users', req.user.sub);
+    extra = { actorUnitId: self?.unitId ?? null };
+  }
   // GĐ4: khóa cứng trường nhạy cảm — chỉ đổi được qua /api/actions
-  patch = guardPatch(col, existing, patch, req.user);
+  patch = guardPatch(col, existing, patch, req.user, extra);
 
   if (col === 'users') {
     // đại biểu thường tự sửa hồ sơ: KHÔNG được đổi vai trò/trạng thái/tên đăng nhập.

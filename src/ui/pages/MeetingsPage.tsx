@@ -23,6 +23,7 @@ export default function MeetingsPage() {
   const nav = useNavigate();
   const [filter, setFilter] = useState('all');
   const [q, setQ] = useState('');
+  const [unitFilter, setUnitFilter] = useState(''); // E-HSMT mục 21/68: lọc theo đơn vị chủ trì
   const [showForm, setShowForm] = useState(false);
   const rooms = indexBy(s.rooms);
   const users = indexBy(s.users);
@@ -33,12 +34,14 @@ export default function MeetingsPage() {
     if (filter === 'live') arr = arr.filter((m) => m.status === 'live');
     if (filter === 'finished') arr = arr.filter((m) => m.status === 'finished');
     if (filter === 'mine') arr = arr.filter((m) => m.participants.some((p) => p.userId === user?.id));
+    // đơn vị chủ trì = đơn vị của người chủ trì (chairId) phiên họp
+    if (unitFilter) arr = arr.filter((m) => users.get(m.chairId)?.unitId === unitFilter);
     if (q.trim()) {
       const k = q.trim().toLowerCase();
       arr = arr.filter((m) => (m.title + ' ' + m.code + ' ' + m.description).toLowerCase().includes(k));
     }
     return arr.sort((a, b) => b.startTime.localeCompare(a.startTime));
-  }, [s.meetings, filter, q, user]);
+  }, [s.meetings, filter, q, user, unitFilter, users]);
 
   return (
     <div>
@@ -55,6 +58,11 @@ export default function MeetingsPage() {
         {FILTERS.map((f) => (
           <button key={f.key} className={'btn sm' + (filter === f.key ? '' : ' outline')} onClick={() => setFilter(f.key)}>{f.label}</button>
         ))}
+        {/* E-HSMT mục 21/68: lọc theo đơn vị chủ trì */}
+        <select className="sel" style={{ maxWidth: 220 }} value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)} title="Lọc theo đơn vị chủ trì">
+          <option value="">— Mọi đơn vị chủ trì —</option>
+          {[...s.units].sort((a, b) => a.order - b.order).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select>
         <div className="search-box" style={{ marginLeft: 'auto', minWidth: 240 }}>
           <Icon name="search" size={15} />
           <input className="inp" placeholder="Tìm theo tên, mã phiên họp…" value={q} onChange={(e) => setQ(e.target.value)} />

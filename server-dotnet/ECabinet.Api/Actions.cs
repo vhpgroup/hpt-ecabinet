@@ -25,6 +25,28 @@ public sealed class Actions
         return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(t))).ToLowerInvariant();
     }
 
+    // P0-4 — Mã PIN ký số ý kiến văn bản (ballot): CHUỖI ĐÚNG 6 CHỮ SỐ (field riêng
+    // `signPin`, tách biệt nghiệp vụ ký ballot khỏi ký biên bản họp `pin`).
+    private static readonly System.Text.RegularExpressions.Regex SignPinRe = new(@"^\d{6}$");
+
+    /// <summary>
+    /// P0-4 — Chữ ký mô phỏng gắn vào 1 ballot. hash = SHA-256(voteId|userId|optionId|comment)
+    /// TÍNH TẠI SERVER (không tin client). serialNumber sinh ngẫu nhiên CÙNG khuôn dạng chữ
+    /// ký biên bản họp hiện có (VN-DEMO-CA:&lt;4 số&gt;:&lt;6 hex&gt;) — mô phỏng.
+    /// </summary>
+    private static JsonObject BuildBallotSignature(string voteId, string userId, string optionId, string? comment, string signerName)
+    {
+        var rndSerial = 1000 + RandomNumberGenerator.GetInt32(9000);
+        var rndHex = Convert.ToHexString(RandomNumberGenerator.GetBytes(3)).ToLowerInvariant();
+        return new JsonObject
+        {
+            ["signedAt"] = NowIso(),
+            ["serialNumber"] = $"VN-DEMO-CA:{rndSerial}:{rndHex}",
+            ["hash"] = Sha256Hex($"{voteId}|{userId}|{optionId}|{comment ?? ""}"),
+            ["signerName"] = signerName,
+        };
+    }
+
     private Task<JsonObject?> GetDoc(string table, string id) => _store.GetByIdAsync(table, id);
     private Task SaveDoc(string table, string id, JsonObject data) => _store.UpdateAsync(table, id, data);
 
@@ -70,13 +92,24 @@ public sealed class Actions
     public void Register(Router app)
     {
         // ---------------- BỎ PHIẾU / CHO Ý KIẾN (CAS) ----------------
+        // P0-4: nhận thêm optional `signPin` (6 số) — nếu có, gắn chữ ký mô phỏng vào ballot.
+        // P1-5: phiếu ở trạng thái 'draft' (chưa mở) -> thông điệp RIÊNG "Phiếu chưa mở".
         app.Add("POST", "/api/actions/vote/:id/ballot", Auth.RequireAuth, async c =>
         {
             var body = await HttpUtil.ReadBodyObj(c.Req);
             var userId = c.User!.Sub;
             var optionId = J.Str(body, "optionId");
-            var result = await _store.MutateDocAsync("c_votes", c.Params["id"], v =>
+            var signPin = J.Str(body, "signPin");
+            // Kiểm định dạng PIN NGAY (nếu có) — lỗi hình thức đầu vào, kiểm trước khi đụng DB.
+            if (signPin != null && !SignPinRe.IsMatch(signPin))
+            { await HttpUtil.SendError(c.Res, 400, "Mã PIN ký số ý kiến phải gồm 6 chữ số"); return; }
+            // signerName cần tra hồ sơ user — DB call PHẢI ở NGOÀI mutate (mutate phải thuần).
+            var signer = signPin != null ? await GetDoc("c_users", userId) : null;
+            var signerName = signer != null ? (J.Str(signer, "fullName") ?? c.User.Name ?? userId) : (c.User.Name ?? userId);
+            var voteId = c.Params["id"];
+            var result = await _store.MutateDocAsync("c_votes", voteId, v =>
             {
+                if (J.Str(v, "status") == "draft") return MutateOutcome.Fail("Phiếu chưa mở", 400);
                 if (J.Str(v, "status") != "open") return MutateOutcome.Fail("Nội dung này chưa mở hoặc đã đóng biểu quyết", 400);
                 var elig = J.Arr(v, "eligibleIds");
                 if (elig is null || !elig.Any(x => J.Str(x) == userId)) return MutateOutcome.Fail("Bạn không thuộc thành phần biểu quyết", 403);
@@ -85,9 +118,12 @@ public sealed class Actions
                 var options = J.Arr(v, "options");
                 if (options is null || !options.OfType<JsonObject>().Any(o => J.Str(o, "id") == optionId)) return MutateOutcome.Fail("Phương án biểu quyết không hợp lệ", 400);
                 var commentRaw = J.Str(body, "comment")?.Trim();
+                string? comment = !string.IsNullOrEmpty(commentRaw) ? (commentRaw.Length > 2000 ? commentRaw.Substring(0, 2000) : commentRaw) : null;
                 var newBallot = new JsonObject { ["userId"] = userId, ["optionId"] = optionId };
-                if (!string.IsNullOrEmpty(commentRaw)) newBallot["comment"] = commentRaw.Length > 2000 ? commentRaw.Substring(0, 2000) : commentRaw;
+                if (comment != null) newBallot["comment"] = comment;
                 newBallot["castAt"] = NowIso();
+                if (signPin != null)
+                    newBallot["signature"] = BuildBallotSignature(J.Str(v, "id") ?? voteId, userId, optionId ?? "", comment, signerName);
                 if (J.Arr(v, "ballots") is null) v["ballots"] = new JsonArray();
                 ((JsonArray)v["ballots"]!).Add(newBallot);
                 return MutateOutcome.Replace(v);
@@ -98,13 +134,15 @@ public sealed class Actions
         });
 
         // ---------------- MỞ BIỂU QUYẾT ----------------
+        // P1-5: cho phép mở từ 'draft' (nháp, mới) HOẶC 'pending' (đã có, chưa mở) -> 'open'.
         app.Add("POST", "/api/actions/vote/:id/open", Auth.RequireAuth, async c =>
         {
             var vote = await GetDoc("c_votes", c.Params["id"]);
             if (vote is null) { await HttpUtil.SendError(c.Res, 404, "Không tìm thấy nội dung biểu quyết"); return; }
             if (!Manage.Contains(c.User!.Role) && J.Str(vote, "createdBy") != c.User.Sub)
             { await HttpUtil.SendError(c.Res, 403, "Bạn không có quyền mở biểu quyết này"); return; }
-            if (J.Str(vote, "status") != "pending") { await HttpUtil.SendError(c.Res, 400, "Chỉ mở được nội dung chưa biểu quyết"); return; }
+            var st = J.Str(vote, "status");
+            if (st != "draft" && st != "pending") { await HttpUtil.SendError(c.Res, 400, "Chỉ mở được nội dung chưa biểu quyết"); return; }
             vote["status"] = "open";
             vote["openedAt"] = NowIso();
             await SaveDoc("c_votes", J.Str(vote, "id")!, vote);
@@ -162,11 +200,21 @@ public sealed class Actions
         });
 
         // ---------------- GỬI GIẤY MỜI ----------------
+        // P0-2: mở thêm cho unit_admin, NHƯNG chỉ với phiên THUỘC ĐƠN VỊ MÌNH (chủ trì
+        // của phiên cùng đơn vị với unit_admin — cùng khái niệm dùng khi tạo phiên).
         app.Add("POST", "/api/actions/meetings/:id/invite", Auth.RequireAuth, async c =>
         {
             var m = await GetDoc("c_meetings", c.Params["id"]);
             if (m is null) { await HttpUtil.SendError(c.Res, 404, "Không tìm thấy phiên họp"); return; }
-            if (!Manage.Contains(c.User!.Role)) { await HttpUtil.SendError(c.Res, 403, "Bạn không có quyền gửi giấy mời"); return; }
+            var allowed = Manage.Contains(c.User!.Role);
+            if (!allowed && c.User.Role == "unit_admin")
+            {
+                var self = await GetDoc("c_users", c.User.Sub);
+                var chair = await GetDoc("c_users", J.Str(m, "chairId") ?? "");
+                var selfUnit = J.Str(self, "unitId");
+                allowed = !string.IsNullOrEmpty(selfUnit) && selfUnit == J.Str(chair, "unitId");
+            }
+            if (!allowed) { await HttpUtil.SendError(c.Res, 403, "Bạn không có quyền gửi giấy mời"); return; }
             var st = J.Str(m, "status");
             if (st is not ("draft" or "invited")) { await HttpUtil.SendError(c.Res, 400, "Phiên họp không ở trạng thái gửi được giấy mời"); return; }
             m["status"] = "invited";

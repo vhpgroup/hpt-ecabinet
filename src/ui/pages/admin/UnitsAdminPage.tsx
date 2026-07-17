@@ -2,9 +2,10 @@
 // QUẢN TRỊ ĐƠN VỊ / PHÒNG BAN
 // ============================================================
 import React, { useState } from 'react';
-import type { Unit } from '../../../domain/types';
+import type { Unit, UnitAdminType } from '../../../domain/types';
+import { UNIT_ADMIN_TYPE } from '../../../domain/labels';
 import { useApp } from '../../../store/AppContext';
-import { Field, Icon, Modal, PageHeader } from '../../components';
+import { Badge, Field, Icon, Modal, PageHeader } from '../../components';
 import * as adminService from '../../../services/adminService';
 
 export default function UnitsAdminPage() {
@@ -25,13 +26,14 @@ export default function UnitsAdminPage() {
       <div className="card">
         <div className="tbl-wrap">
           <table className="tbl">
-            <thead><tr><th style={{ width: 60 }}>TT</th><th>Tên đơn vị</th><th>Viết tắt</th><th>Số cán bộ</th><th></th></tr></thead>
+            <thead><tr><th style={{ width: 60 }}>TT</th><th>Tên đơn vị</th><th>Viết tắt</th><th>Loại đơn vị</th><th>Số cán bộ</th><th></th></tr></thead>
             <tbody>
               {[...s.units].sort((a, b) => a.order - b.order).map((u, i) => (
                 <tr key={u.id}>
                   <td>{i + 1}</td>
                   <td className="t-title">{u.name}</td>
                   <td>{u.short}</td>
+                  <td>{u.adminType ? <Badge color={UNIT_ADMIN_TYPE[u.adminType].color}>{UNIT_ADMIN_TYPE[u.adminType].label}</Badge> : <span className="t-sub">—</span>}</td>
                   <td>{s.users.filter((x) => x.unitId === u.id).length}</td>
                   <td>
                     <div style={{ display: 'flex', gap: 2 }}>
@@ -66,6 +68,14 @@ export default function UnitsAdminPage() {
               <input className="inp" type="number" value={editing.order ?? 99} onChange={(e) => setEditing({ ...editing, order: Number(e.target.value) })} />
             </Field>
           </div>
+          <Field label="Loại đơn vị hành chính">
+            <select className="sel" value={editing.adminType ?? ''} onChange={(e) => setEditing({ ...editing, adminType: (e.target.value || undefined) as UnitAdminType | undefined })}>
+              <option value="">— Chưa phân loại —</option>
+              <option value="xa">Xã</option>
+              <option value="phuong">Phường</option>
+              <option value="dac_khu">Đặc khu</option>
+            </select>
+          </Field>
         </Modal>
       )}
     </div>

@@ -30,7 +30,10 @@ public static class Acl
         ["users"]         = new("roles:admin,unit_admin", "adminOrSelfOrUnitAdmin", "roles:admin"),
         ["units"]         = new("roles:admin", "roles:admin", "roles:admin"),
         ["rooms"]         = new("roles:admin", "roles:admin", "roles:admin"),
-        ["meetings"]      = new(M, "any", M),
+        // P0-2 (HSMT dòng 354-355): "Quản trị đơn vị" là actor CHÍNH tạo phiên họp — thêm
+        // unit_admin vào quyền tạo. Kiểm tra sâu (chairId/secretaryId PHẢI thuộc đơn vị
+        // unit_admin) nằm ở App.EnforceMeetingWrite(). update/remove GIỮ NGUYÊN.
+        ["meetings"]      = new("roles:admin,secretary,chairman,unit_admin", "any", M),
         ["documents"]     = new("any", "ownerOrManage", "ownerOrManage"),
         ["annotations"]   = new("self:userId", "owner:userId", "owner:userId"),
         ["votes"]         = new(M, "any", M),
@@ -43,6 +46,10 @@ public static class Acl
         ["catalogs"]      = new("roles:admin", "roles:admin", "roles:admin"),
         ["guides"]        = new("roles:admin", "roles:admin", "roles:admin"),
         ["apiKeys"]       = new("none", "roles:admin", "roles:admin"),
+        // P1-6 — Phản hồi/góp ý người dùng: bất kỳ ai đăng nhập tạo được (server ép
+        // userId/unitId — xem App.cs). update = 'any' vì Guard.GuardFeedbacks siết field
+        // theo vai trò (cùng triết lý votes/meetings/questions: ACL lỏng, GUARD siết field).
+        ["feedbacks"]     = new("any", "any", "roles:admin"),
     };
 
     /// <summary>Kiểm quyền theo rule + ngữ cảnh. existing/body là JsonObject (có thể null). Port allowed().</summary>

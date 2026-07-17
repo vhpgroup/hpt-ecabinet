@@ -27,6 +27,8 @@ await Group4_Guard(t);
 await Group5_ActionsCas(t);
 await Group6_OpenRtc(t);
 await Group7_Ws(t);
+await Group8_UnitIsolation(t);      // P0-1/P0-2/P0-3
+await Group9_SignVoteFeedback(t);   // P0-4/P1-5/P1-6/P1-7/P1-8
 
 var exit = t.Report();
 return exit;
@@ -864,8 +866,581 @@ static async Task Group7_Ws(TestRunner t)
 }
 
 // ============================================================
+// NHÓM 8 — CÔ LẬP DỮ LIỆU THEO ĐƠN VỊ (P0-1) + QUẢN TRỊ ĐƠN VỊ (P0-2) + DUYỆT TÀI LIỆU (P0-3)
+// ============================================================
+static async Task Group8_UnitIsolation(TestRunner t)
+{
+    t.Group("8-MULTITENANT");
+    await using var app = await TestApp.CreateAsync();
+    var admin = await app.Login("quantri");
+
+    // ---------------- P0-1: MEETINGS — cô lập theo đơn vị ----------------
+    // Phiên tự dựng: chủ trì u-xd (un-xd), thư ký u-tk (un-vp), CHỈ 2 participant này
+    // (KHÔNG có u-pxd — cùng đơn vị un-xd nhưng không phải participant trực tiếp).
+    var mUnit = new JsonObject
+    {
+        ["id"] = "m-unit-test", ["code"] = "M-UNIT-TEST", ["title"] = "Họp riêng đơn vị Xây dựng", ["description"] = "desc",
+        ["startTime"] = DateTime.UtcNow.AddHours(1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+        ["endTime"] = DateTime.UtcNow.AddHours(2).ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+        ["roomId"] = "r1", ["isOnline"] = false, ["status"] = "live", ["chairId"] = "u-xd", ["secretaryId"] = "u-tk",
+        ["participants"] = new JsonArray(
+            new JsonObject { ["userId"] = "u-xd", ["meetingRole"] = "chair", ["attendStatus"] = "accepted", ["checkedInAt"] = null },
+            new JsonObject { ["userId"] = "u-tk", ["meetingRole"] = "secretary", ["attendStatus"] = "accepted", ["checkedInAt"] = null }),
+        ["agenda"] = new JsonArray(),
+        ["conclusions"] = new JsonArray(new JsonObject { ["id"] = "c1", ["content"] = "Kết luận nội bộ", ["createdAt"] = NowIsoT() }),
+        ["minutes"] = new JsonObject { ["content"] = "Biên bản MẬT của đơn vị Xây dựng", ["signatures"] = new JsonArray(), ["locked"] = false },
+    };
+    Assert.Status(201, (await app.Post("/api/meetings", mUnit, admin)).Status, "tạo m-unit-test");
+
+    await t.Case("meetings: đơn vị KHÁC hoàn toàn (u-yt) -> GET theo id 404", async () =>
+    {
+        var tok = await app.Login("soyt"); // un-yt — không liên quan m-unit-test
+        var r = await app.Get("/api/meetings/m-unit-test", tok);
+        Assert.Status(404, r.Status, "u-yt xem m-unit-test");
+    });
+
+    await t.Case("meetings: đơn vị KHÁC hoàn toàn -> ẨN KHỎI DANH SÁCH (không chỉ ẩn minutes)", async () =>
+    {
+        var tok = await app.Login("soyt");
+        var r = await app.Get("/api/meetings", tok);
+        Assert.Status(200, r.Status, "list meetings");
+        var present = r.Arr.OfType<JsonObject>().Any(m => m["id"]?.GetValue<string>() == "m-unit-test");
+        Assert.True(!present, "m-unit-test PHẢI vắng mặt khỏi danh sách của u-yt");
+    });
+
+    await t.Case("meetings: CÙNG ĐƠN VỊ (u-pxd, un-xd) nhưng KHÔNG phải participant -> vẫn THẤY (200), minutes bị ẨN", async () =>
+    {
+        var tok = await app.Login("phosoxd"); // u-pxd, cùng đơn vị un-xd với chủ trì u-xd
+        var r = await app.Get("/api/meetings/m-unit-test", tok);
+        Assert.Status(200, r.Status, "u-pxd xem m-unit-test (cùng đơn vị)");
+        Assert.True(r.Obj["minutes"] is null || r.Obj["minutes"]!.GetValueKind() == System.Text.Json.JsonValueKind.Null,
+            "không phải participant trực tiếp -> minutes vẫn bị ẩn (P0-1 chỉ mở rộng DANH SÁCH thấy được, không mở rộng mức chiếu)");
+        Assert.Eq(0, r.Obj["conclusions"]!.AsArray().Count, "conclusions cũng bị ẩn");
+        var list = await app.Get("/api/meetings", tok);
+        Assert.True(list.Arr.OfType<JsonObject>().Any(m => m["id"]?.GetValue<string>() == "m-unit-test"), "u-pxd THẤY m-unit-test trong danh sách");
+    });
+
+    await t.Case("meetings: participant trực tiếp (u-xd) -> thấy ĐẦY ĐỦ minutes/conclusions", async () =>
+    {
+        var tok = await app.Login("soxd");
+        var r = await app.Get("/api/meetings/m-unit-test", tok);
+        Assert.Status(200, r.Status, "u-xd (chủ trì) xem m-unit-test");
+        Assert.True(r.Obj["minutes"] is not null, "chủ trì thấy minutes đầy đủ");
+        Assert.Eq(1, r.Obj["conclusions"]!.AsArray().Count, "chủ trì thấy conclusions đầy đủ");
+    });
+
+    await t.Case("meetings: admin luôn thấy đầy đủ bất kể đơn vị", async () =>
+    {
+        var r = await app.Get("/api/meetings/m-unit-test", admin);
+        Assert.Status(200, r.Status, "admin xem m-unit-test");
+        Assert.True(r.Obj["minutes"] is not null, "admin thấy minutes");
+    });
+
+    // ---------------- P0-1: VOTES — cô lập theo đơn vị (phiếu lấy ý kiến ngoài họp) ----------------
+    var pollUnit = new JsonObject
+    {
+        ["id"] = "p-unit-test", ["kind"] = "poll", ["meetingId"] = null, ["title"] = "Ý kiến nội bộ đơn vị Xây dựng",
+        ["options"] = new JsonArray(new JsonObject { ["id"] = "o1", ["label"] = "Đồng ý" }),
+        ["ballots"] = new JsonArray(), ["eligibleIds"] = new JsonArray("u-tk"), // KHÔNG gồm u-pxd/u-yt
+        ["secret"] = false, ["status"] = "pending", ["createdBy"] = "u-xd", // người tạo thuộc un-xd
+    };
+    Assert.Status(201, (await app.Post("/api/votes", pollUnit, admin)).Status, "tạo poll nội bộ đơn vị");
+
+    await t.Case("votes (poll ngoài họp): CÙNG ĐƠN VỊ với người tạo -> THẤY dù không trong eligibleIds", async () =>
+    {
+        var tok = await app.Login("phosoxd"); // u-pxd, cùng đơn vị un-xd với createdBy u-xd
+        var r = await app.Get("/api/votes/p-unit-test", tok);
+        Assert.Status(200, r.Status, "u-pxd (cùng đơn vị người tạo) xem poll");
+    });
+
+    await t.Case("votes (poll ngoài họp): đơn vị KHÁC, không eligible, không phải người tạo -> 404 (đã vá bug hiển thị cho MỌI người)", async () =>
+    {
+        var tok = await app.Login("soyt");
+        var r = await app.Get("/api/votes/p-unit-test", tok);
+        Assert.Status(404, r.Status, "u-yt (đơn vị khác) xem poll nội bộ đơn vị khác");
+    });
+
+    await t.Case("votes (trong họp, v4/m4): thành phần phiên (u-gtvt) THẤY dù KHÔNG trong eligibleIds của v4", async () =>
+    {
+        var tok = await app.Login("sogtvt"); // participant của m4 nhưng KHÔNG trong eligibleIds của v4
+        var r = await app.Get("/api/votes/v4", tok);
+        Assert.Status(200, r.Status, "u-gtvt (thành phần m4) xem v4");
+    });
+
+    await t.Case("votes (trong họp, v4/m4): đơn vị HOÀN TOÀN không liên quan m4 (u-xd) -> 404", async () =>
+    {
+        var tok = await app.Login("soxd"); // un-xd không xuất hiện trong m4 (chủ trì/thư ký/thành phần)
+        var r = await app.Get("/api/votes/v4", tok);
+        Assert.Status(404, r.Status, "u-xd (đơn vị không liên quan m4) xem v4");
+    });
+
+    // ---------------- P0-2: unit_admin TẠO phiên họp (đúng/sai đơn vị) ----------------
+    var qtdv = await app.Login("qtdonvi"); // u-qtdv, unit_admin của un-khdt
+
+    await t.Case("unit_admin tạo phiên họp với chủ trì CÙNG đơn vị -> 201", async () =>
+    {
+        var m = new JsonObject
+        {
+            ["id"] = "m-qtdv-ok", ["code"] = "M-QTDV-OK", ["title"] = "Họp do quản trị đơn vị tạo", ["description"] = "",
+            ["startTime"] = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            ["endTime"] = DateTime.UtcNow.AddDays(1).AddHours(1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            ["roomId"] = "r1", ["isOnline"] = false, ["status"] = "draft",
+            ["chairId"] = "u-khdt", ["secretaryId"] = "u-khdt", // u-khdt CÙNG đơn vị un-khdt với qtdonvi
+            ["participants"] = new JsonArray(new JsonObject { ["userId"] = "u-khdt", ["meetingRole"] = "chair", ["attendStatus"] = "accepted", ["checkedInAt"] = null }),
+            ["agenda"] = new JsonArray(), ["conclusions"] = new JsonArray(), ["minutes"] = null,
+        };
+        var r = await app.Post("/api/meetings", m, qtdv);
+        Assert.Status(201, r.Status, "unit_admin tạo họp đúng đơn vị");
+    });
+
+    await t.Case("unit_admin tạo phiên họp với chủ trì KHÁC đơn vị -> 403", async () =>
+    {
+        var m = new JsonObject
+        {
+            ["id"] = "m-qtdv-bad", ["code"] = "M-QTDV-BAD", ["title"] = "Họp sai đơn vị", ["description"] = "",
+            ["startTime"] = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            ["endTime"] = DateTime.UtcNow.AddDays(1).AddHours(1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            ["roomId"] = "r1", ["isOnline"] = false, ["status"] = "draft",
+            ["chairId"] = "u-tc", ["secretaryId"] = "u-tc", // u-tc thuộc un-tc — KHÁC đơn vị qtdonvi
+            ["participants"] = new JsonArray(), ["agenda"] = new JsonArray(), ["conclusions"] = new JsonArray(), ["minutes"] = null,
+        };
+        var r = await app.Post("/api/meetings", m, qtdv);
+        Assert.Status(403, r.Status, "unit_admin tạo họp sai đơn vị chủ trì");
+        Assert.Eq("Chủ trì phiên họp phải thuộc đơn vị của bạn", r.Error, "message sai đơn vị chủ trì");
+    });
+
+    await t.Case("unit_admin tạo phiên họp: chủ trì đúng đơn vị nhưng thư ký KHÁC đơn vị -> 403", async () =>
+    {
+        var m = new JsonObject
+        {
+            ["id"] = "m-qtdv-bad-sec", ["code"] = "M-QTDV-BAD-SEC", ["title"] = "Họp thư ký sai đơn vị", ["description"] = "",
+            ["startTime"] = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            ["endTime"] = DateTime.UtcNow.AddDays(1).AddHours(1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            ["roomId"] = "r1", ["isOnline"] = false, ["status"] = "draft",
+            ["chairId"] = "u-khdt", ["secretaryId"] = "u-tc", // thư ký khác đơn vị
+            ["participants"] = new JsonArray(), ["agenda"] = new JsonArray(), ["conclusions"] = new JsonArray(), ["minutes"] = null,
+        };
+        var r = await app.Post("/api/meetings", m, qtdv);
+        Assert.Status(403, r.Status, "unit_admin tạo họp thư ký sai đơn vị");
+        Assert.Eq("Thư ký phiên họp phải thuộc đơn vị của bạn", r.Error, "message sai đơn vị thư ký");
+    });
+
+    await t.Case("delegate thường (không phải unit_admin/manage) tạo phiên họp -> 403", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var m = NewDraftMeeting("m-delegate-bad", "u-khdt", "u-tk");
+        var r = await app.Post("/api/meetings", m, tok);
+        Assert.Status(403, r.Status, "delegate thường không được tạo phiên họp");
+    });
+
+    // ---------------- P0-2: unit_admin GỬI GIẤY MỜI (đúng/sai đơn vị) ----------------
+    await t.Case("unit_admin gửi giấy mời cho phiên đơn vị mình (m-qtdv-ok) -> 200", async () =>
+    {
+        var r = await app.Post("/api/actions/meetings/m-qtdv-ok/invite", null, qtdv);
+        Assert.Status(200, r.Status, "unit_admin gửi giấy mời phiên đơn vị mình");
+    });
+
+    await t.Case("unit_admin gửi giấy mời cho phiên KHÔNG thuộc đơn vị mình (m1) -> 403", async () =>
+    {
+        var r = await app.Post("/api/actions/meetings/m1/invite", null, qtdv);
+        Assert.Status(403, r.Status, "unit_admin gửi giấy mời phiên không thuộc đơn vị mình");
+    });
+
+    // ---------------- P0-3: DUYỆT TÀI LIỆU bởi THÀNH VIÊN DỰ HỌP (thành phần phiên) ----------------
+    await t.Case("documents: THÀNH PHẦN phiên (u-khdt, không phải owner) duyệt tài liệu pending (d11/m2) -> 200", async () =>
+    {
+        // d11: owner u-tc, meetingId m2, pending. u-khdt LÀ participant của m2, KHÔNG phải owner.
+        var tok = await app.Login("sokhdt");
+        var r = await app.Patch("/api/documents/d11", new JsonObject { ["reviewStatus"] = "approved" }, tok);
+        Assert.Status(200, r.Status, "thành phần phiên duyệt được tài liệu (P0-3)");
+        Assert.Eq("u-khdt", r.Obj["reviewedById"]?.GetValue<string>(), "server ghi đúng người duyệt");
+    });
+
+    await t.Case("documents: owner (u-tc) VẪN KHÔNG tự duyệt được dù là thành phần CHÍNH phiên đó -> 403 (chống hồi quy)", async () =>
+    {
+        // tạo lại 1 doc pending khác của u-tc trong m2 để test lại (d11 đã approved ở case trên)
+        var doc = new JsonObject
+        {
+            ["id"] = "d-selfcheck", ["name"] = "Tự kiểm.pdf", ["kind"] = "main", ["ownerId"] = "u-tc",
+            ["meetingId"] = "m2", ["content"] = "x", ["reviewStatus"] = "pending", ["secret"] = false, ["version"] = 1,
+        };
+        var owner = await app.Login("sotc");
+        Assert.Status(201, (await app.Post("/api/documents", doc, owner)).Status, "tạo doc pending cho self-check");
+        var r = await app.Patch("/api/documents/d-selfcheck", new JsonObject { ["reviewStatus"] = "approved" }, owner);
+        Assert.Status(403, r.Status, "owner (dù là thành phần chính phiên) KHÔNG được tự duyệt");
+    });
+
+    await t.Case("documents: NGƯỜI NGOÀI phiên (u-yt, không phải m2) duyệt tài liệu d11 -> 403", async () =>
+    {
+        // d12: owner u-gtvt, meetingId m2, rejected — chuyển rejected->pending trước bằng owner, rồi thử duyệt bởi người ngoài
+        var ownerTok = await app.Login("sogtvt");
+        var toPending = await app.Patch("/api/documents/d12", new JsonObject { ["reviewStatus"] = "pending" }, ownerTok);
+        Assert.Status(200, toPending.Status, "owner trình lại d12 (rejected->pending)");
+        var outsider = await app.Login("soyt"); // KHÔNG thuộc thành phần m2
+        var r = await app.Patch("/api/documents/d12", new JsonObject { ["reviewStatus"] = "approved" }, outsider);
+        Assert.Status(403, r.Status, "người ngoài phiên không được duyệt");
+    });
+
+    await t.Case("documents: unit_admin (owner) trình duyệt tài liệu của chính mình (draft -> pending) -> 200", async () =>
+    {
+        var doc = new JsonObject
+        {
+            ["id"] = "d-qtdv-own", ["name"] = "Tài liệu QTĐV.pdf", ["kind"] = "main", ["ownerId"] = "u-qtdv",
+            ["meetingId"] = "m-qtdv-ok", ["content"] = "nội dung", ["reviewStatus"] = "draft", ["secret"] = false, ["version"] = 1,
+        };
+        Assert.Status(201, (await app.Post("/api/documents", doc, qtdv)).Status, "unit_admin tạo tài liệu nháp");
+        var r = await app.Patch("/api/documents/d-qtdv-own", new JsonObject { ["reviewStatus"] = "pending" }, qtdv);
+        Assert.Status(200, r.Status, "unit_admin (owner) trình duyệt tài liệu phiên đơn vị mình");
+        Assert.Eq("pending", r.Obj["reviewStatus"]?.GetValue<string>(), "reviewStatus=pending");
+    });
+}
+
+// ============================================================
+// NHÓM 9 — KÝ SỐ Ý KIẾN VĂN BẢN (P0-4) + VOTE NHÁP (P1-5) + FEEDBACKS (P1-6)
+//          + WHITELIST TỆP (P1-7) + UNICODE ROUND-TRIP (P1-8)
+// ============================================================
+static async Task Group9_SignVoteFeedback(TestRunner t)
+{
+    t.Group("9-SIGN/VOTE/FEEDBACK/FILE/UNICODE");
+    await using var app = await TestApp.CreateAsync();
+    var admin = await app.Login("quantri");
+
+    // ---------------- P0-4: KÝ SỐ MÔ PHỎNG CHO BALLOT ----------------
+    await t.Case("ballot: signPin sai định dạng -> 400 tiếng Việt", async () =>
+    {
+        var tok = await app.Login("sokhdt"); // eligible của v2 (m1, open)
+        var r = await app.Post("/api/actions/vote/v2/ballot", new JsonObject { ["optionId"] = "o1", ["signPin"] = "abc" }, tok);
+        Assert.Status(400, r.Status, "signPin sai định dạng");
+        Assert.Eq("Mã PIN ký số ý kiến phải gồm 6 chữ số", r.Error, "message PIN sai");
+    });
+
+    await t.Case("ballot: có signPin hợp lệ -> gắn signature {signedAt,serialNumber,hash,signerName}", async () =>
+    {
+        // u-gtvt eligible v2 nhưng CHƯA bỏ phiếu trong seed (đã voted: u-pct/u-khdt/u-tc/u-tnmt).
+        var tok = await app.Login("sogtvt");
+        var r = await app.Post("/api/actions/vote/v2/ballot", new JsonObject { ["optionId"] = "o1", ["signPin"] = "123456" }, tok);
+        Assert.Status(200, r.Status, "bỏ phiếu kèm ký số");
+        var vote = await app.Get("/api/votes/v2", tok); // v2 công khai (secret=false) -> đọc lại thấy ballot của mình
+        var mine = vote.Obj["ballots"]!.AsArray().OfType<JsonObject>().First(b => b["userId"]?.GetValue<string>() == "u-gtvt");
+        var sig = mine["signature"] as JsonObject;
+        Assert.True(sig is not null, "ballot có trường signature");
+        Assert.True(sig!["serialNumber"]?.GetValue<string>()?.StartsWith("VN-DEMO-CA:") == true, "serialNumber đúng khuôn dạng");
+        Assert.True(!string.IsNullOrEmpty(sig["hash"]?.GetValue<string>()), "có hash");
+        Assert.True(!string.IsNullOrEmpty(sig["signedAt"]?.GetValue<string>()), "có signedAt");
+        Assert.True(!string.IsNullOrEmpty(sig["signerName"]?.GetValue<string>()), "có signerName");
+    });
+
+    await t.Case("ballot: KHÔNG có signPin -> KHÔNG có signature (optional, không bắt buộc)", async () =>
+    {
+        var tok = await app.Login("soyt"); // eligible v2, CHƯA bỏ phiếu
+        var r = await app.Post("/api/actions/vote/v2/ballot", new JsonObject { ["optionId"] = "o2" }, tok);
+        Assert.Status(200, r.Status, "bỏ phiếu KHÔNG ký số");
+        var vote = await app.Get("/api/votes/v2", tok);
+        var mine = vote.Obj["ballots"]!.AsArray().OfType<JsonObject>().First(b => b["userId"]?.GetValue<string>() == "u-yt");
+        Assert.True(mine["signature"] is null, "không gửi signPin -> không có signature");
+    });
+
+    await t.Case("ballot: BIỂU QUYẾT KÍN — người khác đọc KHÔNG thấy signature (cùng chỗ ẩn userId)", async () =>
+    {
+        var vote = new JsonObject
+        {
+            ["id"] = "v-secret-sig", ["kind"] = "vote", ["meetingId"] = "m1", ["title"] = "BQ kín có ký số",
+            ["options"] = new JsonArray(new JsonObject { ["id"] = "o1", ["label"] = "Tán thành" }, new JsonObject { ["id"] = "o2", ["label"] = "Không" }),
+            ["ballots"] = new JsonArray(), ["eligibleIds"] = new JsonArray("u-khdt", "u-tc"),
+            ["secret"] = true, ["status"] = "pending", ["createdBy"] = "u-tk",
+        };
+        Assert.Status(201, (await app.Post("/api/votes", vote, admin)).Status, "tạo vote kín có ký số");
+        Assert.Status(200, (await app.Post("/api/actions/vote/v-secret-sig/open", null, admin)).Status, "mở vote kín");
+        var tokKh = await app.Login("sokhdt");
+        var tokTc = await app.Login("sotc");
+        Assert.Status(200, (await app.Post("/api/actions/vote/v-secret-sig/ballot", new JsonObject { ["optionId"] = "o1", ["signPin"] = "654321" }, tokKh)).Status, "u-khdt bỏ phiếu ký số");
+        Assert.Status(200, (await app.Post("/api/actions/vote/v-secret-sig/ballot", new JsonObject { ["optionId"] = "o2" }, tokTc)).Status, "u-tc bỏ phiếu thường");
+
+        // u-tc đọc: phiếu của u-khdt (người khác) phải bị ẩn userId VÀ ẩn signature
+        var r = await app.Get("/api/votes/v-secret-sig", tokTc);
+        Assert.Status(200, r.Status, "u-tc đọc vote kín");
+        var ballots = r.Obj["ballots"]!.AsArray().OfType<JsonObject>().ToList();
+        var others = ballots.Where(b => b["userId"] == null).ToList();
+        Assert.True(others.Count == 1, "có đúng 1 phiếu người khác bị ẩn danh (của u-khdt)");
+        Assert.True(others[0]["signature"] == null, "phiếu ẩn danh KHÔNG lộ signature của người khác");
+        var mine = ballots.First(b => b["userId"]?.GetValue<string>() == "u-tc");
+        Assert.True(mine["signature"] == null, "phiếu của u-tc (không ký) đúng là không có signature");
+
+        // manage (thuky) đọc: thấy ĐẦY ĐỦ, bao gồm signature của u-khdt
+        var tk = await app.Login("thuky");
+        var rMg = await app.Get("/api/votes/v-secret-sig", tk);
+        var khBallot = rMg.Obj["ballots"]!.AsArray().OfType<JsonObject>().First(b => b["userId"]?.GetValue<string>() == "u-khdt");
+        Assert.True(khBallot["signature"] is not null, "manage thấy đầy đủ signature của u-khdt");
+    });
+
+    // ---------------- P1-5: VOTE NHÁP (draft) ----------------
+    await t.Case("vote draft: bỏ phiếu khi CHƯA MỞ -> 400 'Phiếu chưa mở'", async () =>
+    {
+        var draftVote = new JsonObject
+        {
+            ["id"] = "v-draft", ["kind"] = "poll", ["meetingId"] = null, ["title"] = "Ý kiến nháp",
+            ["options"] = new JsonArray(new JsonObject { ["id"] = "o1", ["label"] = "Đồng ý" }),
+            ["ballots"] = new JsonArray(), ["eligibleIds"] = new JsonArray("u-tc"),
+            ["secret"] = false, ["status"] = "draft", ["createdBy"] = "u-tk", ["trackerUserId"] = "u-tk",
+        };
+        Assert.Status(201, (await app.Post("/api/votes", draftVote, admin)).Status, "tạo vote draft + trackerUserId");
+        var tok = await app.Login("sotc");
+        var r = await app.Post("/api/actions/vote/v-draft/ballot", new JsonObject { ["optionId"] = "o1" }, tok);
+        Assert.Status(400, r.Status, "bỏ phiếu khi draft");
+        Assert.Eq("Phiếu chưa mở", r.Error, "message draft riêng biệt");
+    });
+
+    await t.Case("vote draft: action open() cho phép draft -> open", async () =>
+    {
+        var r = await app.Post("/api/actions/vote/v-draft/open", null, admin);
+        Assert.Status(200, r.Status, "mở vote từ draft");
+        Assert.Eq("open", r.Obj["status"]?.GetValue<string>(), "status=open sau khi mở");
+    });
+
+    await t.Case("vote draft: sau khi mở, bỏ phiếu bình thường -> 200", async () =>
+    {
+        var tok = await app.Login("sotc");
+        var r = await app.Post("/api/actions/vote/v-draft/ballot", new JsonObject { ["optionId"] = "o1" }, tok);
+        Assert.Status(200, r.Status, "bỏ phiếu sau khi mở từ draft");
+    });
+
+    await t.Case("vote: trackerUserId (cán bộ theo dõi) round-trip đúng; sai kiểu -> 400", async () =>
+    {
+        var r = await app.Get("/api/votes/v-draft", admin);
+        Assert.Eq("u-tk", r.Obj["trackerUserId"]?.GetValue<string>(), "trackerUserId round-trip");
+        var badVote = new JsonObject
+        {
+            ["id"] = "v-bad-tracker", ["kind"] = "poll", ["meetingId"] = null, ["title"] = "x",
+            ["options"] = new JsonArray(new JsonObject { ["id"] = "o1", ["label"] = "x" }),
+            ["ballots"] = new JsonArray(), ["eligibleIds"] = new JsonArray(), ["secret"] = false,
+            ["status"] = "draft", ["createdBy"] = "u-tk", ["trackerUserId"] = 123,
+        };
+        var rBad = await app.Post("/api/votes", badVote, admin);
+        Assert.Status(400, rBad.Status, "trackerUserId sai kiểu (số) -> 400");
+    });
+
+    await t.Case("vote: status rác (không thuộc enum) -> 400", async () =>
+    {
+        var bad = new JsonObject
+        {
+            ["id"] = "v-bad-status", ["kind"] = "poll", ["meetingId"] = null, ["title"] = "x",
+            ["options"] = new JsonArray(new JsonObject { ["id"] = "o1", ["label"] = "x" }),
+            ["ballots"] = new JsonArray(), ["eligibleIds"] = new JsonArray(), ["secret"] = false,
+            ["status"] = "huy-hoang-rac", ["createdBy"] = "u-tk",
+        };
+        var r = await app.Post("/api/votes", bad, admin);
+        Assert.Status(400, r.Status, "status rác bị chặn");
+    });
+
+    // ---------------- P1-6: FEEDBACKS (phản hồi/góp ý người dùng) ----------------
+    await t.Case("feedbacks: user tạo, server ÉP userId/unitId (không tin client giả danh)", async () =>
+    {
+        var tok = await app.Login("sokhdt"); // u-khdt, un-khdt
+        var fb = new JsonObject
+        {
+            ["id"] = "fb-1", ["userId"] = "u-tc", // CỐ Ý gửi userId người khác — server phải ép lại
+            ["category"] = "bug", ["content"] = "Không mở được video họp trực tuyến",
+            ["createdAt"] = NowIsoT(), ["updatedAt"] = NowIsoT(),
+        };
+        var r = await app.Post("/api/feedbacks", fb, tok);
+        Assert.Status(201, r.Status, "tạo feedback");
+        Assert.Eq("u-khdt", r.Obj["userId"]?.GetValue<string>(), "server ép userId = chính người gửi, không tin body");
+        Assert.Eq("un-khdt", r.Obj["unitId"]?.GetValue<string>(), "server tự gán unitId từ hồ sơ người gửi");
+        Assert.Eq("new", r.Obj["status"]?.GetValue<string>(), "status mặc định = new");
+    });
+
+    await t.Case("feedbacks: unit_admin (cùng đơn vị) thấy được; đơn vị khác KHÔNG thấy", async () =>
+    {
+        var qtdv = await app.Login("qtdonvi"); // unit_admin của un-khdt — cùng đơn vị người tạo fb-1
+        var r = await app.Get("/api/feedbacks/fb-1", qtdv);
+        Assert.Status(200, r.Status, "unit_admin cùng đơn vị thấy feedback");
+
+        var other = await app.Login("sotc"); // un-tc — khác đơn vị, không phải người tạo
+        var r2 = await app.Get("/api/feedbacks/fb-1", other);
+        Assert.Status(404, r2.Status, "người đơn vị khác không thấy feedback của người khác");
+
+        var list = await app.Get("/api/feedbacks", other);
+        Assert.True(!list.Arr.OfType<JsonObject>().Any(f => f["id"]?.GetValue<string>() == "fb-1"), "fb-1 vắng mặt khỏi danh sách của người đơn vị khác");
+    });
+
+    await t.Case("feedbacks: admin thấy TẤT CẢ", async () =>
+    {
+        var r = await app.Get("/api/feedbacks/fb-1", admin);
+        Assert.Status(200, r.Status, "admin thấy mọi feedback");
+    });
+
+    await t.Case("feedbacks: người KHÔNG phải admin PATCH status/response/handledBy -> 403 (dù là chính chủ)", async () =>
+    {
+        var tok = await app.Login("sokhdt"); // chính chủ fb-1
+        var r = await app.Patch("/api/feedbacks/fb-1", new JsonObject { ["status"] = "resolved" }, tok);
+        Assert.Status(403, r.Status, "chính chủ (không phải admin) không tự đổi status");
+    });
+
+    await t.Case("feedbacks: NGƯỜI KHÁC (không phải admin, không phải chủ) PATCH nội dung -> 403", async () =>
+    {
+        var tok = await app.Login("sotc");
+        var r = await app.Patch("/api/feedbacks/fb-1", new JsonObject { ["content"] = "sửa hộ" }, tok);
+        Assert.Status(403, r.Status, "không được sửa phản hồi của người khác");
+    });
+
+    await t.Case("feedbacks: CHÍNH CHỦ sửa nội dung của mình (không đụng field quản trị) -> 200", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var r = await app.Patch("/api/feedbacks/fb-1", new JsonObject { ["content"] = "Đã thử lại, vẫn lỗi ở Chrome" }, tok);
+        Assert.Status(200, r.Status, "chính chủ sửa nội dung của mình");
+    });
+
+    await t.Case("feedbacks: admin PATCH status/response/handledBy -> 200, handledBy ÉP = chính admin", async () =>
+    {
+        var r = await app.Patch("/api/feedbacks/fb-1", new JsonObject
+        {
+            ["status"] = "processing", ["response"] = "Đang kiểm tra với đội kỹ thuật", ["handledBy"] = "u-tc", // cố ý khai người khác
+        }, admin);
+        Assert.Status(200, r.Status, "admin cập nhật xử lý");
+        Assert.Eq("processing", r.Obj["status"]?.GetValue<string>(), "status=processing");
+        Assert.Eq("u-admin", r.Obj["handledBy"]?.GetValue<string>(), "server ép handledBy = chính admin đang xử lý, không tin client");
+    });
+
+    // Vá QA 18/07 — unit_admin xử lý phản hồi TRONG ĐƠN VỊ MÌNH (HSMT "nhận & phân phối yêu cầu")
+    await t.Case("feedbacks: unit_admin CÙNG đơn vị PATCH status -> 200, handledBy ÉP = chính unit_admin", async () =>
+    {
+        var qtdv2 = await app.Login("qtdonvi"); // u-qtdv, un-khdt — cùng đơn vị với fb-1 (u-khdt)
+        var r = await app.Patch("/api/feedbacks/fb-1", new JsonObject { ["status"] = "resolved", ["handledBy"] = "u-tc" }, qtdv2);
+        Assert.Status(200, r.Status, "unit_admin cùng đơn vị xử lý được phản hồi");
+        Assert.Eq("resolved", r.Obj["status"]?.GetValue<string>(), "status=resolved");
+        Assert.Eq("u-qtdv", r.Obj["handledBy"]?.GetValue<string>(), "server ép handledBy = chính unit_admin đang xử lý");
+    });
+
+    await t.Case("feedbacks: unit_admin PATCH phản hồi ĐƠN VỊ KHÁC -> 403", async () =>
+    {
+        var tokTc = await app.Login("sotc"); // u-tc, un-tc — đơn vị khác
+        var fbTc = new JsonObject { ["id"] = "fb-tc", ["category"] = "question", ["content"] = "Hỏi về lịch họp", ["createdAt"] = NowIsoT(), ["updatedAt"] = NowIsoT() };
+        var rc = await app.Post("/api/feedbacks", fbTc, tokTc);
+        Assert.Status(201, rc.Status, "tạo feedback đơn vị khác");
+        var qtdv2 = await app.Login("qtdonvi");
+        var r = await app.Patch("/api/feedbacks/fb-tc", new JsonObject { ["status"] = "processing" }, qtdv2);
+        Assert.Status(403, r.Status, "unit_admin không xử lý phản hồi đơn vị khác");
+    });
+
+    // Vá QA 18/07 (P0 tester) — danh mục LOẠI TÀI LIỆU (HSMT mục 8) phải tạo được qua API
+    await t.Case("catalogs: type='docType' (danh mục loại tài liệu — HSMT mục 8) -> admin tạo được", async () =>
+    {
+        var cat = new JsonObject { ["id"] = "cat-doctype-1", ["type"] = "docType", ["name"] = "Công văn", ["order"] = 1, ["active"] = true };
+        var r = await app.Post("/api/catalogs", cat, admin);
+        Assert.Status(201, r.Status, "tạo danh mục loại tài liệu");
+        Assert.Eq("docType", r.Obj["type"]?.GetValue<string>(), "type=docType được chấp nhận");
+    });
+
+    await t.Case("feedbacks: category/status rác -> 400", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var bad = new JsonObject { ["id"] = "fb-bad", ["category"] = "khong-hop-le", ["content"] = "x" };
+        var r = await app.Post("/api/feedbacks", bad, tok);
+        Assert.Status(400, r.Status, "category rác bị chặn");
+    });
+
+    await t.Case("feedbacks: chỉ admin xóa được", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var rDeny = await app.Delete("/api/feedbacks/fb-1", tok);
+        Assert.Status(403, rDeny.Status, "chính chủ không tự xóa được");
+        var rOk = await app.Delete("/api/feedbacks/fb-1", admin);
+        Assert.Status(200, rOk.Status, "admin xóa được");
+    });
+
+    // ---------------- P1-7: WHITELIST ĐỊNH DẠNG TỆP (TT 39/2017/TT-BTTTT) ----------------
+    await t.Case("documents: tệp đính kèm định dạng KHÔNG hợp lệ (.exe) -> 400 nêu rõ định dạng cho phép", async () =>
+    {
+        var doc = new JsonObject
+        {
+            ["id"] = "d-bad-ext", ["name"] = "chuong-trinh.exe", ["kind"] = "main", ["ownerId"] = "u-tc",
+            ["dataUrl"] = "data:application/octet-stream;base64,AAAA", ["content"] = "", ["reviewStatus"] = "draft", ["version"] = 1,
+        };
+        var owner = await app.Login("sotc");
+        var r = await app.Post("/api/documents", doc, owner);
+        Assert.Status(400, r.Status, "định dạng .exe bị chặn");
+        Assert.True((r.Error ?? "").Contains("Định dạng tệp không hợp lệ"), "message nêu rõ whitelist");
+        Assert.True((r.Error ?? "").Contains("pdf"), "message liệt kê định dạng cho phép (vd pdf)");
+    });
+
+    await t.Case("documents: tệp đính kèm định dạng HỢP LỆ (.pdf) -> 201", async () =>
+    {
+        var doc = new JsonObject
+        {
+            ["id"] = "d-good-ext", ["name"] = "bao-cao.pdf", ["kind"] = "main", ["ownerId"] = "u-tc",
+            ["dataUrl"] = "data:application/pdf;base64,AAAA", ["content"] = "", ["reviewStatus"] = "draft", ["version"] = 1,
+        };
+        var owner = await app.Login("sotc");
+        var r = await app.Post("/api/documents", doc, owner);
+        Assert.Status(201, r.Status, "định dạng .pdf hợp lệ");
+    });
+
+    await t.Case("documents: tài liệu CHỈ soạn nội dung (không có dataUrl) -> KHÔNG áp whitelist tệp", async () =>
+    {
+        var doc = new JsonObject
+        {
+            ["id"] = "d-text-only", ["name"] = "khong-co-duoi-file", ["kind"] = "main", ["ownerId"] = "u-tc",
+            ["content"] = "Nội dung soạn trực tiếp, không phải tệp upload", ["reviewStatus"] = "draft", ["version"] = 1,
+        };
+        var owner = await app.Login("sotc");
+        var r = await app.Post("/api/documents", doc, owner);
+        Assert.Status(201, r.Status, "tài liệu soạn trực tiếp không bị áp whitelist tệp");
+    });
+
+    await t.Case("documents: PATCH đổi TÊN (không kèm dataUrl) sang đuôi cấm trên tài liệu ĐANG CÓ file -> vẫn 400", async () =>
+    {
+        // d-good-ext đã có dataUrl hợp lệ (.pdf) ở case trước — PATCH chỉ name (không gửi lại dataUrl)
+        // phải kiểm lại theo BẢN GHI HIỆU LỰC (existing.dataUrl + patch.name mới).
+        var owner = await app.Login("sotc");
+        var r = await app.Patch("/api/documents/d-good-ext", new JsonObject { ["name"] = "doi-ten.exe" }, owner);
+        Assert.Status(400, r.Status, "đổi tên sang đuôi cấm trên tài liệu ĐANG CÓ file vẫn bị chặn");
+    });
+
+    // ---------------- P1-8: UNICODE ROUND-TRIP (tiếng Việt có dấu NFC + tổ hợp, emoji) ----------------
+    await t.Case("Unicode: tiếng Việt có dấu (NFC) + emoji lưu/đọc lại NGUYÊN VẸN qua feedbacks", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        const string vi = "Xin chào! Ứng dụng chạy rất ổn, cảm ơn đội phát triển đã hỗ trợ nhiệt tình. 🎉👍🇻🇳";
+        var fb = new JsonObject { ["id"] = "fb-unicode", ["category"] = "other", ["content"] = vi };
+        Assert.Status(201, (await app.Post("/api/feedbacks", fb, tok)).Status, "tạo feedback Unicode");
+        var r = await app.Get("/api/feedbacks/fb-unicode", tok);
+        Assert.Status(200, r.Status, "đọc lại feedback Unicode");
+        Assert.Eq(vi, r.Obj["content"]?.GetValue<string>(), "nội dung tiếng Việt + emoji round-trip NGUYÊN VẸN");
+    });
+
+    await t.Case("Unicode: ky tu to hop (combining diacritics, dang NFD chua chuan hoa NFC) round-trip nguyen ven", async () =>
+    {
+        // Dung CHU DONG bang NormalizationForm.FormD (KHONG dua vao text nguon go tay - tranh
+        // rui ro editor/tool tu chuan hoa nguoc ve NFC truoc khi toi day). Xac nhan TRUOC khi
+        // gui: chuoi decompose PHAI khac byte-for-byte voi ban NFC goc (neu bang nhau tuc .NET
+        // khong decompose duoc - test tu that bai ro rang, khong am tham pass).
+        var nfc = "Cu\u1ed9c h\u1ecdp kh\u00f4ng gi\u1ea5y t\u1edd \u2014 ki\u1ec3m th\u1eed k\u00fd t\u1ef1 t\u1ed5 h\u1ee3p";
+        var nfd = nfc.Normalize(System.Text.NormalizationForm.FormD);
+        Assert.True(nfd != nfc, "chuoi NFD phai KHAC byte-for-byte voi NFC (neu khong, test nay vo nghia)");
+        Assert.True(nfd.Length > nfc.Length, "chuoi NFD phai DAI HON (moi dau to hop them 1 code point rieng)");
+
+        var tok = await app.Login("sokhdt");
+        var fb = new JsonObject { ["id"] = "fb-combining", ["category"] = "other", ["content"] = nfd };
+        Assert.Status(201, (await app.Post("/api/feedbacks", fb, tok)).Status, "tao feedback ky tu to hop (NFD)");
+        var r = await app.Get("/api/feedbacks/fb-combining", tok);
+        var got = r.Obj["content"]?.GetValue<string>();
+        Assert.Eq(nfd, got, "ky tu to hop (NFD) round-trip NGUYEN VEN - khong tu chuan hoa/lam hong qua JSON/HTTP");
+        Assert.True(got != null && got.Length == nfd.Length, "do dai chuoi (so code unit) giu nguyen sau round-trip");
+    });
+
+    await t.Case("Unicode: tên đơn vị/tài liệu tiếng Việt qua PATCH units.adminType (field mới, guard không chặn)", async () =>
+    {
+        var r = await app.Patch("/api/units/un-khdt", new JsonObject { ["adminType"] = "phuong" }, admin);
+        Assert.Status(200, r.Status, "units.adminType (field mới FE) không bị guard chặn");
+        Assert.Eq("phuong", r.Obj["adminType"]?.GetValue<string>(), "adminType round-trip đúng");
+    });
+}
+
+// ============================================================
 // Helpers dựng dữ liệu + WS
 // ============================================================
+static string NowIsoT() => DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+
 static JsonObject NewDraftMeeting(string id, string chairId, string secId) => new()
 {
     ["id"] = id, ["code"] = id.ToUpper(), ["title"] = "Phiên " + id, ["description"] = "desc",

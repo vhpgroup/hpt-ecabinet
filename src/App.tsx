@@ -15,6 +15,7 @@ import PollsPage from './ui/pages/PollsPage';
 import TasksPage from './ui/pages/TasksPage';
 import NotificationsPage from './ui/pages/NotificationsPage';
 import HelpPage from './ui/pages/HelpPage';
+import SupportPage from './ui/pages/SupportPage';
 import UsersAdminPage from './ui/pages/admin/UsersAdminPage';
 import UnitsAdminPage from './ui/pages/admin/UnitsAdminPage';
 import RoomsAdminPage from './ui/pages/admin/RoomsAdminPage';
@@ -23,6 +24,7 @@ import GuidesAdminPage from './ui/pages/admin/GuidesAdminPage';
 import AuditLogPage from './ui/pages/admin/AuditLogPage';
 import ReportsPage from './ui/pages/admin/ReportsPage';
 import ApiAdminPage from './ui/pages/admin/ApiAdminPage';
+import SupportAdminPage from './ui/pages/admin/SupportAdminPage';
 
 function Boot() {
   return <div className="boot"><div className="boot-logo">eC</div><p>Đang khởi động hệ thống…</p></div>;
@@ -46,6 +48,16 @@ function RequireAdmin({ children }: { children: React.ReactElement }) {
 function RequireUserAdmin({ children }: { children: React.ReactElement }) {
   const { user } = useApp();
   if (user?.role !== 'admin' && user?.role !== 'unit_admin') return <Navigate to="/" replace />;
+  return children;
+}
+
+// Báo cáo thống kê (bao gồm tab "Thống kê ý kiến văn bản" — E-HSMT mục 48/53):
+// vai trò quản lý (chủ trì/thư ký/admin) đều xem được, không chỉ admin.
+// Khu quản trị Hỗ trợ & Phản hồi dùng RequireUserAdmin — admin + quản trị đơn vị
+// (vai trò HSMT "nhận & phân phối yêu cầu"); chủ trì/thư ký KHÔNG xử lý phản hồi (vá QA 18/07).
+function RequireManage({ children }: { children: React.ReactElement }) {
+  const { user } = useApp();
+  if (!user || !['admin', 'chairman', 'secretary'].includes(user.role)) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -78,6 +90,7 @@ export default function App() {
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/help" element={<HelpPage />} />
+        <Route path="/support" element={<SupportPage />} />
         <Route path="/admin/users" element={<RequireUserAdmin><UsersAdminPage /></RequireUserAdmin>} />
         <Route path="/admin/units" element={<RequireAdmin><UnitsAdminPage /></RequireAdmin>} />
         <Route path="/admin/rooms" element={<RequireAdmin><RoomsAdminPage /></RequireAdmin>} />
@@ -85,7 +98,8 @@ export default function App() {
         <Route path="/admin/guides" element={<RequireAdmin><GuidesAdminPage /></RequireAdmin>} />
         <Route path="/admin/api" element={<RequireAdmin><ApiAdminPage /></RequireAdmin>} />
         <Route path="/admin/audit" element={<RequireAdmin><AuditLogPage /></RequireAdmin>} />
-        <Route path="/admin/reports" element={<RequireAdmin><ReportsPage /></RequireAdmin>} />
+        <Route path="/admin/reports" element={<RequireManage><ReportsPage /></RequireManage>} />
+        <Route path="/support-admin" element={<RequireUserAdmin><SupportAdminPage /></RequireUserAdmin>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

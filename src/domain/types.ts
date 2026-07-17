@@ -8,11 +8,19 @@
 // 'unit_admin' = Quản trị đơn vị: quản lý người dùng trong PHẠM VI đơn vị mình.
 export type Role = 'admin' | 'chairman' | 'secretary' | 'delegate' | 'unit_admin';
 
+/**
+ * Loại đơn vị hành chính (E-HSMT — bối cảnh "các xã, phường, đặc khu" TP Hải Phòng).
+ * OPTIONAL để tương thích ngược dữ liệu cũ (đơn vị cấp Sở không cần gán loại này).
+ */
+export type UnitAdminType = 'xa' | 'phuong' | 'dac_khu';
+
 export interface Unit {
   id: string;
   name: string;
   short: string;
   order: number;
+  /** Loại đơn vị hành chính: Xã / Phường / Đặc khu. OPTIONAL — trống = chưa phân loại. */
+  adminType?: UnitAdminType;
 }
 
 export interface User {
@@ -76,7 +84,7 @@ export interface AgendaItem {
  * Dùng chung 1 collection `catalogs`, phân biệt bằng `type`.
  * OPTIONAL các trường phụ để tương thích ngược + round-trip JSONB.
  */
-export type CatalogType = 'position' | 'meetingType' | 'issuingBody';
+export type CatalogType = 'position' | 'meetingType' | 'issuingBody' | 'docType';
 
 export interface CatalogItem {
   id: string;
@@ -128,6 +136,10 @@ export interface Conclusion {
   content: string;
   agendaItemId?: string;
   createdAt: string;
+  /** Tài liệu đính kèm kết luận (E-HSMT mục 51). OPTIONAL — trống = không đính kèm. */
+  documentIds?: string[];
+  /** Thời điểm sửa gần nhất (chỉ có khi đã từng sửa). */
+  updatedAt?: string;
 }
 
 export interface SignatureInfo {
@@ -245,6 +257,12 @@ export interface DocFile {
    * do người dùng đặt trên tài liệu cá nhân của mình; trống = "Chưa phân thư mục".
    */
   folder?: string;
+  /**
+   * Loại tài liệu chọn từ danh mục loại tài liệu (E-HSMT mục 8, CatalogType='docType').
+   * OPTIONAL — id của CatalogItem (type='docType'); trống = chưa phân loại.
+   * KHÔNG liên quan tới `kind` (main/reference/personal — vẫn giữ nguyên ý nghĩa cũ).
+   */
+  docTypeId?: string;
 }
 
 export interface Annotation {
@@ -259,7 +277,14 @@ export interface Annotation {
 
 // ---------------- Biểu quyết / Lấy ý kiến ----------------
 export type VoteKind = 'vote' | 'poll'; // vote: biểu quyết trong họp; poll: phiếu lấy ý kiến
-export type VoteStatus = 'pending' | 'open' | 'closed';
+/**
+ * 'draft' (E-HSMT mục 13 "chưa lấy ý kiến"): phiếu lấy ý kiến đã soạn nhưng CHƯA gửi —
+ * chỉ áp dụng cho kind='poll'; 'vote' (biểu quyết trong họp) không dùng trạng thái này.
+ * 'pending' : đã tạo, chưa mở (biểu quyết trong họp — chờ chủ tọa mở).
+ * 'open'    : đang mở, nhận ý kiến/biểu quyết.
+ * 'closed'  : đã đóng/kết thúc.
+ */
+export type VoteStatus = 'draft' | 'pending' | 'open' | 'closed';
 /**
  * Ngưỡng thông qua biểu quyết (tính trên TỔNG số người có quyền — eligibleIds):
  * - majority   : quá nửa  → cần ≥ floor(total/2)+1
@@ -273,11 +298,25 @@ export interface VoteOption {
   label: string;
 }
 
+/**
+ * Chữ ký số gắn với TỪNG ý kiến/ballot (E-HSMT mục 30 + quy trình lấy ý kiến văn bản,
+ * dòng 373: "có thể ký số đối với ý kiến đã tham gia và gửi Thư ký tổng hợp").
+ * Mô phỏng — KHÔNG phải chứng thư CA thật (khớp mức mô phỏng của SignatureInfo/ký biên bản).
+ */
+export interface BallotSignature {
+  signedAt: string;
+  serialNumber: string;
+  hash: string; // SHA-256 trên voteId|userId|optionId|comment
+  signerName: string;
+}
+
 export interface Ballot {
   userId: string;
   optionId: string;
   comment?: string;
   castAt: string;
+  /** Ký số ý kiến (mô phỏng). OPTIONAL — trống = gửi ý kiến thường, không ký số. */
+  signature?: BallotSignature;
 }
 
 export interface Vote {
@@ -305,6 +344,12 @@ export interface Vote {
   approveOptionId?: string;
   /** Phương án được tính là "Ý kiến khác / Phiếu trắng" (không tính chống) */
   abstainOptionId?: string;
+  /**
+   * Cán bộ theo dõi (E-HSMT dòng 372, quy trình lấy ý kiến văn bản — "cập nhật cán bộ
+   * theo dõi"). OPTIONAL — userId; khác `createdBy` (người tạo phiếu, có thể là người khác
+   * được giao theo dõi tiến độ phản hồi).
+   */
+  trackerUserId?: string;
 }
 
 // ---------------- Diễn biến họp ----------------
@@ -424,6 +469,28 @@ export interface ApiKey {
   note?: string;
 }
 
+// ---------------- Phản hồi / Góp ý người dùng (HSMT tiêu chí 5.1–5.4) ----------------
+export type FeedbackCategory = 'bug' | 'feature' | 'question' | 'other';
+export type FeedbackStatus = 'new' | 'processing' | 'resolved';
+
+/**
+ * Phản hồi/góp ý người dùng — đáp ứng tiêu chí "Sự hài lòng người sử dụng" (HSMT
+ * mục 5.2 "phương thức ghi nhận ý kiến người dùng"). In-app; kênh hotline/email
+ * hiển thị dạng thông tin tĩnh (không phải entity).
+ */
+export interface Feedback {
+  id: string;
+  userId: string;
+  unitId?: string;
+  category: FeedbackCategory;
+  content: string;
+  status: FeedbackStatus;
+  response?: string;
+  handledBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Gói dữ liệu tổng (dùng cho snapshot state & seed)
 export interface Snapshot {
   users: User[];
@@ -444,6 +511,8 @@ export interface Snapshot {
   guides: GuideDoc[];        // tài liệu hướng dẫn sử dụng
   // RỔ B — Khóa API cấp cho bên thứ 3 (E-HSMT mục 54–59)
   apiKeys: ApiKey[];
+  // Phản hồi/góp ý người dùng (HSMT tiêu chí 5.1–5.4)
+  feedbacks: Feedback[];
 }
 
 export const uid = (): string =>

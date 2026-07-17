@@ -10,11 +10,19 @@ import { can } from '../../services/authService';
 import * as documentService from '../../services/documentService';
 import { downloadTextFile, fmtDT, fmtSize, indexBy, timeAgo, toCsv } from '../format';
 
+/** Nhãn loại tài liệu (E-HSMT mục 8) — tra theo docTypeId trên danh mục catalogs. */
+function useDocTypeLabel(docTypeId?: string): string | undefined {
+  const { s } = useApp();
+  if (!docTypeId) return undefined;
+  return s.catalogs.find((c) => c.id === docTypeId && c.type === 'docType')?.name;
+}
+
 export function DocViewerModal({ doc, onClose }: { doc: DocFile; onClose: () => void }) {
   const { user, s, refresh, toast } = useApp();
   const [note, setNote] = useState('');
   const [noteMode, setNoteMode] = useState<'private' | 'public'>('private');
   const users = indexBy(s.users);
+  const docTypeLabel = useDocTypeLabel(doc.docTypeId);
   const myAnnos = useMemo(
     () => s.annotations.filter((a) => a.docId === doc.id && a.userId === user?.id && !a.isPublic)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -64,6 +72,7 @@ export function DocViewerModal({ doc, onClose }: { doc: DocFile; onClose: () => 
         <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>
           Người tải lên: <b>{users.get(doc.ownerId)?.fullName ?? '—'}</b> · {timeAgo(doc.uploadedAt)} · {fmtSize(doc.size)} · phiên bản {doc.version}
           {doc.issuingBody && <> · Cơ quan ban hành: <b>{doc.issuingBody}</b></>}
+          {docTypeLabel && <> · Loại tài liệu: <b>{docTypeLabel}</b></>}
         </span>
         <span style={{ flex: 1 }} />
         <button className="btn outline sm" onClick={download}><Icon name="download" size={14} />Tải xuống</button>
@@ -130,6 +139,7 @@ export function DocViewerModal({ doc, onClose }: { doc: DocFile; onClose: () => 
 }
 
 export function DocRow({ doc, onView, extra }: { doc: DocFile; onView: (d: DocFile) => void; extra?: React.ReactNode }) {
+  const docTypeLabel = useDocTypeLabel(doc.docTypeId);
   return (
     <div className="doc-item">
       <div className={'doc-ic' + (doc.mime.includes('word') || doc.mime.includes('msword') ? ' word' : '')}>
@@ -138,6 +148,7 @@ export function DocRow({ doc, onView, extra }: { doc: DocFile; onView: (d: DocFi
       <div style={{ minWidth: 0, flex: 1 }}>
         <div className="doc-name" onClick={() => onView(doc)}>
           {doc.name} {doc.secret && <Badge color="red">Mật</Badge>} <DocReviewBadge doc={doc} />
+          {docTypeLabel && <Badge color="gray">{docTypeLabel}</Badge>}
         </div>
         <div className="doc-sub">{fmtSize(doc.size)} · {timeAgo(doc.uploadedAt)} · v{doc.version}</div>
       </div>

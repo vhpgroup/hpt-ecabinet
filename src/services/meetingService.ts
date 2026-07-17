@@ -259,13 +259,48 @@ export async function actOnSpeak(actor: User, id: string, action: 'start' | 'end
   }
 }
 
-// ----- Kết luận -----
-export async function addConclusion(actor: User, meetingId: string, content: string, agendaItemId?: string) {
+// ----- Kết luận (E-HSMT mục 51: thêm/xóa/sửa + đính kèm file) -----
+export async function addConclusion(
+  actor: User, meetingId: string, content: string, agendaItemId?: string, documentIds?: string[],
+) {
   const m = await db.meetings.get(meetingId);
   if (!m) throw new Error('Không tìm thấy phiên họp');
-  const conclusion: Conclusion = { id: uid(), content, agendaItemId, createdAt: nowIso() };
+  const conclusion: Conclusion = {
+    id: uid(), content, agendaItemId, createdAt: nowIso(),
+    documentIds: documentIds && documentIds.length ? documentIds : undefined,
+  };
   await db.meetings.update(meetingId, { conclusions: [...m.conclusions, conclusion] });
   await audit(actor, 'Ghi kết luận', `Kết luận tại "${m.title}"`);
+}
+
+/** Sửa nội dung/mục chương trình/tài liệu đính kèm của MỘT kết luận đã ghi (chủ trì/thư ký). */
+export async function updateConclusion(
+  actor: User, meetingId: string, conclusionId: string,
+  patch: { content?: string; agendaItemId?: string; documentIds?: string[] },
+) {
+  const m = await db.meetings.get(meetingId);
+  if (!m) throw new Error('Không tìm thấy phiên họp');
+  if (!m.conclusions.some((c) => c.id === conclusionId)) throw new Error('Không tìm thấy kết luận cần sửa');
+  const conclusions = m.conclusions.map((c) => c.id === conclusionId
+    ? {
+      ...c,
+      content: patch.content ?? c.content,
+      agendaItemId: patch.agendaItemId,
+      documentIds: patch.documentIds && patch.documentIds.length ? patch.documentIds : undefined,
+      updatedAt: nowIso(),
+    }
+    : c);
+  await db.meetings.update(meetingId, { conclusions });
+  await audit(actor, 'Sửa kết luận', `Sửa kết luận tại "${m.title}"`);
+}
+
+/** Xóa MỘT kết luận đã ghi (chủ trì/thư ký). */
+export async function removeConclusion(actor: User, meetingId: string, conclusionId: string) {
+  const m = await db.meetings.get(meetingId);
+  if (!m) throw new Error('Không tìm thấy phiên họp');
+  const conclusions = m.conclusions.filter((c) => c.id !== conclusionId);
+  await db.meetings.update(meetingId, { conclusions });
+  await audit(actor, 'Xóa kết luận', `Xóa kết luận tại "${m.title}"`);
 }
 
 // ============================================================

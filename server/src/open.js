@@ -92,8 +92,13 @@ function isPast(m, now) {
 const byStartAsc = (a, b) => String(a.startTime ?? '').localeCompare(String(b.startTime ?? ''));
 const byStartDesc = (a, b) => String(b.startTime ?? '').localeCompare(String(a.startTime ?? ''));
 
-/** Đơn vị có liên quan cuộc họp: chủ trì thuộc đơn vị HOẶC có thành phần thuộc đơn vị. */
-function meetingInvolvesUnit(m, unitId, unitOfUser) {
+/**
+ * Đơn vị có liên quan cuộc họp: chủ trì/thư ký thuộc đơn vị HOẶC có thành phần thuộc đơn vị.
+ * EXPORT (P0-1): tái sử dụng ở access.js để cô lập dữ liệu theo đơn vị ở API nội bộ
+ * (không chỉ Open API bên thứ 3) — tránh viết lại logic 2 nơi, tránh trôi (drift) hành vi.
+ */
+export function meetingInvolvesUnit(m, unitId, unitOfUser) {
+  if (!unitId) return false;
   if (unitOfUser(m.chairId) === unitId) return true;
   if (unitOfUser(m.secretaryId) === unitId) return true;
   return (m.participants ?? []).some((p) => unitOfUser(p.userId) === unitId);

@@ -876,7 +876,9 @@ Bi\xEAn b\u1EA3n \u0111\u01B0\u1EE3c l\u1EADp v\xE0 k\xFD s\u1ED1 tr\xEAn H\u1EC
     messages,
     tasks,
     notifications,
-    audit
+    audit,
+    feedbacks: []
+    // Phản hồi/góp ý người dùng — bắt đầu rỗng (HSMT tiêu chí 5.1–5.4)
   };
 }
 export {

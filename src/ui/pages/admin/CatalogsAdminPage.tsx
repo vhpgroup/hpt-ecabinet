@@ -1,7 +1,9 @@
 // ============================================================
-// QUẢN TRỊ DANH MỤC CHUNG (E-HSMT mục 6, 7, 10)
-// 3 tab: Chức vụ / Loại phiên họp / Cơ quan ban hành.
+// QUẢN TRỊ DANH MỤC CHUNG (E-HSMT mục 6, 7, 8, 10)
+// 4 tab: Chức vụ / Loại phiên họp / Cơ quan ban hành / Loại tài liệu.
 // Bảng CRUD: thêm/sửa/xóa, bật-tắt sử dụng, sắp xếp thứ tự.
+// LƯU Ý: tab "Loại tài liệu" (docType) là danh mục ĐỘC LẬP với DocFile.kind
+// (main/reference/personal) — KHÔNG thay thế/đụng ngữ nghĩa kind hiện có.
 // ============================================================
 import React, { useMemo, useState } from 'react';
 import type { CatalogItem, CatalogType } from '../../../domain/types';
@@ -10,7 +12,7 @@ import { useApp } from '../../../store/AppContext';
 import { Badge, EmptyState, Field, Icon, Modal, PageHeader } from '../../components';
 import * as catalogService from '../../../services/catalogService';
 
-const TABS: CatalogType[] = ['position', 'meetingType', 'issuingBody'];
+const TABS: CatalogType[] = ['position', 'meetingType', 'issuingBody', 'docType'];
 
 export default function CatalogsAdminPage() {
   const { user, s, refresh, toast } = useApp();

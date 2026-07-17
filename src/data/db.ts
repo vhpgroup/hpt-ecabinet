@@ -63,6 +63,7 @@ const COLLECTIONS = [
   'votes', 'speakRequests', 'questions', 'messages', 'tasks', 'notifications', 'audit',
   'catalogs', 'guides', // ĐỢT 3: danh mục chung + tài liệu HDSD
   'apiKeys',            // RỔ B: khóa API bên thứ 3
+  'feedbacks',          // Phản hồi/góp ý người dùng (HSMT tiêu chí 5.1–5.4)
 ] as const;
 
 function seedIfEmpty(force = false) {
@@ -93,6 +94,7 @@ export function createDataSource(): DataSource {
     catalogs: new LocalRepo('catalogs'),
     guides: new LocalRepo('guides'),
     apiKeys: new LocalRepo('apiKeys'),
+    feedbacks: new LocalRepo('feedbacks'),
     async reset() {
       seedIfEmpty(true);
     },

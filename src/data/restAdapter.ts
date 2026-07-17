@@ -160,6 +160,7 @@ export function createRestDataSource(baseUrl: string): DataSource {
     catalogs: new RestRepo('catalogs'), // ĐỢT 3: danh mục chung
     guides: new RestRepo('guides'),     // ĐỢT 3: tài liệu HDSD
     apiKeys: new RestRepo('apiKeys'),   // RỔ B: khóa API bên thứ 3
+    feedbacks: new RestRepo('feedbacks'), // Phản hồi/góp ý người dùng (HSMT 5.1–5.4)
 
     async reset() {
       await call('POST', '/admin/reset', {});

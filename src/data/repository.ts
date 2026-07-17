@@ -6,7 +6,7 @@
 // services & UI giữ nguyên.
 // ============================================================
 import type {
-  Annotation, ApiKey, AuditEntry, CatalogItem, ChatMessage, DocFile, GuideDoc, Meeting, Notification,
+  Annotation, ApiKey, AuditEntry, CatalogItem, ChatMessage, DocFile, Feedback, GuideDoc, Meeting, Notification,
   QuestionRequest, Room, SpeakRequest, TaskItem, Unit, User, Vote,
 } from '../domain/types';
 
@@ -67,6 +67,7 @@ export interface DataSource {
   catalogs: Repo<CatalogItem>; // danh mục chung (E-HSMT mục 6, 7, 10)
   guides: Repo<GuideDoc>;      // tài liệu hướng dẫn sử dụng (E-HSMT mục 4)
   apiKeys: Repo<ApiKey>;       // khóa API bên thứ 3 (E-HSMT mục 54–59)
+  feedbacks: Repo<Feedback>;   // phản hồi/góp ý người dùng (HSMT tiêu chí 5.1–5.4)
   /** Xóa toàn bộ và nạp lại dữ liệu mẫu */
   reset(): Promise<void>;
   /** Khóa/giá trị phiên đăng nhập (giai đoạn 2: token JWT) */

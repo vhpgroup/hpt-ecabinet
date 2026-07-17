@@ -514,5 +514,6 @@ export function buildSeed(): Snapshot {
       { id: 'an5', docId: 'd1', userId: 'u-gd', content: 'Đề nghị bổ sung số liệu về giáo dục nghề nghiệp vào mục I.4.', isPublic: true, createdAt: iso(minAgo(16)) },
     ],
     votes, speakRequests, questions, messages, tasks, notifications, audit,
+    feedbacks: [], // Phản hồi/góp ý người dùng — bắt đầu rỗng (HSMT tiêu chí 5.1–5.4)
   };
 }
