@@ -81,7 +81,21 @@ function PollCard({ p, usersMap, onViewDoc }: { p: Vote; usersMap: Map<string, U
   const showResults = p.status !== 'draft' && (p.status === 'closed' || myBallot || isOwner);
   const comments = p.ballots.filter((b) => b.comment);
   const isDraft = p.status === 'draft';
+  // V3 (P1-2 dungthu-tester.md, phiếu KÍN, khớp REST projectVote ở access.js): với phiếu kín, người xem
+  // KHÔNG phải người tạo/quản lý chỉ được thấy danh tính của CHÍNH MÌNH trong danh sách góp
+  // ý — ý kiến người khác redact về ẩn danh. Ở CHẾ ĐỘ DEMO (localStorage) dữ liệu tải về
+  // không được server strip như REST, nên client tự redact tại nơi hiển thị (không đổi dữ
+  // liệu gốc trong s.votes — chỉ ẩn khi render).
+  const canSeeIdentities = !p.secret || isOwner;
+  const identityFor = (b: { userId: string }) =>
+    canSeeIdentities || b.userId === user?.id ? users.get(b.userId)?.fullName : 'Đại biểu (ẩn danh — phiếu kín)';
+  // P2-2 (tester-qa.md): với phiếu KÍN, server đã strip `signature` khỏi ballot của
+  // NGƯỜI KHÁC trước khi trả về (chỉ owner/quản lý/chính chủ xem đủ dữ liệu) — đếm
+  // trên `p.ballots` ở người xem thường sẽ ra số THIẾU (chỉ đếm được ballot chưa bị
+  // ẩn, tức của chính mình). Chỉ hiển thị tổng "đã ký số" khi KHÔNG phải phiếu kín,
+  // HOẶC người xem là người tạo/quản lý (isOwner — luôn nhận đủ dữ liệu từ server).
   const signedCount = p.ballots.filter((b) => b.signature).length;
+  const showSignedCount = !p.secret || isOwner;
 
   const act = async (fn: () => Promise<unknown>, msg?: string) => {
     try { await fn(); await refresh(); if (msg) toast(msg); }
@@ -104,6 +118,7 @@ function PollCard({ p, usersMap, onViewDoc }: { p: Vote; usersMap: Map<string, U
             <Badge color={isDraft ? 'gray' : p.status === 'open' ? 'green' : 'navy'}>
               {isDraft ? 'Nháp — chưa gửi' : p.status === 'open' ? 'Đang lấy ý kiến' : 'Đã kết thúc'}
             </Badge>
+            {p.secret && <Badge color="gold" title="Phiếu kín — ẩn danh người góp ý với người xem không phải người tạo/quản lý">Kín</Badge>}
             {p.deadline && !isDraft && (
               <Badge color={overdue && p.status === 'open' ? 'red' : 'amber'}>
                 Hạn: {fmtDT(p.deadline)}
@@ -112,7 +127,7 @@ function PollCard({ p, usersMap, onViewDoc }: { p: Vote; usersMap: Map<string, U
             {!isDraft && (
               <span style={{ fontSize: 12, color: 'var(--muted)' }}>
                 {users.get(p.createdBy)?.fullName} gửi {timeAgo(p.createdAt)} · {p.ballots.length}/{p.eligibleIds.length} phản hồi
-                {signedCount > 0 && ` · ${signedCount} ý kiến đã ký số`}
+                {showSignedCount && signedCount > 0 && ` · ${signedCount} ý kiến đã ký số`}
               </span>
             )}
             {p.trackerUserId && (
@@ -148,7 +163,11 @@ function PollCard({ p, usersMap, onViewDoc }: { p: Vote; usersMap: Map<string, U
                 <Icon name="bell" size={13} />Nhắc ({p.eligibleIds.length - p.ballots.length})
               </button>
             )}
-            <button className="btn danger sm" onClick={() => act(() => voteService.closeVote(user!, p.id), 'Đã kết thúc lấy ý kiến')}>Kết thúc</button>
+            <button className="btn danger sm" onClick={() => {
+              if (window.confirm(`Kết thúc lấy ý kiến "${p.title}"? Sau khi kết thúc sẽ không nhận thêm ý kiến.`)) {
+                act(() => voteService.closeVote(user!, p.id), 'Đã kết thúc lấy ý kiến');
+              }
+            }}>Kết thúc lấy ý kiến</button>
           </div>
         )}
       </div>
@@ -174,7 +193,7 @@ function PollCard({ p, usersMap, onViewDoc }: { p: Vote; usersMap: Map<string, U
             </button>
           </div>
           <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>
-            Ký số ở đây là <b>mô phỏng</b> (chưa tích hợp chứng thư số CA thật) — dùng để minh họa quy trình chủ trì/thành viên ký số ý kiến trước khi gửi thư ký tổng hợp.
+            Chức năng ký số minh họa quy trình chủ trì/thành viên ký số ý kiến trước khi gửi thư ký tổng hợp — hệ thống sẽ tích hợp chữ ký số hợp pháp (CA) khi triển khai chính thức.
           </p>
         </div>
       )}
@@ -198,29 +217,40 @@ function PollCard({ p, usersMap, onViewDoc }: { p: Vote; usersMap: Map<string, U
           {comments.length > 0 && (
             <div style={{ marginTop: 10 }}>
               <b style={{ fontSize: 12.5, color: 'var(--muted)' }}>Tổng hợp ý kiến góp ý:</b>
-              {comments.map((b, i) => (
-                <div key={i} className="anno" style={{ marginTop: 6 }}>
-                  {b.comment}
-                  <small>
-                    {p.secret ? 'Đại biểu (ẩn danh — phiếu kín)' : users.get(b.userId)?.fullName} · {timeAgo(b.castAt)}
-                    {b.signature && !p.secret && <> · <Badge color="green">Đã ký số</Badge></>}
-                  </small>
-                </div>
-              ))}
+              {comments.map((b, i) => {
+                const identityVisible = canSeeIdentities || b.userId === user?.id;
+                return (
+                  <div key={i} className="anno" style={{ marginTop: 6 }}>
+                    {b.comment}
+                    <small>
+                      {identityFor(b)} · {timeAgo(b.castAt)}
+                      {b.signature && identityVisible && <> · <Badge color="green">Đã ký số</Badge></>}
+                    </small>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       )}
 
       {signOpen && (
-        <PollSignModal onClose={() => setSignOpen(false)} onSubmit={submitSigned} />
+        <PollSignModal onClose={() => setSignOpen(false)} onSubmit={submitSigned}
+          optionLabel={p.options.find((o) => o.id === optionId)?.label ?? ''} comment={comment.trim()} />
       )}
     </div>
   );
 }
 
-/** Modal ký số PIN 6 số cho ý kiến văn bản (tái dùng pattern SignModal ký biên bản). */
-function PollSignModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (pin: string) => void }) {
+/**
+ * Modal ký số PIN 6 số cho ý kiến văn bản (tái dùng pattern SignModal ký biên bản).
+ * V10 (BA#7 dungthu-ba.md mục 1(b)): nhắc lại phương án đã chọn (+ góp ý nếu có) TRƯỚC khi
+ * nhập PIN — giảm rủi ro ký nhầm (đã bỏ phiếu là bất biến, không có tính năng hủy — khớp
+ * HSMT, xem báo cáo BA). Modal cũ chỉ có ô PIN, không nhắc lại lựa chọn.
+ */
+function PollSignModal({ onClose, onSubmit, optionLabel, comment }: {
+  onClose: () => void; onSubmit: (pin: string) => void; optionLabel: string; comment?: string;
+}) {
   const [pin, setPin] = useState('');
   return (
     <Modal title="Ký số ý kiến (mô phỏng — chờ tích hợp CA)" onClose={onClose} width={420}
@@ -228,13 +258,18 @@ function PollSignModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (
         <button className="btn outline" onClick={onClose}>Hủy</button>
         <button className="btn success" disabled={pin.length !== 6} onClick={() => onSubmit(pin)}><Icon name="pen" size={15} />Xác nhận ký & gửi</button>
       </>}>
+      <div style={{ background: '#f4f8fd', border: '1px solid #d7e5f5', borderRadius: 10, padding: '10px 13px', marginBottom: 12 }}>
+        <p style={{ fontSize: 13, margin: 0 }}>Bạn đang ký ý kiến: <b>{optionLabel || '—'}</b></p>
+        {comment && <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 4, marginBottom: 0 }}>Góp ý kèm theo: “{comment}”</p>}
+      </div>
       <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
         Nhập mã PIN 6 chữ số của chứng thư số để ký ý kiến trước khi gửi thư ký tổng hợp.
-        Đây là <b>ký số mô phỏng</b>, chưa tích hợp chứng thư số CA thật (VNPT-CA / Viettel-CA / SmartCA).
+        Chức năng ký số minh họa quy trình — hệ thống sẽ tích hợp chữ ký số hợp pháp (CA) khi triển khai chính thức.
+        Ý kiến đã ký số <b>không thể sửa/hủy</b> — vui lòng kiểm tra lại lựa chọn trước khi xác nhận.
       </p>
       <input className="inp pin-inp" type="password" maxLength={6} inputMode="numeric" placeholder="••••••"
         value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} autoFocus />
-      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>Gợi ý demo: nhập 6 chữ số bất kỳ, ví dụ 123456.</p>
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>Ở bản dùng thử, có thể nhập 6 chữ số bất kỳ, ví dụ 123456.</p>
     </Modal>
   );
 }
@@ -249,6 +284,10 @@ function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: (as
   const [ids, setIds] = useState<string[]>(s.users.filter((u) => u.status === 'active' && u.role !== 'admin' && u.id !== user?.id).map((u) => u.id));
   const [docIds, setDocIds] = useState<string[]>([]);
   const [trackerUserId, setTrackerUserId] = useState('');
+  // V3 (dungthu-tester.md P1-2, dungthu-ba.md): "Phiếu kín" — ẩn danh người góp ý với người
+  // xem không phải người tạo/quản lý (mirror `Vote.secret` đã dùng sẵn cho biểu quyết trong
+  // họp — chỉ chưa có đường vào UI cho kind='poll').
+  const [secret, setSecret] = useState(false);
   const [err, setErr] = useState('');
   const attachable = s.documents.filter((dx) => dx.kind !== 'personal' || dx.ownerId === user?.id);
 
@@ -259,7 +298,7 @@ function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: (as
     try {
       await voteService.createVote(user, {
         kind: 'poll', title: title.trim(), description: description.trim() || undefined,
-        optionLabels: opts, secret: false, deadline: fromLocalInput(deadline),
+        optionLabels: opts, secret, deadline: fromLocalInput(deadline),
         documentIds: docIds, eligibleIds: ids,
         trackerUserId: trackerUserId || undefined,
         saveAsDraft: asDraft,
@@ -300,6 +339,15 @@ function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: (as
         ))}
         <button className="btn ghost sm" onClick={() => setOpts([...opts, ''])}><Icon name="plus" size={14} />Thêm phương án</button>
       </Field>
+      <label className="checkline">
+        <input type="checkbox" checked={secret} onChange={(e) => setSecret(e.target.checked)} />
+        Phiếu kín (ẩn danh người góp ý)
+      </label>
+      {secret && (
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6, marginBottom: 10 }}>
+          Người xem không phải người tạo/quản lý sẽ KHÔNG thấy danh tính người đã cho ý kiến (trừ ý kiến của chính họ).
+        </p>
+      )}
       <Field label={`Gửi tới (${ids.length} thành viên)`}>
         <div style={{ maxHeight: 150, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 10, padding: '8px 13px' }}>
           {s.users.filter((u) => u.status === 'active' && u.id !== user?.id).map((u) => (

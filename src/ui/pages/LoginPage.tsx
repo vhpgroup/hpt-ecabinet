@@ -94,7 +94,7 @@ function ServerPanel({ onClose }: { onClose: () => void }) {
         </button>
         <button type="button" className="btn sm" onClick={saveAndConnect}>Lưu &amp; kết nối</button>
         {isLocalBuild() && current && (
-          <button type="button" className="btn ghost sm" onClick={backToDemo}>Về bản demo</button>
+          <button type="button" className="btn ghost sm" onClick={backToDemo}>Về chế độ cục bộ (không máy chủ)</button>
         )}
       </div>
       {current && <div className="srv-current">Đang trỏ: <code>{current}</code></div>}
@@ -149,7 +149,7 @@ export default function LoginPage() {
         </div>
         <h1>Phòng họp không giấy cho chính quyền số</h1>
         <p className="lead">
-          Toàn bộ vòng đời cuộc họp trên một nền tảng: giấy mời — tài liệu — điểm danh —
+          Toàn bộ vòng đời phiên họp trên một nền tảng: giấy mời — tài liệu — điểm danh —
           phát biểu — biểu quyết — biên bản ký số — nhiệm vụ sau họp.
         </p>
         <div className="login-feats">
@@ -159,7 +159,7 @@ export default function LoginPage() {
           <div><span className="fi"><Icon name="clipboard" size={17} /></span>Theo dõi nhiệm vụ, kết luận sau phiên họp</div>
         </div>
         <div className="lb-foot">
-          Bản demo giai đoạn 1 — dữ liệu mẫu lưu tại trình duyệt · Kiến trúc sẵn sàng nâng cấp máy chủ + PostgreSQL
+          Bản trình diễn — dữ liệu mẫu lưu cục bộ tại trình duyệt; phiên bản triển khai kết nối máy chủ tập trung
         </div>
       </div>
 
@@ -167,7 +167,7 @@ export default function LoginPage() {
         <div className="login-card card">
           <div className="card-pad">
             <h2>Đăng nhập hệ thống</h2>
-            <p className="sub">Chọn nhanh một tài khoản demo hoặc nhập thông tin đăng nhập.</p>
+            <p className="sub">Chọn nhanh một tài khoản dùng thử hoặc nhập thông tin đăng nhập.</p>
             <div className="acct-grid">
               {QUICK_ACCOUNTS.map((a) => (
                 <button key={a.username} type="button"
@@ -194,7 +194,7 @@ export default function LoginPage() {
                 {busy ? 'Đang đăng nhập…' : 'Đăng nhập'}
               </button>
             </form>
-            <p className="login-hint">Mật khẩu demo cho mọi tài khoản: <b>123456</b> · Vai trò: {Object.values(ROLE_LABEL).join(' / ')}</p>
+            <p className="login-hint">Mật khẩu dùng thử cho mọi tài khoản: <b>123456</b> · Vai trò: {Object.values(ROLE_LABEL).join(' / ')}</p>
 
             <div className="srv-toggle-row">
               <button type="button" className="srv-toggle" onClick={() => setShowServer((v) => !v)}>

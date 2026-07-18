@@ -103,7 +103,7 @@ function SimulatedMeeting({ meetingId, notice }: { meetingId: string; notice?: s
         <button className={'ctl-btn' + (camOn ? '' : ' off')} title={camOn ? 'Tắt camera' : 'Bật camera'} onClick={() => setCamOn(!camOn)}>
           <Icon name="video" size={20} />
         </button>
-        <button className="ctl-btn" title="Chia sẻ màn hình (mô phỏng)" onClick={() => toast('Mô phỏng: chia sẻ màn hình sẽ hoạt động khi bật WebRTC (LiveKit) — xem README', 'info')}>
+        <button className="ctl-btn" title="Chia sẻ màn hình (minh họa — bản triển khai chính thức có chia sẻ màn hình thật)" onClick={() => toast('Chia sẻ màn hình thật sẽ khả dụng ở bản triển khai chính thức có kết nối máy chủ truyền hình ảnh.', 'info')}>
           <Icon name="monitor" size={20} />
         </button>
         <button className="ctl-btn leave" onClick={() => nav(`/meetings/${m.id}/live`)}>
@@ -111,7 +111,7 @@ function SimulatedMeeting({ meetingId, notice }: { meetingId: string; notice?: s
         </button>
       </div>
       <p className="online-note">
-        {notice ?? 'Giao diện mô phỏng họp trực tuyến — bật WebRTC (LiveKit) để có âm thanh, hình ảnh và chia sẻ màn hình thật (xem README).'}
+        {notice ?? 'Giao diện minh họa họp trực tuyến — bản triển khai chính thức có kết nối máy chủ truyền âm thanh, hình ảnh và chia sẻ màn hình thật.'}
       </p>
 
       {viewDoc && <DocViewerModal doc={viewDoc} onClose={() => setViewDoc(null)} />}
@@ -382,7 +382,7 @@ function LiveRtcMeeting({
         <div style={{ flex: 1 }}>
           <h2>{m.title}</h2>
           <div className="sub">
-            Họp trực tuyến (WebRTC) · {tiles.length} điểm cầu{currentItem ? ` · Đang thảo luận: Mục ${currentItem.order}` : ''}
+            Họp trực tuyến · {tiles.length} điểm cầu{currentItem ? ` · Đang thảo luận: Mục ${currentItem.order}` : ''}
           </div>
         </div>
         <span className="live-banner" style={{ background: 'rgba(29,158,95,.18)', borderColor: 'rgba(29,158,95,.4)', color: '#7de0ae' }}>
@@ -423,7 +423,7 @@ function LiveRtcMeeting({
         </button>
       </div>
       <p className="online-note">
-        Họp trực tuyến thật qua WebRTC (LiveKit) — âm thanh, hình ảnh và chia sẻ màn hình.
+        Họp trực tuyến thật — âm thanh, hình ảnh và chia sẻ màn hình được truyền trực tiếp qua máy chủ.
       </p>
 
       {viewDoc && <DocViewerModal doc={viewDoc} onClose={() => setViewDoc(null)} />}
@@ -483,8 +483,8 @@ export default function OnlineMeetingPage() {
         const err = e as Error & { status?: number };
         // 403: không thuộc thành phần phiên -> vẫn về mô phỏng nhưng báo rõ.
         const msg = err?.status === 403
-          ? 'Bạn không thuộc thành phần phiên họp — hiển thị chế độ mô phỏng.'
-          : 'Không vào được họp trực tuyến (' + (err?.message ?? 'lỗi') + ') — chuyển sang mô phỏng.';
+          ? 'Bạn không thuộc thành phần phiên họp — hiển thị giao diện minh họa.'
+          : 'Không vào được họp trực tuyến (' + (err?.message ?? 'lỗi') + ') — chuyển sang giao diện minh họa.';
         fallbackToSim(msg);
       }
     })();

@@ -491,7 +491,7 @@ export function buildSeed(): Snapshot {
   const apiKeys = [
     {
       id: 'apk-demo-qlvb',
-      name: 'Hệ thống QLVB (demo)',
+      name: 'Hệ thống QLVB (khóa dùng thử)',
       prefix: DEMO_API_KEY_RAW.slice(0, 8),
       keyHash: sha256Hex(DEMO_API_KEY_RAW),
       scopes: ['meetings', 'documents'],
@@ -499,7 +499,7 @@ export function buildSeed(): Snapshot {
       createdAt: iso(minAgo(60 * 24 * 10)),
       createdById: 'u-admin',
       callCount: 0,
-      note: 'CHỈ DÙNG DEMO — key thô cố định "ecab_demo_qlvb_2026". Tạo khóa mới khi triển khai thật.',
+      note: 'Khóa dùng thử — tạo khóa mới khi triển khai chính thức, không dùng khóa này ở môi trường thật.',
     },
   ] as Snapshot['apiKeys'];
 

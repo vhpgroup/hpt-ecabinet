@@ -311,7 +311,7 @@ export default function LiveMeetingPage() {
         <Modal title="Mã QR điểm danh" onClose={() => setQrOpen(false)} width={340}>
           <div style={{ textAlign: 'center' }}>
             <QRSvg seed={m.id + m.code} />
-            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>Đại biểu quét mã tại cửa phòng họp để điểm danh (mô phỏng).</p>
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>Đại biểu quét mã tại cửa phòng họp để điểm danh.</p>
           </div>
         </Modal>
       )}

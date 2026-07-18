@@ -143,7 +143,7 @@ export async function remindPoll(actor: User, voteId: string): Promise<number> {
   );
   if (!pending.length) return 0;
   await notify(pending, 'Nhắc cho ý kiến',
-    `Đề nghị cho ý kiến "${v.title}"${v.deadline ? ` trước ${new Date(v.deadline).toLocaleString('vi-VN')}` : ''}. (Email/SMS nhắc kèm theo — mô phỏng)`,
+    `Đề nghị cho ý kiến "${v.title}"${v.deadline ? ` trước ${new Date(v.deadline).toLocaleString('vi-VN')}` : ''}. (Email/SMS nhắc kèm theo)`,
     'poll', '#/polls');
   await audit(actor, 'Gửi nhắc nhở', `Nhắc ${pending.length} người chưa cho ý kiến — "${v.title}"`);
   return pending.length;

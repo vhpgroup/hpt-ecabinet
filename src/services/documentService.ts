@@ -2,7 +2,7 @@
 // TÀI LIỆU — tài liệu họp / tham khảo / cá nhân, chia sẻ, ghi chú
 // ============================================================
 import { db } from '../data/db';
-import { uid, type Annotation, type DocFile, type DocKind, type User } from '../domain/types';
+import { uid, type Annotation, type DocFile, type DocKind, type Meeting, type User } from '../domain/types';
 import { can } from './authService';
 import { audit } from './adminService';
 import { notify } from './notificationService';
@@ -20,9 +20,9 @@ function defaultReviewStatus(actor: User, kind: DocKind): DocFile['reviewStatus'
   if (kind === 'personal') return 'approved';
   return can.manageMeetings(actor) ? 'approved' : 'draft';
 }
-// Chế độ máy chủ (GĐ2): 15MB; demo trình duyệt: 1,5MB (hạn mức localStorage)
+// Chế độ máy chủ (GĐ2): 15MB; chế độ cục bộ: 1,5MB (hạn mức lưu trữ tại trình duyệt)
 const MAX_UPLOAD = db.remote ? 15 * 1024 * 1024 : 1.5 * 1024 * 1024;
-const MAX_UPLOAD_LABEL = db.remote ? '15MB' : '1,5MB (bản demo trình duyệt)';
+const MAX_UPLOAD_LABEL = db.remote ? '15MB' : '1,5MB (chế độ cục bộ, chưa kết nối máy chủ)';
 
 /** VNPT: "Thông báo khi có các tài liệu mới cần xử lý" */
 async function notifyNewMeetingDoc(actor: User, doc: DocFile) {
@@ -197,9 +197,26 @@ export async function submitForReview(actor: User, doc: DocFile) {
   }
 }
 
-/** Quản lý duyệt tài liệu (pending -> approved). */
-export async function approveDocument(reviewer: User, doc: DocFile) {
-  if (!can.manageMeetings(reviewer)) throw new Error('Bạn không có quyền duyệt tài liệu');
+/**
+ * V2 (P1-1 dungthu-tester.md + BA mục 1(d), HSMT dòng 356-358 "Thành viên dự họp thực hiện
+ * duyệt"): quản lý toàn cục (chủ trì/thư ký/admin) HOẶC bất kỳ ai là THÀNH PHẦN của CHÍNH
+ * phiên chứa tài liệu (`meeting` — chairId/secretaryId/participant, phải khớp
+ * `meeting.id === doc.meetingId`) được duyệt. Người trình (owner) KHÔNG được tự duyệt dù
+ * họ CÓ là thành phần phiên đó — mirror `guardDocuments`/`canReviewDocumentAsMeetingMember`
+ * phía backend (guard.js). `meeting` OPTIONAL: bỏ trống -> chỉ quản lý toàn cục (hành vi cũ,
+ * dùng khi tài liệu không gắn phiên hoặc nơi gọi không có sẵn bản ghi meeting).
+ */
+function canReviewDocument(reviewer: User, doc: DocFile, meeting?: Meeting): boolean {
+  if (doc.ownerId === reviewer.id) return false; // không tự duyệt tài liệu của chính mình
+  if (can.manageMeetings(reviewer)) return true;
+  if (!meeting || meeting.id !== doc.meetingId) return false;
+  return reviewer.id === meeting.chairId || reviewer.id === meeting.secretaryId
+    || meeting.participants.some((p) => p.userId === reviewer.id);
+}
+
+/** Quản lý HOẶC thành phần phiên duyệt tài liệu (pending -> approved). */
+export async function approveDocument(reviewer: User, doc: DocFile, meeting?: Meeting) {
+  if (!canReviewDocument(reviewer, doc, meeting)) throw new Error('Bạn không có quyền duyệt tài liệu này');
   if (doc.reviewStatus !== 'pending') throw new Error('Chỉ duyệt được tài liệu đang chờ duyệt');
   await db.documents.update(doc.id, {
     reviewStatus: 'approved', reviewedById: reviewer.id, reviewedAt: nowIso(), reviewNote: undefined,
@@ -213,9 +230,9 @@ export async function approveDocument(reviewer: User, doc: DocFile) {
   }
 }
 
-/** Quản lý từ chối tài liệu (pending -> rejected + lý do bắt buộc). */
-export async function rejectDocument(reviewer: User, doc: DocFile, note: string) {
-  if (!can.manageMeetings(reviewer)) throw new Error('Bạn không có quyền duyệt tài liệu');
+/** Quản lý HOẶC thành phần phiên từ chối tài liệu (pending -> rejected + lý do bắt buộc). */
+export async function rejectDocument(reviewer: User, doc: DocFile, note: string, meeting?: Meeting) {
+  if (!canReviewDocument(reviewer, doc, meeting)) throw new Error('Bạn không có quyền duyệt tài liệu này');
   if (doc.reviewStatus !== 'pending') throw new Error('Chỉ từ chối được tài liệu đang chờ duyệt');
   if (!note.trim()) throw new Error('Vui lòng nhập lý do từ chối để đơn vị làm lại');
   await db.documents.update(doc.id, {

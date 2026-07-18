@@ -46,6 +46,21 @@ export const can = {
     !!u && (u.id === chairId || u.id === secretaryId || u.role === 'admin'),
   signMinutes: (u: User | null, chairId: string, secretaryId: string) =>
     !!u && (u.id === chairId || u.id === secretaryId),
+  /**
+   * P0-1 (dungthu-tester.md) + HSMT dòng 354-355 "Quản trị đơn vị nhập thông tin cuộc họp":
+   * unit_admin được TẠO phiên họp mới, ngoài nhóm quản lý sẵn có (mirror ACL server —
+   * `meetings.create = [...MANAGE, 'unit_admin']`). KHÔNG mở rộng quyền SỬA/XÓA — đó vẫn
+   * chỉ dành cho MANAGE (đúng phạm vi vá P0-2 phía backend, xem `index.js enforceMeetingWrite`).
+   */
+  createMeeting: (u: User | null) => !!u && (['admin', 'secretary', 'chairman'].includes(u.role) || u.role === 'unit_admin'),
+  /**
+   * Gửi giấy mời: quản lý toàn cục HOẶC unit_admin với phiên THUỘC ĐƠN VỊ MÌNH (đơn vị của
+   * phiên = đơn vị của chủ trì — cùng khái niệm dùng lúc tạo phiên). Mirror
+   * `POST /api/actions/meetings/:id/invite` phía server (P0-2).
+   */
+  sendInvitations: (actor: User | null, chairUnitId: string | undefined) =>
+    !!actor && (['admin', 'secretary', 'chairman'].includes(actor.role)
+      || (actor.role === 'unit_admin' && !!actor.unitId && actor.unitId === chairUnitId)),
   // ---- Quản trị đơn vị (unit_admin) — E-HSMT vai trò thứ 5 ----
   /** Được vào phân hệ quản trị (admin toàn quyền; unit_admin CHỈ thấy tab Người dùng). */
   openAdmin: (u: User | null) => !!u && (u.role === 'admin' || u.role === 'unit_admin'),

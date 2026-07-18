@@ -30,13 +30,13 @@ export default function ApiAdminPage() {
   return (
     <div>
       <PageHeader title="API & Tích hợp"
-        subtitle="Công bố API chia sẻ dữ liệu cuộc họp cho hệ thống bên thứ 3 (E-HSMT mục 54–59), sẵn sàng đấu nối LGSP" />
+        subtitle="Công bố API chia sẻ dữ liệu phiên họp cho hệ thống bên thứ 3 (E-HSMT mục 54–59), sẵn sàng đấu nối LGSP" />
 
       {!db.remote && (
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, borderLeft: '3px solid var(--amber, #d97706)', display: 'flex', gap: 8, alignItems: 'center' }}>
           <Icon name="info" size={16} />
           <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-            Bản demo trình duyệt: khóa API quản lý trên máy cục bộ để minh họa. <b>Open API chỉ phục vụ ở chế độ máy chủ</b> (cần đặt VITE_API_URL khi triển khai).
+            Chế độ cục bộ (chưa kết nối máy chủ): khóa API quản lý trên máy cục bộ. <b>Open API chỉ phục vụ ở chế độ máy chủ</b> (cần đặt VITE_API_URL khi triển khai).
           </span>
         </div>
       )}
@@ -249,7 +249,7 @@ function CatalogTab({ sampleKey }: { sampleKey?: string }) {
           <b style={{ fontSize: 14 }}>Đặc tả OpenAPI 3.0</b>
           <p style={{ fontSize: 13, color: 'var(--muted)', margin: '4px 0 0' }}>
             Dùng để đăng ký dịch vụ chia sẻ trên LGSP hoặc nạp vào Swagger/Postman.
-            {db.remote ? ' Bản đầy đủ tại /api/open/v1/spec (công khai).' : ' Bản demo sinh từ danh mục dưới đây.'}
+            {db.remote ? ' Bản đầy đủ tại /api/open/v1/spec (công khai).' : ' Bản sinh từ danh mục dưới đây (chế độ cục bộ).'}
           </p>
         </div>
         <button className="btn outline" onClick={downloadSpec}><Icon name="download" size={15} />Tải OpenAPI (JSON)</button>
@@ -316,7 +316,7 @@ function LgspTab() {
       <h3 style={{ marginTop: 0 }}>Mô hình đấu nối qua LGSP</h3>
       <p style={{ color: 'var(--muted)' }}>
         Nền tảng tích hợp và chia sẻ dữ liệu (LGSP) của thành phố gọi các API REST công bố của eCabinet theo chuẩn HTTP/JSON,
-        xác thực bằng khóa API. eCabinet đóng vai trò dịch vụ cung cấp dữ liệu cuộc họp cho các hệ thống liên quan
+        xác thực bằng khóa API. eCabinet đóng vai trò dịch vụ cung cấp dữ liệu phiên họp cho các hệ thống liên quan
         (E-HSMT mục 54–59).
       </p>
       <ol style={{ paddingLeft: 20 }}>

@@ -49,7 +49,7 @@ export default function MeetingsPage() {
         icon="users"
         title="Phiên họp"
         subtitle={`${s.meetings.length} phiên họp trong hệ thống`}
-        actions={can.manageMeetings(user) && (
+        actions={can.createMeeting(user) && (
           <button className="btn" onClick={() => setShowForm(true)}><Icon name="plus" size={16} />Tạo phiên họp</button>
         )}
       />

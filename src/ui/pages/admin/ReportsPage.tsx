@@ -19,7 +19,7 @@ export default function ReportsPage() {
   const [tab, setTab] = useState<'ops' | 'polls'>('ops');
   return (
     <div>
-      <PageHeader title="Báo cáo thống kê" subtitle="Hiệu quả vận hành hệ thống & thống kê ý kiến văn bản xin ý kiến" />
+      <PageHeader title="Báo cáo thống kê" subtitle="Hiệu quả vận hành hệ thống & thống kê ý kiến văn bản lấy ý kiến" />
       <div className="tabs">
         <button className={'tab' + (tab === 'ops' ? ' active' : '')} onClick={() => setTab('ops')}>
           <Icon name="chart" size={15} />Hiệu quả vận hành
@@ -251,7 +251,7 @@ function PollStatsTab() {
     if (!rows.length) { toast('Không có văn bản nào trong khoảng thời gian đã chọn', 'info'); return; }
     setExporting(true);
     try {
-      const headers = ['Văn bản xin ý kiến', 'Ngày tạo', 'Trạng thái', 'Số người được xin ý kiến', 'Đã cho ý kiến', 'Chưa cho ý kiến', 'Tỷ lệ phản hồi (%)'];
+      const headers = ['Văn bản lấy ý kiến', 'Ngày tạo', 'Trạng thái', 'Số người được lấy ý kiến', 'Đã cho ý kiến', 'Chưa cho ý kiến', 'Tỷ lệ phản hồi (%)'];
       const csvRows = rows.map((r) => [
         r.title, fmtDate(r.createdAt), VOTE_STATUS[r.status].label,
         r.totalEligible, r.responded, r.notResponded, r.responseRatePercent,
@@ -275,22 +275,22 @@ function PollStatsTab() {
           <span className="field-label">Đến ngày</span>
           <input type="date" className="inp" value={to} onChange={(e) => setTo(e.target.value)} />
         </div>
-        <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Thống kê văn bản xin ý kiến được TẠO trong khoảng thời gian đã chọn.</span>
+        <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Thống kê văn bản lấy ý kiến được TẠO trong khoảng thời gian đã chọn.</span>
         <button className="btn outline sm" style={{ marginLeft: 'auto' }} onClick={exportSummaryCsv} disabled={exporting}>
           <Icon name="download" size={14} />{exporting ? 'Đang xuất…' : 'Xuất CSV'}
         </button>
       </div>
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <StatCard icon="vote" label="Số văn bản xin ý kiến" value={totals.count} tone="blue" />
-        <StatCard icon="users" label="Tổng số người được xin ý kiến" value={totals.totalEligible} tone="purple" />
+        <StatCard icon="vote" label="Số văn bản lấy ý kiến" value={totals.count} tone="blue" />
+        <StatCard icon="users" label="Tổng số người được lấy ý kiến" value={totals.totalEligible} tone="purple" />
         <StatCard icon="check" label="Đã cho ý kiến" value={totals.totalResponded} tone="green" hint={`${totals.avgResponseRate}% trung bình`} />
         <StatCard icon="clock" label="Chưa cho ý kiến" value={totals.totalNotResponded} tone="amber" />
       </div>
 
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
         <div className="card card-pad">
-          <h3 className="card-title"><Icon name="chart" size={16} />Số văn bản xin ý kiến theo tháng</h3>
+          <h3 className="card-title"><Icon name="chart" size={16} />Số văn bản lấy ý kiến theo tháng</h3>
           {monthly.length > 0 ? <BarChart data={monthly} height={170} /> : <p style={{ fontSize: 13, color: 'var(--muted)' }}>Không có dữ liệu trong khoảng đã chọn.</p>}
         </div>
         <div className="card card-pad">
@@ -306,14 +306,14 @@ function PollStatsTab() {
         <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--line)' }}>
           <h3 style={{ fontSize: 15 }}>Chi tiết theo từng văn bản ({rows.length})</h3>
         </div>
-        {rows.length === 0 && <div style={{ padding: 20 }}><p style={{ fontSize: 13, color: 'var(--muted)' }}>Không có văn bản xin ý kiến nào trong khoảng thời gian đã chọn.</p></div>}
+        {rows.length === 0 && <div style={{ padding: 20 }}><p style={{ fontSize: 13, color: 'var(--muted)' }}>Không có văn bản lấy ý kiến nào trong khoảng thời gian đã chọn.</p></div>}
         {rows.length > 0 && (
           <div className="tbl-wrap">
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>Văn bản xin ý kiến</th><th>Ngày tạo</th><th>Trạng thái</th>
-                  <th>Được xin ý kiến</th><th>Đã cho ý kiến</th><th>Chưa cho ý kiến</th><th>Tỷ lệ</th><th></th>
+                  <th>Văn bản lấy ý kiến</th><th>Ngày tạo</th><th>Trạng thái</th>
+                  <th>Được lấy ý kiến</th><th>Đã cho ý kiến</th><th>Chưa cho ý kiến</th><th>Tỷ lệ</th><th></th>
                 </tr>
               </thead>
               <tbody>

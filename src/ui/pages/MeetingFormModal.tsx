@@ -14,6 +14,14 @@ interface Props { initial?: Meeting; onClose: () => void; onSaved: (id: string) 
 export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
   const { user, s, refresh, toast } = useApp();
   const activeUsers = s.users.filter((u) => u.status === 'active');
+  // V1 (P0-1 dungthu-tester.md): unit_admin TẠO phiên mới chỉ chọn được chủ trì/thư ký
+  // TRONG ĐƠN VỊ MÌNH (mirror enforceMeetingWrite phía server — chairId/secretaryId.unitId
+  // === unitId của unit_admin). Khi SỬA phiên đã có (initial), không siết lại — ngoài phạm
+  // vi vá P0-2 (chỉ áp cho 'create').
+  const isUnitAdminCreating = !initial && user?.role === 'unit_admin';
+  const chairSecCandidates = isUnitAdminCreating
+    ? activeUsers.filter((u) => u.unitId === user?.unitId)
+    : activeUsers;
 
   const defStart = new Date(Date.now() + 24 * 3600e3); defStart.setHours(8, 0, 0, 0);
   const defEnd = new Date(defStart); defEnd.setHours(11, 30);
@@ -26,8 +34,16 @@ export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
   const [end, setEnd] = useState(toLocalInput(initial?.endTime ?? defEnd.toISOString()));
   const [roomId, setRoomId] = useState(initial?.roomId ?? s.rooms[0]?.id ?? '');
   const [isOnline, setIsOnline] = useState(initial?.isOnline ?? true);
-  const [chairId, setChairId] = useState(initial?.chairId ?? user?.id ?? '');
-  const [secretaryId, setSecretaryId] = useState(initial?.secretaryId ?? s.users.find((u) => u.role === 'secretary')?.id ?? '');
+  const [chairId, setChairId] = useState(
+    initial?.chairId
+    ?? (isUnitAdminCreating ? (chairSecCandidates.find((u) => u.role === 'chairman')?.id ?? chairSecCandidates[0]?.id ?? '') : (user?.id ?? '')),
+  );
+  const [secretaryId, setSecretaryId] = useState(
+    initial?.secretaryId
+    ?? (isUnitAdminCreating
+      ? (chairSecCandidates.find((u) => u.role === 'secretary')?.id ?? chairSecCandidates[0]?.id ?? '')
+      : (s.users.find((u) => u.role === 'secretary')?.id ?? '')),
+  );
   const [memberIds, setMemberIds] = useState<string[]>(
     initial?.participants.filter((p) => p.meetingRole === 'member').map((p) => p.userId)
     ?? activeUsers.filter((u) => u.role === 'delegate').map((u) => u.id),
@@ -54,7 +70,18 @@ export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
   const save = async () => {
     setErr('');
     if (!title.trim()) return setErr('Vui lòng nhập tên phiên họp');
-    if (new Date(start) >= new Date(end)) return setErr('Thời gian kết thúc phải sau thời gian bắt đầu');
+    // V5 (P1-4 dungthu-tester.md — điều tra: format.ts toLocalInput/fromLocalInput dùng đúng
+    // getter/setter LOCAL, không lệch múi giờ; giá trị lệch tester quan sát khớp CHÍNH XÁC
+    // giá trị MẶC ĐỊNH của form — kết luận: công cụ automation không trigger onChange React
+    // khi điền input datetime-local, KHÔNG phải lỗi code). Lưới an toàn nhẹ, không sửa mù:
+    const startD = new Date(start);
+    const endD = new Date(end);
+    if (isNaN(startD.getTime()) || isNaN(endD.getTime())) return setErr('Thời gian bắt đầu/kết thúc không hợp lệ');
+    if (startD >= endD) return setErr('Thời gian kết thúc phải sau thời gian bắt đầu');
+    if (!initial && startD.getTime() < Date.now()
+      && !window.confirm('Thời gian bắt đầu bạn chọn đã ở trong quá khứ. Vẫn tạo phiên họp với thời gian này?')) {
+      return;
+    }
     if (!chairId || !secretaryId) return setErr('Vui lòng chọn chủ trì và thư ký');
     const cleanAgenda = agenda.filter((a) => a.title.trim()).map((a, i) => ({ ...a, order: i + 1 }));
     if (!user) return;
@@ -119,15 +146,20 @@ export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
       <div className="form-row">
         <Field label="Chủ trì" required>
           <select className="sel" value={chairId} onChange={(e) => setChairId(e.target.value)}>
-            {activeUsers.map((u) => <option key={u.id} value={u.id}>{u.fullName} — {u.title}</option>)}
+            {chairSecCandidates.map((u) => <option key={u.id} value={u.id}>{u.fullName} — {u.title}</option>)}
           </select>
         </Field>
         <Field label="Thư ký" required>
           <select className="sel" value={secretaryId} onChange={(e) => setSecretaryId(e.target.value)}>
-            {activeUsers.map((u) => <option key={u.id} value={u.id}>{u.fullName} — {u.title}</option>)}
+            {chairSecCandidates.map((u) => <option key={u.id} value={u.id}>{u.fullName} — {u.title}</option>)}
           </select>
         </Field>
       </div>
+      {isUnitAdminCreating && (
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>
+          Với vai Quản trị đơn vị: chủ trì và thư ký chỉ chọn được trong phạm vi đơn vị của bạn.
+        </p>
+      )}
 
       <Field label={`Thành phần tham dự (${memberIds.length} đại biểu)`}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 14px', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 13px', maxHeight: 180, overflowY: 'auto' }}>

@@ -2,7 +2,7 @@
 // DÙNG CHUNG GIỮA CÁC TRANG — trình xem tài liệu + dòng tài liệu
 // ============================================================
 import React, { useMemo, useState } from 'react';
-import type { DocFile } from '../../domain/types';
+import type { DocFile, Meeting } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
 import { Badge, Field, Icon, Modal } from '../components';
 import { DOC_REVIEW } from '../../domain/labels';
@@ -179,15 +179,30 @@ export function DocReviewBadge({ doc }: { doc: DocFile }) {
 /**
  * Nút thao tác duyệt tài liệu dùng chung (DocumentsPage + tab tài liệu phiên họp):
  * - Người trình (owner): "Trình duyệt" khi nháp/bị từ chối.
- * - Quản lý (chủ trì/thư ký/admin): "Duyệt" / "Từ chối" khi đang chờ duyệt.
+ * - Quản lý (chủ trì/thư ký/admin) TOÀN HỆ THỐNG: "Duyệt" / "Từ chối" khi đang chờ duyệt.
+ * - V2 (P1-1 dungthu-tester.md + BA mục 1(d), HSMT dòng 356-358 "Thành viên dự họp thực
+ *   hiện duyệt"): THÀNH VIÊN của CHÍNH phiên chứa tài liệu (chairId/secretaryId/participant
+ *   của `doc.meetingId`) cũng thấy nút Duyệt/Từ chối — mirror `canReviewDocumentAsMeetingMember`
+ *   phía backend (guard.js). Người trình (owner) KHÔNG được tự duyệt dù họ CÓ là thành phần
+ *   phiên đó (khớp guard server: `!isOwner` luôn được kiểm riêng khỏi điều kiện thành phần).
+ *   `meeting` (OPTIONAL) = bản ghi phiên họp chứa `doc.meetingId`; truyền `undefined` khi
+ *   gọi ở nơi không có sẵn meeting (vd DocumentsPage tab tài liệu cá nhân/dùng chung) — khi
+ *   đó chỉ MANAGE toàn cục mới duyệt được (đúng hành vi cũ, tài liệu không gắn phiên không
+ *   có "thành phần" để xét).
  */
-export function DocReviewControls({ doc, onChanged }: { doc: DocFile; onChanged?: () => void }) {
+export function DocReviewControls({ doc, meeting, onChanged }: { doc: DocFile; meeting?: Meeting; onChanged?: () => void }) {
   const { user, refresh, toast } = useApp();
   const [rejectOpen, setRejectOpen] = useState(false);
   if (!user) return null;
   const st = doc.reviewStatus ?? 'approved';
   const isOwner = doc.ownerId === user.id;
   const manage = can.manageMeetings(user);
+  const isMeetingMember = !!meeting && meeting.id === doc.meetingId && (
+    user.id === meeting.chairId || user.id === meeting.secretaryId
+    || meeting.participants.some((p) => p.userId === user.id)
+  );
+  // người trình KHÔNG được tự duyệt dù có là thành phần phiên (mirror guard.js: !isOwner)
+  const canApprove = (manage || isMeetingMember) && !isOwner;
 
   const act = async (fn: () => Promise<unknown>, msg: string) => {
     try { await fn(); await refresh(); onChanged?.(); toast(msg); }
@@ -202,9 +217,9 @@ export function DocReviewControls({ doc, onChanged }: { doc: DocFile; onChanged?
           <Icon name="send" size={13} />Trình duyệt
         </button>
       )}
-      {manage && st === 'pending' && (
+      {canApprove && st === 'pending' && (
         <>
-          <button className="btn success sm" onClick={() => act(() => documentService.approveDocument(user, doc), 'Đã duyệt tài liệu')}>
+          <button className="btn success sm" onClick={() => act(() => documentService.approveDocument(user, doc, meeting), 'Đã duyệt tài liệu')}>
             <Icon name="check" size={13} />Duyệt
           </button>
           <button className="btn danger sm" onClick={() => setRejectOpen(true)}>
@@ -214,7 +229,7 @@ export function DocReviewControls({ doc, onChanged }: { doc: DocFile; onChanged?
       )}
       {rejectOpen && (
         <RejectModal onClose={() => setRejectOpen(false)}
-          onSubmit={(note) => act(async () => { await documentService.rejectDocument(user, doc, note); setRejectOpen(false); }, 'Đã từ chối — yêu cầu đơn vị làm lại')} />
+          onSubmit={(note) => act(async () => { await documentService.rejectDocument(user, doc, note, meeting); setRejectOpen(false); }, 'Đã từ chối — yêu cầu đơn vị làm lại')} />
       )}
     </>
   );

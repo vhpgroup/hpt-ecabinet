@@ -102,9 +102,9 @@ export default function CalendarPage() {
 
       <div className="card" style={{ marginTop: 16 }}>
         <div style={{ padding: '14px 17px', borderBottom: '1px solid var(--line)' }}>
-          <h3 style={{ fontSize: 15 }}>Cuộc họp trong tháng {anchor.getMonth() + 1} ({monthMeetings.length})</h3>
+          <h3 style={{ fontSize: 15 }}>Phiên họp trong tháng {anchor.getMonth() + 1} ({monthMeetings.length})</h3>
         </div>
-        {monthMeetings.length === 0 && <div className="empty"><p>Không có cuộc họp trong tháng này</p></div>}
+        {monthMeetings.length === 0 && <div className="empty"><p>Không có phiên họp trong tháng này</p></div>}
         {monthMeetings.map((m) => {
           const st = MEETING_STATUS[m.status];
           return (

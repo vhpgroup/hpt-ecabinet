@@ -471,9 +471,19 @@ public static class Guard
         return p;
     }
 
+    // Field điều hành NỘI DUNG phiên (không phải trạng thái/chữ ký/điểm danh — những field
+    // đó đã bị khóa cứng ở các nhánh riêng bên dưới, áp dụng bất kể isChairOfThisMeeting):
+    // chairId/secretaryId của CHÍNH phiên đang sửa (id-match trên bản ghi EXISTING, không
+    // phải patch — tránh id-match giả bằng cách tự gửi chairId mới trong patch rồi tự nhận là
+    // chủ trì) được ghi dù role tài khoản không thuộc MANAGE (vá P2-1, tester-qa.md mục 3.5 —
+    // FE `can.chairControls` cho phép id-match sửa kết luận, BE trước đây chỉ role-match nên
+    // âm thầm xóa sạch patch — mở đúng thiết kế nghiệp vụ, KHÔNG mở rộng ACL toàn cục).
+    private static readonly string[] ChairContentFields = { "conclusions", "agenda", "minutes" };
+
     private static JsonObject GuardMeetings(JsonObject existing, JsonObject patch, JwtPayload user)
     {
         var isManage = Manage.Contains(user.Role);
+        var isChairOfThisMeeting = J.Str(existing, "chairId") == user.Sub || J.Str(existing, "secretaryId") == user.Sub;
         var p = J.CloneObj(patch);
 
         p.Remove("status");
@@ -512,11 +522,16 @@ public static class Guard
                 : DelegateOwnRowOnly(existing, incoming, user.Sub);
         }
 
-        // đại biểu thường: ngoài dòng tham dự, không sửa gì khác
+        // đại biểu thường: ngoài dòng tham dự của mình, không sửa gì khác — TRỪ chairId/
+        // secretaryId của CHÍNH phiên này được thêm quyền ghi conclusions/agenda/minutes
+        // (đã sanitize signatures/locked ở nhánh trên, KHÔNG mở status/checkedInAt/chữ ký).
         if (!isManage)
         {
+            var keepFields = isChairOfThisMeeting
+                ? new[] { "participants" }.Concat(ChairContentFields).ToArray()
+                : new[] { "participants" };
             foreach (var key in p.Select(kv => kv.Key).ToList())
-                if (key != "participants") p.Remove(key);
+                if (!keepFields.Contains(key)) p.Remove(key);
         }
         return p;
     }

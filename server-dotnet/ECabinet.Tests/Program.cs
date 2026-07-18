@@ -29,6 +29,7 @@ await Group6_OpenRtc(t);
 await Group7_Ws(t);
 await Group8_UnitIsolation(t);      // P0-1/P0-2/P0-3
 await Group9_SignVoteFeedback(t);   // P0-4/P1-5/P1-6/P1-7/P1-8
+await Group10_ChairVsManage(t);     // P2-1 (QA 18/07, tester-qa.md mục 3.5)
 
 var exit = t.Report();
 return exit;
@@ -1433,6 +1434,171 @@ static async Task Group9_SignVoteFeedback(TestRunner t)
         var r = await app.Patch("/api/units/un-khdt", new JsonObject { ["adminType"] = "phuong" }, admin);
         Assert.Status(200, r.Status, "units.adminType (field mới FE) không bị guard chặn");
         Assert.Eq("phuong", r.Obj["adminType"]?.GetValue<string>(), "adminType round-trip đúng");
+    });
+}
+
+// ============================================================
+// NHÓM 10 — P2-1 (QA 18/07, tester-qa.md mục 3.5): chairCtl (FE, id-match theo
+// chairId/secretaryId của CHÍNH phiên) vs MANAGE (BE, role-match toàn cục) cho
+// PATCH conclusions/agenda/minutes. Người được GÁN làm chủ trì/thư ký của một
+// phiên cụ thể (role tài khoản = 'delegate', KHÔNG phải 'chairman'/'secretary')
+// phải ghi được kết luận/chương trình/dự thảo biên bản của CHÍNH phiên đó; các
+// field khóa cứng (status, checkedInAt, chữ ký/khóa biên bản, field khác) vẫn
+// bất biến — kể cả với chairId id-match.
+// ============================================================
+static async Task Group10_ChairVsManage(TestRunner t)
+{
+    t.Group("10-CHAIR-VS-MANAGE");
+    await using var app = await TestApp.CreateAsync();
+    var admin = await app.Login("quantri");
+
+    // u-khdt (username sokhdt, role=delegate) được GÁN làm chairId của phiên mới —
+    // nghiệp vụ hợp lệ: chủ trì 1 buổi họp không nhất thiết phải có account role='chairman'.
+    var mChair = new JsonObject
+    {
+        ["id"] = "m-chair-deleg", ["code"] = "M-CHAIR-DELEG", ["title"] = "Họp do đại biểu chủ trì", ["description"] = "desc",
+        ["startTime"] = NowIsoT(), ["endTime"] = NowIsoT(),
+        ["roomId"] = "r1", ["isOnline"] = false, ["status"] = "live", ["chairId"] = "u-khdt", ["secretaryId"] = "u-tk",
+        ["participants"] = new JsonArray(
+            new JsonObject { ["userId"] = "u-khdt", ["meetingRole"] = "chair", ["attendStatus"] = "accepted", ["checkedInAt"] = null },
+            new JsonObject { ["userId"] = "u-tk", ["meetingRole"] = "secretary", ["attendStatus"] = "accepted", ["checkedInAt"] = null },
+            // u-tc: participant TRỰC TIẾP (member thường) nhưng KHÔNG phải chairId/secretaryId
+            // của phiên này — dùng để test "delegate không id-match" mà vẫn XEM/PATCH được
+            // (không bị 404 do access control khác đơn vị), tách bạch đúng biến cần kiểm.
+            new JsonObject { ["userId"] = "u-tc", ["meetingRole"] = "member", ["attendStatus"] = "accepted", ["checkedInAt"] = null }),
+        ["agenda"] = new JsonArray(new JsonObject { ["id"] = "ag-old", ["order"] = 1, ["title"] = "Mục cũ", ["durationMinutes"] = 15 }),
+        ["conclusions"] = new JsonArray(),
+        ["minutes"] = new JsonObject { ["content"] = "Bản cũ", ["signatures"] = new JsonArray(), ["locked"] = false },
+    };
+    Assert.Status(201, (await app.Post("/api/meetings", mChair, admin)).Status, "tạo m-chair-deleg (chairId=u-khdt, delegate)");
+
+    await t.Case("meetings.conclusions: delegate được GÁN chairId của CHÍNH phiên -> PATCH thành công (P2-1)", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var body = new JsonObject { ["conclusions"] = new JsonArray(new JsonObject { ["id"] = "c-deleg-1", ["content"] = "Kết luận do đại biểu chủ trì ghi", ["createdAt"] = NowIsoT() }) };
+        var r = await app.Patch("/api/meetings/m-chair-deleg", body, tok);
+        Assert.Status(200, r.Status, "PATCH conclusions bởi chairId id-match");
+        Assert.Eq(1, r.Obj["conclusions"]!.AsArray().Count, "conclusions có 1 phần tử (KHÔNG bị xóa sạch)");
+        Assert.Eq("Kết luận do đại biểu chủ trì ghi", r.Obj["conclusions"]![0]!["content"]?.GetValue<string>(), "nội dung kết luận đúng như đã gửi");
+    });
+
+    await t.Case("meetings.agenda: delegate secretaryId của CHÍNH phiên -> PATCH thành công (P2-1)", async () =>
+    {
+        // đổi vai: dùng u-tk (secretary, đã là secretaryId của m-chair-deleg) — nhưng u-tk có
+        // role='secretary' (thuộc MANAGE) nên không phải ca id-match thuần. Dựng phiên riêng
+        // với secretaryId = u-khdt (delegate) để cô lập đúng biến cần kiểm.
+        var mSec = new JsonObject
+        {
+            ["id"] = "m-sec-deleg", ["code"] = "M-SEC-DELEG", ["title"] = "Họp do đại biểu làm thư ký", ["description"] = "desc",
+            ["startTime"] = NowIsoT(), ["endTime"] = NowIsoT(),
+            ["roomId"] = "r1", ["isOnline"] = false, ["status"] = "live", ["chairId"] = "u-pct", ["secretaryId"] = "u-khdt",
+            ["participants"] = new JsonArray(
+                new JsonObject { ["userId"] = "u-pct", ["meetingRole"] = "chair", ["attendStatus"] = "accepted", ["checkedInAt"] = null },
+                new JsonObject { ["userId"] = "u-khdt", ["meetingRole"] = "secretary", ["attendStatus"] = "accepted", ["checkedInAt"] = null }),
+            ["agenda"] = new JsonArray(new JsonObject { ["id"] = "ag-old2", ["order"] = 1, ["title"] = "Mục cũ", ["durationMinutes"] = 15 }),
+            ["conclusions"] = new JsonArray(), ["minutes"] = null,
+        };
+        Assert.Status(201, (await app.Post("/api/meetings", mSec, admin)).Status, "tạo m-sec-deleg (secretaryId=u-khdt, delegate)");
+
+        var tok = await app.Login("sokhdt");
+        var body = new JsonObject { ["agenda"] = new JsonArray(new JsonObject { ["id"] = "ag-new", ["order"] = 1, ["title"] = "Mục mới do thư ký (delegate) thêm", ["durationMinutes"] = 20 }) };
+        var r = await app.Patch("/api/meetings/m-sec-deleg", body, tok);
+        Assert.Status(200, r.Status, "PATCH agenda bởi secretaryId id-match");
+        Assert.Eq(1, r.Obj["agenda"]!.AsArray().Count, "agenda có 1 phần tử (KHÔNG bị xóa sạch)");
+        Assert.Eq("Mục mới do thư ký (delegate) thêm", r.Obj["agenda"]![0]!["title"]?.GetValue<string>(), "nội dung agenda đúng như đã gửi");
+    });
+
+    await t.Case("meetings.minutes: delegate chairId của CHÍNH phiên -> sửa dự thảo (CHƯA khóa) được (P2-1)", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var body = new JsonObject { ["minutes"] = new JsonObject { ["content"] = "Dự thảo do đại biểu chủ trì cập nhật" } };
+        var r = await app.Patch("/api/meetings/m-chair-deleg", body, tok);
+        Assert.Status(200, r.Status, "PATCH minutes (dự thảo) bởi chairId id-match");
+        Assert.Eq("Dự thảo do đại biểu chủ trì cập nhật", r.Obj["minutes"]!["content"]?.GetValue<string>(), "nội dung minutes đúng như đã gửi");
+        Assert.Eq(false, r.Obj["minutes"]!["locked"]?.GetValue<bool>(), "minutes vẫn locked=false (chưa ký)");
+    });
+
+    await t.Case("meetings.conclusions: delegate KHÔNG liên quan phiên (không id-match) -> patch bị xóa sạch, KHÔNG lỗi rõ (giữ hành vi cũ, silent no-op)", async () =>
+    {
+        var tok = await app.Login("sotc"); // u-tc, delegate, KHÔNG phải chairId/secretaryId của m-chair-deleg
+        var before = await app.Get("/api/meetings/m-chair-deleg", tok);
+        var beforeCount = before.Obj["conclusions"]!.AsArray().Count;
+        var body = new JsonObject { ["conclusions"] = new JsonArray(new JsonObject { ["id"] = "c-hack", ["content"] = "Không được phép", ["createdAt"] = NowIsoT() }) };
+        var r = await app.Patch("/api/meetings/m-chair-deleg", body, tok);
+        Assert.Status(200, r.Status, "PATCH không throw (silent no-op, giữ hành vi cũ — không phải lỗi bảo mật, chỉ là field bị lọc)");
+        Assert.Eq(beforeCount, r.Obj["conclusions"]!.AsArray().Count, "conclusions KHÔNG đổi — patch của người ngoài phiên bị lọc sạch");
+    });
+
+    await t.Case("meetings: delegate chairId phiên NÀY kèm title/roomId/chairId khác -> chỉ conclusions qua, field khác KHÔNG đổi (không mở rộng ngoài phạm vi)", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var before = await app.Get("/api/meetings/m-chair-deleg", tok);
+        var beforeTitle = before.Obj["title"]?.GetValue<string>();
+        var beforeRoom = before.Obj["roomId"]?.GetValue<string>();
+        var body = new JsonObject
+        {
+            ["conclusions"] = new JsonArray(new JsonObject { ["id"] = "c-deleg-2", ["content"] = "Kết luận 2", ["createdAt"] = NowIsoT() }),
+            ["title"] = "Đổi tên phiên trái phép", ["roomId"] = "r-khac", ["chairId"] = "u-hack",
+        };
+        var r = await app.Patch("/api/meetings/m-chair-deleg", body, tok);
+        Assert.Status(200, r.Status, "PATCH không throw");
+        Assert.Eq(beforeTitle, r.Obj["title"]?.GetValue<string>(), "title KHÔNG đổi (field ngoài phạm vi conclusions/agenda/minutes)");
+        Assert.Eq(beforeRoom, r.Obj["roomId"]?.GetValue<string>(), "roomId KHÔNG đổi");
+        Assert.Eq("u-khdt", r.Obj["chairId"]?.GetValue<string>(), "chairId KHÔNG đổi (không tự đổi chủ trì qua kênh này)");
+    });
+
+    await t.Case("meetings: delegate chairId phiên này kèm status -> status vẫn khóa cứng (chỉ qua /actions)", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var body = new JsonObject
+        {
+            ["conclusions"] = new JsonArray(new JsonObject { ["id"] = "c-deleg-3", ["content"] = "Kết luận 3", ["createdAt"] = NowIsoT() }),
+            ["status"] = "finished",
+        };
+        var r = await app.Patch("/api/meetings/m-chair-deleg", body, tok);
+        Assert.Status(200, r.Status, "PATCH không throw");
+        Assert.Eq("live", r.Obj["status"]?.GetValue<string>(), "status vẫn khóa cứng, kể cả với chairId id-match");
+    });
+
+    await t.Case("meetings: delegate chairId phiên này kèm seatAssignments -> 403 (field khóa cứng khác vẫn chặn thẳng, không âm thầm bỏ qua)", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var body = new JsonObject { ["seatAssignments"] = new JsonObject { ["u-khdt"] = "1-1" } };
+        var r = await app.Patch("/api/meetings/m-chair-deleg", body, tok);
+        Assert.Status(403, r.Status, "seatAssignments vẫn CHỈ chủ tọa/thư ký (role MANAGE) — không mở cho id-match delegate");
+    });
+
+    await t.Case("meetings.minutes: đã KHÓA (locked=true, đã ký) -> id-match chairId cũng KHÔNG sửa được (bất biến, giữ hành vi cũ)", async () =>
+    {
+        var chair = await app.Login("chutich");
+        var mLocked = new JsonObject
+        {
+            ["id"] = "m-locked-deleg", ["code"] = "M-LOCKED-DELEG", ["title"] = "Họp đã ký biên bản", ["description"] = "desc",
+            ["startTime"] = NowIsoT(), ["endTime"] = NowIsoT(),
+            ["roomId"] = "r1", ["isOnline"] = false, ["status"] = "finished", ["chairId"] = "u-khdt", ["secretaryId"] = "u-tk",
+            ["participants"] = new JsonArray(
+                new JsonObject { ["userId"] = "u-khdt", ["meetingRole"] = "chair", ["attendStatus"] = "accepted", ["checkedInAt"] = null },
+                new JsonObject { ["userId"] = "u-tk", ["meetingRole"] = "secretary", ["attendStatus"] = "accepted", ["checkedInAt"] = null }),
+            ["agenda"] = new JsonArray(), ["conclusions"] = new JsonArray(),
+            ["minutes"] = new JsonObject { ["content"] = "Đã ký, bất biến", ["signatures"] = new JsonArray(new JsonObject { ["userId"] = "u-khdt" }), ["locked"] = true },
+        };
+        Assert.Status(201, (await app.Post("/api/meetings", mLocked, admin)).Status, "tạo m-locked-deleg (minutes.locked=true)");
+
+        var tok = await app.Login("sokhdt");
+        var r = await app.Patch("/api/meetings/m-locked-deleg", new JsonObject { ["minutes"] = new JsonObject { ["content"] = "Sửa lén sau khi khóa" } }, tok);
+        Assert.Status(200, r.Status, "PATCH không throw");
+        Assert.Eq("Đã ký, bất biến", r.Obj["minutes"]!["content"]?.GetValue<string>(), "minutes đã khóa: nội dung KHÔNG đổi, kể cả với chairId id-match");
+    });
+
+    await t.Case("meetings.conclusions: MANAGE role=chairman thật (không id-match phiên này) vẫn sửa được như cũ (không hồi quy)", async () =>
+    {
+        // chutich (u-ct, role=chairman) KHÔNG phải chairId/secretaryId của m-chair-deleg
+        // (chairId=u-khdt, secretaryId=u-tk) nhưng role thuộc MANAGE -> vẫn sửa được mọi phiên.
+        var tok = await app.Login("chutich");
+        var body = new JsonObject { ["conclusions"] = new JsonArray(new JsonObject { ["id"] = "c-manage-1", ["content"] = "Kết luận do MANAGE ghi hộ", ["createdAt"] = NowIsoT() }) };
+        var r = await app.Patch("/api/meetings/m-chair-deleg", body, tok);
+        Assert.Status(200, r.Status, "PATCH conclusions bởi MANAGE role, không id-match phiên này -> vẫn qua (đúng hành vi cũ)");
+        Assert.True(r.Obj["conclusions"]!.AsArray().Any(c => c!["id"]?.GetValue<string>() == "c-manage-1"), "conclusions chứa mục do MANAGE thêm");
     });
 }
 

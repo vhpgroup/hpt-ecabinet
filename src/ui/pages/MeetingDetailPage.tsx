@@ -39,6 +39,10 @@ export default function MeetingDetailPage() {
 
   const manage = can.manageMeetings(user);
   const chairCtl = can.chairControls(user, m.chairId, m.secretaryId);
+  // V1 (P0-1 dungthu-tester.md): unit_admin gửi được giấy mời cho phiên do đơn vị mình
+  // chủ trì (mirror BE) — KHÔNG mở thêm quyền Chỉnh sửa/Xóa (vẫn chỉ MANAGE — phạm vi
+  // vá P0-2 chỉ gồm tạo phiên + gửi giấy mời).
+  const canInviteThis = manage || can.sendInvitations(user, users.get(m.chairId)?.unitId);
   const mine = m.participants.find((p) => p.userId === user?.id);
   const st = MEETING_STATUS[m.status];
   const meetingVotes = s.votes.filter((v) => v.meetingId === m.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -65,15 +69,21 @@ export default function MeetingDetailPage() {
         subtitle={`Mã: ${m.code} · ${fmtDT(m.startTime)} → ${fmtTime(m.endTime)} · ${rooms.get(m.roomId)?.name ?? ''}${m.isOnline ? ' · Kết hợp trực tuyến' : ''}`}
         actions={
           <>
-            {m.status === 'draft' && manage && (
+            {m.status === 'draft' && (manage || canInviteThis) && (
               <>
-                <button className="btn" onClick={() => act(() => meetingService.sendInvitations(user!, m.id), 'Đã gửi giấy mời đến các đại biểu (email + SMS mô phỏng)')}>
-                  <Icon name="send" size={15} />Gửi giấy mời
-                </button>
-                <button className="btn outline" onClick={() => setEditing(true)}><Icon name="edit" size={15} />Chỉnh sửa</button>
-                <button className="btn danger" onClick={() => { if (window.confirm('Xóa phiên họp này?')) act(async () => { await meetingService.deleteMeeting(user!, m.id); nav('/meetings'); }, 'Đã xóa phiên họp'); }}>
-                  <Icon name="trash" size={15} />
-                </button>
+                {canInviteThis && (
+                  <button className="btn" onClick={() => act(() => meetingService.sendInvitations(user!, m.id), 'Đã gửi giấy mời đến các đại biểu (email + SMS)')}>
+                    <Icon name="send" size={15} />Gửi giấy mời
+                  </button>
+                )}
+                {manage && (
+                  <>
+                    <button className="btn outline" onClick={() => setEditing(true)}><Icon name="edit" size={15} />Chỉnh sửa</button>
+                    <button className="btn danger" onClick={() => { if (window.confirm('Xóa phiên họp này?')) act(async () => { await meetingService.deleteMeeting(user!, m.id); nav('/meetings'); }, 'Đã xóa phiên họp'); }}>
+                      <Icon name="trash" size={15} />
+                    </button>
+                  </>
+                )}
               </>
             )}
             {m.status === 'invited' && (
@@ -141,7 +151,7 @@ export default function MeetingDetailPage() {
           <div style={{ textAlign: 'center' }}>
             <QRSvg seed={m.id + m.code} />
             <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>
-              Đại biểu quét mã bằng thiết bị tại cửa phòng họp để điểm danh (mô phỏng).
+              Đại biểu quét mã bằng thiết bị tại cửa phòng họp để điểm danh.
             </p>
           </div>
         </Modal>
@@ -153,6 +163,7 @@ export default function MeetingDetailPage() {
       {delegateOpen && (
         <DelegateModal onClose={() => setDelegateOpen(false)}
           candidates={s.users.filter((u) => u.id !== user?.id && u.status === 'active')}
+          meetingParticipantIds={new Set(m.participants.map((p) => p.userId))}
           onSubmit={(uid2) => act(async () => { await meetingService.respondInvitation(user!, m.id, 'delegated', { delegateToId: uid2 }); setDelegateOpen(false); }, 'Đã gửi ủy quyền tham dự')} />
       )}
     </div>
@@ -393,26 +404,35 @@ function DocsTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
   const { user, s, refresh, toast } = useApp();
   const [upOpen, setUpOpen] = useState(false);
   const manage = can.manageMeetings(user);
+  // V1 (P0-1 dungthu-tester.md, HSMT dòng 354-358 "Quản trị đơn vị chuẩn bị tài liệu họp và
+  // trình duyệt"): unit_admin cũng thấy được nút tải tài liệu lên phiên họp — backend ACL
+  // `documents.create = 'any'` đã cho phép mọi vai trò đăng nhập tạo tài liệu, nút này trước
+  // đây chỉ hiện cho MANAGE (chủ trì/thư ký/admin) khiến unit_admin không thấy đường vào.
+  const canUpload = manage || user?.role === 'unit_admin';
   const docById = indexBy(s.documents);
   // E-HSMT mục 24: đại biểu thường chỉ thấy tài liệu ĐÃ DUYỆT (owner/manage thấy mọi trạng thái)
   const canSee = (d: DocFile) =>
     manage || d.ownerId === user?.id || documentService.isApproved(d);
   const refDocs = s.documents.filter((d) => d.meetingId === m.id && d.kind === 'reference' && canSee(d));
-  // hàng đợi duyệt trong phiên họp (chỉ quản lý)
+  // V2 (P1-1 dungthu-tester.md + BA mục 1(d)): hàng đợi duyệt trong phiên họp — quản lý HOẶC
+  // thành phần phiên (participant/chairId/secretaryId), khớp DocReviewControls dưới đây.
+  const isMeetingMember = !!user && (
+    user.id === m.chairId || user.id === m.secretaryId || m.participants.some((p) => p.userId === user.id)
+  );
   const pendingDocs = s.documents.filter((d) => d.meetingId === m.id && d.reviewStatus === 'pending');
 
   return (
     <div>
-      {manage && (
+      {canUpload && (
         <div style={{ marginBottom: 14 }}>
           <button className="btn" onClick={() => setUpOpen(true)}><Icon name="paperclip" size={15} />Thêm tài liệu vào phiên họp</button>
         </div>
       )}
-      {/* Hàng đợi duyệt trong phiên họp */}
-      {manage && pendingDocs.length > 0 && (
+      {/* Hàng đợi duyệt trong phiên họp — quản lý hoặc thành phần phiên (V2) */}
+      {(manage || isMeetingMember) && pendingDocs.length > 0 && (
         <div className="card card-pad" style={{ marginBottom: 14, borderColor: '#f3ddb3', background: '#fffaf0' }}>
           <h3 className="card-title" style={{ marginBottom: 10 }}><Icon name="clock" size={16} />Tài liệu chờ duyệt <Badge color="amber">{pendingDocs.length}</Badge></h3>
-          {pendingDocs.map((d) => <DocRow key={d.id} doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} />} />)}
+          {pendingDocs.map((d) => <DocRow key={d.id} doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} meeting={m} />} />)}
         </div>
       )}
       <div className="grid grid-2">
@@ -424,7 +444,7 @@ function DocsTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
               {a.documentIds.filter((did) => { const d = docById.get(did); return d && canSee(d); }).length === 0 && <p style={{ fontSize: 12.5, color: '#9aabc0', marginLeft: 4 }}>Chưa có tài liệu</p>}
               {a.documentIds.map((did) => {
                 const d = docById.get(did);
-                return d && canSee(d) ? <DocRow key={did} doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} />} /> : null;
+                return d && canSee(d) ? <DocRow key={did} doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} meeting={m} />} /> : null;
               })}
             </div>
           ))}
@@ -432,7 +452,7 @@ function DocsTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
         <div className="card card-pad">
           <h3 className="card-title"><Icon name="paperclip" size={16} />Tài liệu tham khảo</h3>
           {refDocs.length === 0 && <p style={{ fontSize: 13, color: 'var(--muted)' }}>Không có tài liệu tham khảo.</p>}
-          {refDocs.map((d) => <DocRow key={d.id} doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} />} />)}
+          {refDocs.map((d) => <DocRow key={d.id} doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} meeting={m} />} />)}
         </div>
       </div>
       {upOpen && <UploadModal m={m} onClose={() => setUpOpen(false)} onDone={async () => { setUpOpen(false); await refresh(); toast('Đã thêm tài liệu'); }} />}
@@ -631,7 +651,11 @@ export function VoteCard({ v, chairCtl, act, onViewDoc, usersMap, compact }: {
           <button className="btn success sm" onClick={() => act(() => voteService.openVote(user!, v.id), 'Đã mở biểu quyết')}>Mở biểu quyết</button>
         )}
         {chairCtl && v.status === 'open' && (
-          <button className="btn danger sm" onClick={() => act(() => voteService.closeVote(user!, v.id), 'Đã đóng biểu quyết')}>Đóng biểu quyết</button>
+          <button className="btn danger sm" onClick={() => {
+            if (window.confirm(`Đóng biểu quyết "${v.title}"? Sau khi đóng sẽ không nhận thêm biểu quyết.`)) {
+              act(() => voteService.closeVote(user!, v.id), 'Đã đóng biểu quyết');
+            }
+          }}>Đóng biểu quyết</button>
         )}
       </div>
 
@@ -791,6 +815,10 @@ function MinutesTab({ m, votes }: { m: Meeting; votes: Vote[] }) {
   const users = indexBy(s.users);
   const docById = indexBy(s.documents);
   const alreadySigned = m.minutes?.signatures.some((x) => x.signerId === user?.id);
+  // V4 (P1-3 dungthu-tester.md): CÓ BẤT KỲ chữ ký nào (chưa cần đủ cả chủ trì+thư ký để
+  // `locked=true`) là đủ để khóa sửa nội dung — tránh ghi đè biên bản trong khi chữ ký cũ
+  // (gắn với nội dung trước đó) vẫn còn treo trên bản ghi.
+  const hasAnySignature = (m.minutes?.signatures.length ?? 0) > 0;
   // tài liệu chọn được để đính kèm kết luận: tài liệu của phiên họp này + tài liệu dùng chung
   const attachableDocs = s.documents.filter((d) => d.meetingId === m.id || (d.kind !== 'personal' && !d.meetingId));
 
@@ -917,11 +945,21 @@ function MinutesTab({ m, votes }: { m: Meeting; votes: Vote[] }) {
         )}
         {m.minutes && (
           <>
+            {/* V4 (P1-3 dungthu-tester.md): khóa sửa nội dung ngay khi CÓ BẤT KỲ chữ ký nào —
+                không chỉ khi `locked` (đủ 2 chữ ký chủ trì+thư ký). Trước đây nút "Tạo lại dự
+                thảo"/"Lưu biên bản" chỉ ẩn khi `locked`, nên nếu mới có 1 chữ ký (vd thư ký
+                đã ký, chủ trì chưa ký) vẫn bấm được — ghi đè nội dung trong khi chữ ký cũ vẫn
+                giữ nguyên (mismatch nội dung đã ký với nội dung hiện tại, mất toàn vẹn pháp lý). */}
+            {hasAnySignature && (
+              <p style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+                <Icon name="lock" size={13} />Biên bản đã ký số — không thể chỉnh sửa.
+              </p>
+            )}
             <textarea className="ta" style={{ minHeight: 300, fontFamily: "'Times New Roman', serif", fontSize: 14 }}
-              value={minText} readOnly={m.minutes.locked || !chairCtl}
+              value={minText} readOnly={hasAnySignature || !chairCtl}
               onChange={(e) => setMinText(e.target.value)} />
             <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-              {chairCtl && !m.minutes.locked && (
+              {chairCtl && !hasAnySignature && (
                 <>
                   <button className="btn outline" onClick={() => act(() => meetingService.saveMinutes(user!, m.id, minText), 'Đã lưu biên bản')}><Icon name="check" size={15} />Lưu biên bản</button>
                   <button className="btn ghost" onClick={makeDraft}><Icon name="refresh" size={15} />Tạo lại dự thảo</button>
@@ -967,18 +1005,32 @@ function MinutesTab({ m, votes }: { m: Meeting; votes: Vote[] }) {
           {/* Quốc hiệu/tiêu ngữ đã nằm trong nội dung biên bản (buildMinutesDraft)
               — không chèn cứng ở đây để tránh in đôi. */}
           <pre>{m.minutes.content}</pre>
+          {/*
+            Khối chữ ký thể thức NĐ 30/2020 — LUÔN hiển thị 2 cột "THƯ KÝ" / "CHỦ TỌA"
+            (nhãn khớp mục "V. KẾT LUẬN CỦA CHỦ TỌA" trong nội dung — tránh lệch thuật
+            ngữ Chủ trì/Chủ tọa mà tổ nghiệm thu đã nêu), kể cả khi CHƯA ký số: hiện
+            dòng để trống + họ tên đầy đủ bên dưới cho người có thẩm quyền ký tay trên
+            bản in. Khi ĐÃ ký số thì thay dòng trống bằng xác nhận ký số + thời điểm,
+            vẫn giữ đúng vị trí cuối văn bản theo thể thức.
+          */}
           <div className="print-sig">
             <div>
               <b>THƯ KÝ</b>
-              {m.minutes.signatures.filter((x) => x.signerId === m.secretaryId).map((x) => (
-                <p key={x.serial} style={{ fontSize: '10.5pt' }}>Đã ký số · {fmtDT(x.signedAt)}<br />{x.signerName}</p>
-              ))}
+              {(() => {
+                const sig = m.minutes!.signatures.find((x) => x.signerId === m.secretaryId);
+                return sig
+                  ? <p style={{ fontSize: '10.5pt' }}>(Đã ký số)<br />Xác nhận ký số · {fmtDT(sig.signedAt)}<br /><b>{sig.signerName}</b></p>
+                  : <p style={{ fontSize: '10.5pt' }}>(Ký, ghi rõ họ tên)<br /><br /><b>{users.get(m.secretaryId)?.fullName ?? ''}</b></p>;
+              })()}
             </div>
             <div>
-              <b>CHỦ TRÌ</b>
-              {m.minutes.signatures.filter((x) => x.signerId === m.chairId).map((x) => (
-                <p key={x.serial} style={{ fontSize: '10.5pt' }}>Đã ký số · {fmtDT(x.signedAt)}<br />{x.signerName}</p>
-              ))}
+              <b>CHỦ TỌA</b>
+              {(() => {
+                const sig = m.minutes!.signatures.find((x) => x.signerId === m.chairId);
+                return sig
+                  ? <p style={{ fontSize: '10.5pt' }}>(Đã ký số)<br />Xác nhận ký số · {fmtDT(sig.signedAt)}<br /><b>{sig.signerName}</b></p>
+                  : <p style={{ fontSize: '10.5pt' }}>(Ký, ghi rõ họ tên)<br /><br /><b>{users.get(m.chairId)?.fullName ?? ''}</b></p>;
+              })()}
             </div>
           </div>
         </div>
@@ -1117,18 +1169,18 @@ function VoiceDictation({ onText }: { onText: (t: string) => void }) {
 function SignModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (pin: string) => void }) {
   const [pin, setPin] = useState('');
   return (
-    <Modal title="Ký số biên bản (mô phỏng USB Token / SmartCA)" onClose={onClose} width={420}
+    <Modal title="Ký số biên bản (mô phỏng — chờ tích hợp CA)" onClose={onClose} width={420}
       footer={<>
         <button className="btn outline" onClick={onClose}>Hủy</button>
         <button className="btn success" disabled={pin.length !== 6} onClick={() => onSubmit(pin)}><Icon name="pen" size={15} />Xác nhận ký</button>
       </>}>
       <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
-        Thiết bị: <b>USB Token — VN DEMO CA</b> (mô phỏng). Nhập mã PIN 6 chữ số của chứng thư số để ký.
-        Giai đoạn 2 sẽ tích hợp ký số thật (VNPT-CA / Viettel-CA / SmartCA).
+        Nhập mã PIN 6 chữ số của chứng thư số để ký. Chức năng ký số minh họa quy trình —
+        hệ thống sẽ tích hợp chữ ký số hợp pháp (CA) khi triển khai chính thức.
       </p>
       <input className="inp pin-inp" type="password" maxLength={6} inputMode="numeric" placeholder="••••••"
         value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} autoFocus />
-      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>Gợi ý demo: nhập 6 chữ số bất kỳ, ví dụ 123456.</p>
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>Ở bản dùng thử, có thể nhập 6 chữ số bất kỳ, ví dụ 123456.</p>
     </Modal>
   );
 }
@@ -1194,6 +1246,14 @@ export function TaskCreateModal({ meetingId, onClose, onDone }: { meetingId?: st
   const submit = async () => {
     if (!user) return;
     if (!title.trim()) return setErr('Nhập tên nhiệm vụ');
+    // V5 (P1-4 dungthu-tester.md) — lưới an toàn nhẹ, xem giải thích chi tiết ở
+    // MeetingFormModal.save() (điều tra: không phải bug xử lý ngày giờ trong code).
+    const deadlineD = new Date(deadline);
+    if (isNaN(deadlineD.getTime())) return setErr('Hạn xử lý không hợp lệ');
+    if (deadlineD.getTime() < Date.now()
+      && !window.confirm('Hạn xử lý bạn chọn đã ở trong quá khứ. Vẫn giao nhiệm vụ với hạn này?')) {
+      return;
+    }
     try {
       await taskService.createTask(user, { title: title.trim(), description: description.trim() || undefined, assigneeId, deadline: fromLocalInput(deadline), meetingId });
       onDone();
@@ -1237,11 +1297,20 @@ function DeclineModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (r
   );
 }
 
-function DelegateModal({ candidates, onClose, onSubmit }: {
+/**
+ * V6 (P1-5 dungthu-tester.md): dropdown ủy quyền nhóm "Thành phần phiên họp" lên đầu
+ * (ưu tiên đúng nghiệp vụ — người trong phiên nắm rõ nội dung hơn), "Ngoài thành phần"
+ * xuống dưới (vẫn cho chọn, không chặn cứng — giữ linh hoạt cho trường hợp đặc biệt).
+ * Chính mình đã bị loại từ nơi gọi (`s.users.filter(u.id !== user?.id)`).
+ */
+function DelegateModal({ candidates, meetingParticipantIds, onClose, onSubmit }: {
   candidates: { id: string; fullName: string; title: string }[];
+  meetingParticipantIds: Set<string>;
   onClose: () => void; onSubmit: (userId: string) => void;
 }) {
-  const [uid2, setUid2] = useState(candidates[0]?.id ?? '');
+  const inMeeting = candidates.filter((u) => meetingParticipantIds.has(u.id));
+  const outsideMeeting = candidates.filter((u) => !meetingParticipantIds.has(u.id));
+  const [uid2, setUid2] = useState(inMeeting[0]?.id ?? candidates[0]?.id ?? '');
   return (
     <Modal title="Ủy quyền tham dự" onClose={onClose} width={440}
       footer={<>
@@ -1250,7 +1319,16 @@ function DelegateModal({ candidates, onClose, onSubmit }: {
       </>}>
       <Field label="Người được ủy quyền" required>
         <select className="sel" value={uid2} onChange={(e) => setUid2(e.target.value)}>
-          {candidates.map((u) => <option key={u.id} value={u.id}>{u.fullName} — {u.title}</option>)}
+          {inMeeting.length > 0 && (
+            <optgroup label="Thành phần phiên họp">
+              {inMeeting.map((u) => <option key={u.id} value={u.id}>{u.fullName} — {u.title}</option>)}
+            </optgroup>
+          )}
+          {outsideMeeting.length > 0 && (
+            <optgroup label="Ngoài thành phần phiên họp">
+              {outsideMeeting.map((u) => <option key={u.id} value={u.id}>{u.fullName} — {u.title}</option>)}
+            </optgroup>
+          )}
         </select>
       </Field>
       <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>Người được ủy quyền sẽ nhận giấy mời và tham dự với vai trò khách mời.</p>

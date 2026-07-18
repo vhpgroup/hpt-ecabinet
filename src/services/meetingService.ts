@@ -30,7 +30,21 @@ export interface MeetingDraft {
   meetingType?: string;
 }
 
+/**
+ * V1 (P0-1 dungthu-tester.md) — mirror kiểm tra sâu `enforceMeetingWrite` phía server:
+ * unit_admin TẠO phiên mới (không áp cho SỬA) chỉ được chọn chủ trì/thư ký THUỘC ĐƠN VỊ
+ * MÌNH. Chế độ demo (localStorage) không có server guard nên phải chặn ở tầng service.
+ */
+async function enforceUnitAdminMeetingCreate(actor: User, draft: MeetingDraft) {
+  if (actor.role !== 'unit_admin' || draft.id) return;
+  if (!actor.unitId) throw new Error('Không xác định được đơn vị của bạn');
+  const [chair, secretary] = await Promise.all([db.users.get(draft.chairId), db.users.get(draft.secretaryId)]);
+  if (!chair || chair.unitId !== actor.unitId) throw new Error('Chủ trì phiên họp phải thuộc đơn vị của bạn');
+  if (!secretary || secretary.unitId !== actor.unitId) throw new Error('Thư ký phiên họp phải thuộc đơn vị của bạn');
+}
+
 export async function saveMeeting(actor: User, draft: MeetingDraft): Promise<Meeting> {
+  await enforceUnitAdminMeetingCreate(actor, draft);
   if (draft.id) {
     const existing = await db.meetings.get(draft.id);
     if (!existing) throw new Error('Không tìm thấy phiên họp');
@@ -130,12 +144,26 @@ export async function deleteMeeting(actor: User, id: string) {
   await audit(actor, 'Xóa phiên họp', `Xóa "${m?.title ?? id}"`);
 }
 
-/** Gửi giấy mời: chuyển trạng thái + thông báo tới đại biểu */
+/**
+ * Gửi giấy mời: chuyển trạng thái + thông báo tới đại biểu.
+ * V1 (P0-1 dungthu-tester.md) — mirror `POST /api/actions/meetings/:id/invite` (P0-2):
+ * quản lý toàn cục (admin/secretary/chairman) HOẶC unit_admin với phiên THUỘC ĐƠN VỊ MÌNH
+ * (chủ trì của phiên cùng đơn vị với unit_admin). Chế độ demo không có server guard riêng
+ * cho action này nên chặn ở tầng service.
+ */
 export async function sendInvitations(actor: User, meetingId: string) {
   // GĐ4 — chế độ máy chủ: endpoint nghiệp vụ (server thông báo + audit)
   if (db.action) { await db.action(`/meetings/${meetingId}/invite`); return; }
   const m = await db.meetings.get(meetingId);
   if (!m) throw new Error('Không tìm thấy phiên họp');
+  const isManage = ['admin', 'secretary', 'chairman'].includes(actor.role);
+  if (!isManage) {
+    if (actor.role !== 'unit_admin') throw new Error('Bạn không có quyền gửi giấy mời');
+    const chair = await db.users.get(m.chairId);
+    if (!actor.unitId || !chair || chair.unitId !== actor.unitId) {
+      throw new Error('Bạn không có quyền gửi giấy mời');
+    }
+  }
   await db.meetings.update(meetingId, { status: 'invited', invitedAt: nowIso() });
   await notify(
     m.participants.map((p) => p.userId).filter((idX) => idX !== actor.id),
@@ -462,10 +490,17 @@ export function buildMinutesDraft(
   return lines.join('\n');
 }
 
+/**
+ * V4 (P1-3 dungthu-tester.md): chặn sửa/ghi đè nội dung biên bản ngay khi CÓ BẤT KỲ chữ ký
+ * nào — không chỉ khi `locked` (đủ cả chủ trì+thư ký). Trước đây chỉ chặn theo `locked`, nên
+ * biên bản mới có 1 chữ ký (vd thư ký ký trước) vẫn ghi đè được qua "Tạo lại dự thảo"/"Lưu
+ * biên bản", làm chữ ký cũ (gắn với nội dung trước đó) mất ý nghĩa toàn vẹn pháp lý — dùng
+ * chung cho cả `saveMinutes` (Lưu biên bản) và `makeDraft` (Tạo lại dự thảo, gọi hàm này).
+ */
 export async function saveMinutes(actor: User, meetingId: string, content: string) {
   const m = await db.meetings.get(meetingId);
   if (!m) throw new Error('Không tìm thấy phiên họp');
-  if (m.minutes?.locked) throw new Error('Biên bản đã ký số, không thể chỉnh sửa');
+  if ((m.minutes?.signatures.length ?? 0) > 0) throw new Error('Biên bản đã ký số — không thể chỉnh sửa hoặc tạo lại dự thảo');
   await db.meetings.update(meetingId, {
     minutes: { content, updatedAt: nowIso(), signatures: m.minutes?.signatures ?? [], locked: false },
   });

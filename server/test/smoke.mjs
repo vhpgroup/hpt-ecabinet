@@ -489,5 +489,92 @@ await Case('buildBallotSignature: signerName tiếng Việt có dấu tổ hợp
   assert.equal(sig.signerName, nfdName);
 });
 
+// ============================================================
+// NHÓM 9 — P2-1 (QA 18/07, tester-qa.md mục 3.5): chairCtl (FE, id-match theo
+// chairId/secretaryId của CHÍNH phiên) vs MANAGE (BE, role-match toàn cục) cho
+// PATCH conclusions/agenda/minutes — người được GÁN làm chủ trì/thư ký của một
+// phiên cụ thể (dù role tài khoản là 'delegate', không phải 'chairman') phải
+// ghi được kết luận/chương trình/dự thảo biên bản của CHÍNH phiên đó; các field
+// khóa cứng (status, checkedInAt, chữ ký/khóa biên bản, field khác) vẫn bất biến.
+// ============================================================
+Group('9-GUARD-CHAIR-VS-MANAGE');
+
+const meetingChairedByDelegate = {
+  id: 'm-chair-test', chairId: 'u-delegate-chair', secretaryId: 'u-tk',
+  status: 'live', participants: [{ userId: 'u-delegate-chair', checkedInAt: 't0' }],
+  minutes: { content: 'cũ', signatures: [], locked: false },
+};
+
+await Case('guardPatch(meetings): delegate được GÁN làm chairId của CHÍNH phiên -> sửa conclusions được (P2-1)', () => {
+  const out = guardPatch(
+    'meetings', meetingChairedByDelegate,
+    { conclusions: [{ id: 'c1', content: 'Kết luận mới', createdAt: 't1' }] },
+    U('u-delegate-chair', 'delegate'),
+  );
+  assert.deepEqual(out.conclusions, [{ id: 'c1', content: 'Kết luận mới', createdAt: 't1' }], 'conclusions KHÔNG bị xóa khỏi patch');
+});
+await Case('guardPatch(meetings): delegate được GÁN làm secretaryId của CHÍNH phiên -> sửa agenda được (P2-1)', () => {
+  const meeting = { ...meetingChairedByDelegate, chairId: 'u-ct-khac', secretaryId: 'u-delegate-secretary' };
+  const out = guardPatch(
+    'meetings', meeting,
+    { agenda: [{ id: 'a1', order: 1, title: 'Mục mới' }] },
+    U('u-delegate-secretary', 'delegate'),
+  );
+  assert.deepEqual(out.agenda, [{ id: 'a1', order: 1, title: 'Mục mới' }], 'agenda KHÔNG bị xóa khỏi patch');
+});
+await Case('guardPatch(meetings): delegate chairId của CHÍNH phiên -> sửa minutes (dự thảo, CHƯA khóa) được (P2-1)', () => {
+  const out = guardPatch(
+    'meetings', meetingChairedByDelegate,
+    { minutes: { content: 'Dự thảo mới' } },
+    U('u-delegate-chair', 'delegate'),
+  );
+  assert.equal(out.minutes.content, 'Dự thảo mới');
+  assert.deepEqual(out.minutes.signatures, [], 'signatures vẫn lấy từ existing (không tin client)');
+  assert.equal(out.minutes.locked, false);
+});
+await Case('guardPatch(meetings): delegate KHÔNG liên quan phiên (không phải chairId/secretaryId phiên này) -> conclusions VẪN bị xóa (silent no-op, giữ hành vi cũ)', () => {
+  const out = guardPatch(
+    'meetings', meetingChairedByDelegate,
+    { conclusions: [{ id: 'c-lech', content: 'Không được phép', createdAt: 't1' }] },
+    U('u-delegate-khac', 'delegate'),
+  );
+  assert.equal(out.conclusions, undefined, 'delegate thường (không id-match) không sửa được conclusions');
+});
+await Case('guardPatch(meetings): delegate chairId phiên NÀY nhưng gửi title/room kèm theo -> title/room vẫn bị xóa (KHÔNG mở field khác)', () => {
+  const out = guardPatch(
+    'meetings', meetingChairedByDelegate,
+    { conclusions: [{ id: 'c2', content: 'x', createdAt: 't1' }], title: 'Đổi tên phiên', roomId: 'room-khac', chairId: 'u-hack' },
+    U('u-delegate-chair', 'delegate'),
+  );
+  assert.notEqual(out.conclusions, undefined, 'conclusions vẫn qua');
+  assert.equal(out.title, undefined, 'title KHÔNG được mở (chỉ mở conclusions/agenda/minutes)');
+  assert.equal(out.roomId, undefined, 'roomId KHÔNG được mở');
+  assert.equal(out.chairId, undefined, 'chairId KHÔNG được mở (không tự đổi chủ trì)');
+});
+await Case('guardPatch(meetings): delegate chairId phiên này gửi kèm status -> status vẫn bị xóa (chỉ qua /actions)', () => {
+  const out = guardPatch(
+    'meetings', meetingChairedByDelegate,
+    { conclusions: [{ id: 'c3', content: 'x', createdAt: 't1' }], status: 'finished' },
+    U('u-delegate-chair', 'delegate'),
+  );
+  assert.equal(out.status, undefined, 'status vẫn khóa cứng, kể cả với chairId id-match');
+});
+await Case('guardPatch(meetings): delegate chairId phiên này gửi kèm seatAssignments -> throw 403 (field khóa cứng khác, không âm thầm bỏ qua)', () => {
+  assert.throws(
+    () => guardPatch('meetings', meetingChairedByDelegate, { seatAssignments: { 'seat-1': 'u-x' } }, U('u-delegate-chair', 'delegate')),
+    (e) => e.status === 403,
+  );
+});
+await Case('guardPatch(meetings): minutes đã KHÓA (locked=true) -> id-match chairId cũng KHÔNG sửa được (bất biến, giữ hành vi cũ)', () => {
+  const lockedMeeting = { ...meetingChairedByDelegate, minutes: { content: 'đã ký', signatures: [{ userId: 'u-x' }], locked: true } };
+  const out = guardPatch('meetings', lockedMeeting, { minutes: { content: 'sửa lén' } }, U('u-delegate-chair', 'delegate'));
+  assert.equal(out.minutes, undefined, 'minutes đã khóa: patch bị xóa hoàn toàn, kể cả với chairId id-match');
+});
+await Case('guardPatch(meetings): MANAGE (role=chairman thật, không id-match phiên NÀY) vẫn sửa được conclusions như cũ (không hồi quy)', () => {
+  const meeting = { id: 'm-other', chairId: 'u-ct-khac-nua', secretaryId: 'u-tk-khac', status: 'live', participants: [] };
+  const out = guardPatch('meetings', meeting, { conclusions: [{ id: 'c-manage', content: 'x', createdAt: 't1' }] }, U('u-chairman-role', 'chairman'));
+  assert.notEqual(out.conclusions, undefined, 'MANAGE role sửa conclusions của BẤT KỲ phiên nào, đúng hành vi cũ');
+});
+
 const exitCode = report();
 process.exit(exitCode);

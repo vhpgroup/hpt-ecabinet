@@ -127,7 +127,7 @@ export default function DocumentsPage() {
               {reviewQueue.map((d) => (
                 <div key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <div style={{ flex: 1 }}>
-                    <DocRow doc={d} onView={setViewDoc} extra={<DocReviewControls doc={d} />} />
+                    <DocRow doc={d} onView={setViewDoc} extra={<DocReviewControls doc={d} meeting={d.meetingId ? meetings.get(d.meetingId) : undefined} />} />
                   </div>
                   <div style={{ flex: 'none', width: 200, fontSize: 12, color: 'var(--muted)' }}>
                     {d.meetingId ? meetings.get(d.meetingId)?.title : 'Dùng chung'}
@@ -145,7 +145,7 @@ export default function DocumentsPage() {
                   <DocRow doc={d} onView={setViewDoc}
                     extra={
                       <>
-                        <DocReviewControls doc={d} />
+                        <DocReviewControls doc={d} meeting={d.meetingId ? meetings.get(d.meetingId) : undefined} />
                         {d.ownerId === user?.id && d.kind === 'personal' && (
                           <button className="icon-btn" title="Chia sẻ" onClick={() => setShareDoc(d)}><Icon name="share" size={16} /></button>
                         )}
@@ -262,7 +262,7 @@ function UnitPrepView({ onOpenMeeting, onViewDoc }: { onOpenMeeting: (id: string
               {docs.sort((a, b) => (a.name).localeCompare(b.name)).map((d) => (
                 <div key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <div style={{ flex: 1 }}>
-                    <DocRow doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} />} />
+                    <DocRow doc={d} onView={onViewDoc} extra={<DocReviewControls doc={d} meeting={meeting} />} />
                   </div>
                   <div style={{ flex: 'none', width: 150, fontSize: 12, color: 'var(--muted)' }}>
                     Người trình: {users.get(d.ownerId)?.fullName ?? '—'}

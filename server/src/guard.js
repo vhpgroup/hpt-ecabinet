@@ -6,6 +6,9 @@
 // Đại biểu (không phải admin/thư ký/chủ trì) qua PATCH meetings chỉ được:
 //   - sửa dòng tham dự CỦA MÌNH (xác nhận / báo vắng / ủy quyền)
 //   - thêm đúng dòng khách mời mà mình ủy quyền
+//   - NGOẠI LỆ (vá P2-1): nếu là chairId/secretaryId của CHÍNH phiên đang sửa
+//     (id-match trên bản ghi, không phụ thuộc role tài khoản) — thêm được
+//     conclusions/agenda/minutes (dự thảo, chưa khóa) của phiên đó (xem guardMeetings).
 // ============================================================
 
 const MANAGE = ['admin', 'secretary', 'chairman'];
@@ -434,8 +437,18 @@ function guardVotes(patch, user) {
   return p;
 }
 
+// Field điều hành NỘI DUNG phiên (không phải trạng thái/chữ ký/điểm danh — những field
+// đó đã bị khóa cứng ở các nhánh riêng bên dưới, áp dụng bất kể isChairOfThisMeeting):
+// chairId/secretaryId của CHÍNH phiên đang sửa (id-match trên bản ghi EXISTING, không
+// phải patch — tránh id-match giả bằng cách tự gửi chairId mới trong patch rồi tự nhận là
+// chủ trì) được ghi dù role tài khoản không thuộc MANAGE (vá P2-1, tester-qa.md mục 3.5 —
+// FE `can.chairControls` cho phép id-match sửa kết luận, BE trước đây chỉ role-match nên
+// âm thầm xóa sạch patch — mở đúng thiết kế nghiệp vụ, KHÔNG mở rộng ACL toàn cục).
+const CHAIR_CONTENT_FIELDS = ['conclusions', 'agenda', 'minutes'];
+
 function guardMeetings(existing, patch, user) {
   const isManage = MANAGE.includes(user.role);
+  const isChairOfThisMeeting = existing.chairId === user.sub || existing.secretaryId === user.sub;
   const p = { ...patch };
 
   // trạng thái phiên họp: chỉ qua /actions (start / invite / end)
@@ -480,10 +493,15 @@ function guardMeetings(existing, patch, user) {
       : delegateOwnRowOnly(existing, p.participants, user.sub);
   }
 
-  // đại biểu thường: ngoài dòng tham dự của mình, không sửa gì khác
+  // đại biểu thường: ngoài dòng tham dự của mình, không sửa gì khác — TRỪ chairId/
+  // secretaryId của CHÍNH phiên này được thêm quyền ghi conclusions/agenda/minutes
+  // (đã sanitize signatures/locked ở nhánh trên, KHÔNG mở status/checkedInAt/chữ ký).
   if (!isManage) {
+    const keepFields = isChairOfThisMeeting
+      ? ['participants', ...CHAIR_CONTENT_FIELDS]
+      : ['participants'];
     for (const key of Object.keys(p)) {
-      if (key !== 'participants') delete p[key];
+      if (!keepFields.includes(key)) delete p[key];
     }
   }
   return p;

@@ -843,7 +843,7 @@ Bi\xEAn b\u1EA3n \u0111\u01B0\u1EE3c l\u1EADp v\xE0 k\xFD s\u1ED1 tr\xEAn H\u1EC
   const apiKeys = [
     {
       id: "apk-demo-qlvb",
-      name: "H\u1EC7 th\u1ED1ng QLVB (demo)",
+      name: "H\u1EC7 th\u1ED1ng QLVB (kh\xF3a d\xF9ng th\u1EED)",
       prefix: DEMO_API_KEY_RAW.slice(0, 8),
       keyHash: sha256Hex(DEMO_API_KEY_RAW),
       scopes: ["meetings", "documents"],
@@ -851,7 +851,7 @@ Bi\xEAn b\u1EA3n \u0111\u01B0\u1EE3c l\u1EADp v\xE0 k\xFD s\u1ED1 tr\xEAn H\u1EC
       createdAt: iso(minAgo(60 * 24 * 10)),
       createdById: "u-admin",
       callCount: 0,
-      note: 'CH\u1EC8 D\xD9NG DEMO \u2014 key th\xF4 c\u1ED1 \u0111\u1ECBnh "ecab_demo_qlvb_2026". T\u1EA1o kh\xF3a m\u1EDBi khi tri\u1EC3n khai th\u1EADt.'
+      note: "Kh\xF3a d\xF9ng th\u1EED \u2014 t\u1EA1o kh\xF3a m\u1EDBi khi tri\u1EC3n khai ch\xEDnh th\u1EE9c, kh\xF4ng d\xF9ng kh\xF3a n\xE0y \u1EDF m\xF4i tr\u01B0\u1EDDng th\u1EADt."
     }
   ];
   return {

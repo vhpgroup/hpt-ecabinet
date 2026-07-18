@@ -168,7 +168,7 @@ function UserFormModal({ initial, units, positions, unitAdmin, lockedUnitId, onC
         <Field label="Email"><input className="inp" value={f.email ?? ''} onChange={(e) => set('email', e.target.value)} /></Field>
         <Field label="Điện thoại"><input className="inp" value={f.phone ?? ''} onChange={(e) => set('phone', e.target.value)} /></Field>
       </div>
-      {!initial.id && <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>Mật khẩu mặc định: <b>123456</b> (demo).</p>}
+      {!initial.id && <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>Mật khẩu mặc định: <b>123456</b> — đề nghị người dùng đổi lại sau khi nhận tài khoản.</p>}
     </Modal>
   );
 }
