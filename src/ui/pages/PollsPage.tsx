@@ -17,6 +17,10 @@ export default function PollsPage() {
   const { user, s, refresh, toast } = useApp();
   const [filter, setFilter] = useState<'open' | 'closed' | 'draft' | 'all'>('open');
   const [createOpen, setCreateOpen] = useState(false);
+  // E-HSMT mục 13: sửa nội dung phiếu nháp — tái dùng PollCreateModal ở chế độ sửa
+  // (prop `editing`). State nâng lên PollsPage vì modal render ở đây, PollCard chỉ
+  // phát yêu cầu mở qua onEdit.
+  const [editingPoll, setEditingPoll] = useState<Vote | null>(null);
   const [viewDoc, setViewDoc] = useState<DocFile | null>(null);
   const docById = indexBy(s.documents);
   const users = indexBy(s.users);
@@ -55,18 +59,23 @@ export default function PollsPage() {
       {polls.length === 0 && <div className="card"><EmptyState icon="vote" text="Không có phiếu lấy ý kiến nào" /></div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {polls.map((p) => (
-          <PollCard key={p.id} p={p} usersMap={users} onViewDoc={(did) => { const d = docById.get(did); if (d) setViewDoc(d); }} />
+          <PollCard key={p.id} p={p} usersMap={users} onViewDoc={(did) => { const d = docById.get(did); if (d) setViewDoc(d); }}
+            onEdit={(vote) => setEditingPoll(vote)} />
         ))}
       </div>
 
       {createOpen && <PollCreateModal onClose={() => setCreateOpen(false)}
         onDone={async (asDraft) => { setCreateOpen(false); await refresh(); toast(asDraft ? 'Đã lưu nháp phiếu lấy ý kiến (chưa gửi)' : 'Đã gửi phiếu lấy ý kiến đến các thành viên'); }} />}
+      {editingPoll && <PollCreateModal editing={editingPoll} onClose={() => setEditingPoll(null)}
+        onDone={async () => { setEditingPoll(null); await refresh(); toast('Đã cập nhật phiếu nháp'); }} />}
       {viewDoc && <DocViewerModal doc={viewDoc} onClose={() => setViewDoc(null)} />}
     </div>
   );
 }
 
-function PollCard({ p, usersMap, onViewDoc }: { p: Vote; usersMap: Map<string, User>; onViewDoc: (docId: string) => void }) {
+function PollCard({ p, usersMap, onViewDoc, onEdit }: {
+  p: Vote; usersMap: Map<string, User>; onViewDoc: (docId: string) => void; onEdit: (vote: Vote) => void;
+}) {
   const { user, refresh, toast } = useApp();
   const [optionId, setOptionId] = useState('');
   const [comment, setComment] = useState('');
@@ -147,9 +156,16 @@ function PollCard({ p, usersMap, onViewDoc }: { p: Vote; usersMap: Map<string, U
           )}
         </div>
         {isOwner && isDraft && (
-          <button className="btn success sm" onClick={() => act(() => voteService.openVote(user!, p.id), 'Đã gửi phiếu lấy ý kiến đến các thành viên')}>
-            <Icon name="send" size={13} />Gửi lấy ý kiến
-          </button>
+          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+            {/* E-HSMT mục 13: sửa nội dung phiếu nháp — CHỈ khi còn 'draft', không hiện
+                khi phiếu đã mở/đã đóng (nội dung bất biến sau khi gửi, xem updateDraftVote). */}
+            <button className="btn outline sm" onClick={() => onEdit(p)}>
+              <Icon name="pen" size={13} />Sửa
+            </button>
+            <button className="btn success sm" onClick={() => act(() => voteService.openVote(user!, p.id), 'Đã gửi phiếu lấy ý kiến đến các thành viên')}>
+              <Icon name="send" size={13} />Gửi lấy ý kiến
+            </button>
+          </div>
         )}
         {isOwner && p.status === 'open' && (
           <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
@@ -274,20 +290,36 @@ function PollSignModal({ onClose, onSubmit, optionLabel, comment }: {
   );
 }
 
-function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: (asDraft: boolean) => void }) {
+/**
+ * Modal tạo phiếu lấy ý kiến — TÁI DÙNG cho E-HSMT mục 13 "Sửa nội dung văn bản chưa
+ * lấy ý kiến" qua prop `editing` (OPTIONAL). Khi có `editing` (luôn là phiếu 'draft' —
+ * PollCard chỉ gọi onEdit khi isDraft, xem hồi quy (f)):
+ *  - toàn bộ state khởi tạo từ giá trị hiện tại của `editing` thay vì mặc định trắng;
+ *  - footer đổi "Lưu nháp/Gửi phiếu" -> 1 nút "Lưu thay đổi" duy nhất (KHÔNG gửi luôn —
+ *    giữ đúng ngữ nghĩa "sửa nháp", việc gửi vẫn là hành động riêng "Gửi lấy ý kiến"
+ *    trên PollCard, không trộn 2 hành động vào 1 nút);
+ *  - submit gọi `voteService.updateDraftVote` (PATCH nội dung, status/ballots bất biến)
+ *    thay vì `createVote`.
+ * KHÔNG đổi hành vi tạo mới (editing=undefined): mọi state/JSX/nút Lưu nháp+Gửi phiếu
+ * giữ nguyên hệt trước khi thêm prop này (hồi quy (a)).
+ */
+function PollCreateModal({ editing, onClose, onDone }: {
+  editing?: Vote; onClose: () => void; onDone: (asDraft: boolean) => void;
+}) {
   const { user, s } = useApp();
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
+  const [title, setTitle] = useState(editing?.title ?? '');
+  const [description, setDescription] = useState(editing?.description ?? '');
   const d = new Date(Date.now() + 3 * 24 * 3600e3); d.setHours(17, 0, 0, 0);
-  const [deadline, setDeadline] = useState(toLocalInput(d.toISOString()));
-  const [opts, setOpts] = useState(['Nhất trí', 'Nhất trí, có chỉnh sửa bổ sung', 'Không nhất trí']);
-  const [ids, setIds] = useState<string[]>(s.users.filter((u) => u.status === 'active' && u.role !== 'admin' && u.id !== user?.id).map((u) => u.id));
-  const [docIds, setDocIds] = useState<string[]>([]);
-  const [trackerUserId, setTrackerUserId] = useState('');
+  const [deadline, setDeadline] = useState(editing?.deadline ? toLocalInput(editing.deadline) : toLocalInput(d.toISOString()));
+  const [opts, setOpts] = useState(editing ? editing.options.map((o) => o.label) : ['Nhất trí', 'Nhất trí, có chỉnh sửa bổ sung', 'Không nhất trí']);
+  const [ids, setIds] = useState<string[]>(editing ? [...editing.eligibleIds]
+    : s.users.filter((u) => u.status === 'active' && u.role !== 'admin' && u.id !== user?.id).map((u) => u.id));
+  const [docIds, setDocIds] = useState<string[]>(editing ? [...editing.documentIds] : []);
+  const [trackerUserId, setTrackerUserId] = useState(editing?.trackerUserId ?? '');
   // V3 (dungthu-tester.md P1-2, dungthu-ba.md): "Phiếu kín" — ẩn danh người góp ý với người
   // xem không phải người tạo/quản lý (mirror `Vote.secret` đã dùng sẵn cho biểu quyết trong
   // họp — chỉ chưa có đường vào UI cho kind='poll').
-  const [secret, setSecret] = useState(false);
+  const [secret, setSecret] = useState(editing?.secret ?? false);
   const [err, setErr] = useState('');
   const attachable = s.documents.filter((dx) => dx.kind !== 'personal' || dx.ownerId === user?.id);
 
@@ -296,6 +328,16 @@ function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: (as
     if (!title.trim()) return setErr('Nhập nội dung xin ý kiến');
     if (!ids.length) return setErr('Chọn ít nhất một thành viên');
     try {
+      if (editing) {
+        await voteService.updateDraftVote(user, editing.id, {
+          title: title.trim(), description: description.trim() || undefined,
+          optionLabels: opts, secret, deadline: fromLocalInput(deadline),
+          documentIds: docIds, eligibleIds: ids,
+          trackerUserId: trackerUserId || undefined,
+        });
+        onDone(true);
+        return;
+      }
       await voteService.createVote(user, {
         kind: 'poll', title: title.trim(), description: description.trim() || undefined,
         optionLabels: opts, secret, deadline: fromLocalInput(deadline),
@@ -308,14 +350,20 @@ function PollCreateModal({ onClose, onDone }: { onClose: () => void; onDone: (as
   };
 
   return (
-    <Modal title="Tạo phiếu lấy ý kiến" onClose={onClose} width={640}
+    <Modal title={editing ? 'Sửa phiếu lấy ý kiến (nháp)' : 'Tạo phiếu lấy ý kiến'} onClose={onClose} width={640}
       footer={<>
         {err && <span style={{ color: 'var(--red)', fontSize: 13, marginRight: 'auto' }}>{err}</span>}
         <button className="btn outline" onClick={onClose}>Hủy</button>
-        <button className="btn outline" onClick={() => submit(true)} title="Lưu để hoàn thiện sau, chưa thông báo thành viên">
-          <Icon name="clock" size={14} />Lưu nháp (chưa gửi)
-        </button>
-        <button className="btn" onClick={() => submit(false)}><Icon name="send" size={15} />Gửi phiếu</button>
+        {editing ? (
+          <button className="btn" onClick={() => submit(true)}><Icon name="check" size={15} />Lưu thay đổi</button>
+        ) : (
+          <>
+            <button className="btn outline" onClick={() => submit(true)} title="Lưu để hoàn thiện sau, chưa thông báo thành viên">
+              <Icon name="clock" size={14} />Lưu nháp (chưa gửi)
+            </button>
+            <button className="btn" onClick={() => submit(false)}><Icon name="send" size={15} />Gửi phiếu</button>
+          </>
+        )}
       </>}>
       <Field label="Nội dung xin ý kiến" required>
         <input className="inp" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="VD: Lấy ý kiến dự thảo Quyết định…" />

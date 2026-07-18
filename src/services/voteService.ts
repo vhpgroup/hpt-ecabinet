@@ -74,6 +74,65 @@ export async function createVote(actor: User, draft: VoteDraft): Promise<Vote> {
   return vote;
 }
 
+/** Nội dung có thể sửa cho phiếu lấy ý kiến ở trạng thái nháp — mirror VoteDraft, KHÔNG có saveAsDraft/kind (bất biến). */
+export interface DraftPollUpdate {
+  title: string;
+  description?: string;
+  optionLabels: string[];
+  secret: boolean;
+  deadline?: string;
+  documentIds: string[];
+  eligibleIds: string[];
+  trackerUserId?: string;
+}
+
+/**
+ * E-HSMT mục 13 "Sửa nội dung văn bản chưa lấy ý kiến": cho phép sửa toàn bộ nội dung
+ * của một phiếu lấy ý kiến (kind='poll') CHỈ khi còn ở trạng thái 'draft' (chưa gửi —
+ * chưa có ai được thông báo, chưa có ballots). Sau khi đã "Gửi lấy ý kiến" (status
+ * chuyển 'open'), nội dung phiếu là BẤT BIẾN theo đúng thiết kế nghiệp vụ hiện có của
+ * `openVote`/`closeVote` — hàm này CHỦ Ý không cho sửa 'open'/'closed'.
+ *
+ * Quyền: người tạo phiếu (createdBy) HOẶC vai quản lý (can.manageMeetings — mirror
+ * server MANAGE=['admin','secretary','chairman'] dùng trong `guardVotes`). Vì nút "Tạo
+ * phiếu lấy ý kiến" trên UI (PollsPage) chỉ hiện cho vai quản lý, trong thực tế
+ * createdBy của MỌI poll luôn thuộc vai quản lý — hai điều kiện luôn trùng nhau ở dữ
+ * liệu hiện có, nhưng vẫn kiểm cả hai để đúng ý định nghiệp vụ và không phụ thuộc giả
+ * định đó nếu thay đổi trong tương lai.
+ *
+ * TUYỆT ĐỐI không đụng `status`/`ballots`/`openedAt`/`closedAt` — chỉ patch field nội
+ * dung. Ở CHẾ ĐỘ MÁY CHỦ (REST), field nội dung đi qua PATCH /api/votes/:id thẳng vào
+ * `guardVotes` (server/src/guard.js): guard đã cho phép vai quản lý sửa nội dung phiếu
+ * (xóa ballots/status/openedAt/closedAt khỏi patch trước khi ghi) — không cần endpoint
+ * /api/actions riêng.
+ */
+export async function updateDraftVote(actor: User, voteId: string, draft: DraftPollUpdate): Promise<Vote> {
+  const v = await db.votes.get(voteId);
+  if (!v) throw new Error('Không tìm thấy phiếu lấy ý kiến');
+  if (v.kind !== 'poll') throw new Error('Chỉ áp dụng cho phiếu lấy ý kiến');
+  if (v.status !== 'draft') throw new Error('Chỉ sửa được nội dung khi phiếu còn ở trạng thái nháp (chưa gửi)');
+  const isManage = ['admin', 'secretary', 'chairman'].includes(actor.role);
+  if (v.createdBy !== actor.id && !isManage) {
+    throw new Error('Bạn không có quyền sửa phiếu lấy ý kiến này');
+  }
+  const options = draft.optionLabels.filter(Boolean).map((label, i) => ({ id: 'o' + (i + 1), label }));
+  const patch: Partial<Vote> = {
+    title: draft.title,
+    description: draft.description,
+    options,
+    secret: draft.secret,
+    deadline: draft.deadline,
+    documentIds: draft.documentIds,
+    eligibleIds: draft.eligibleIds,
+    trackerUserId: draft.trackerUserId || undefined,
+    approveOptionId: options[0]?.id,
+    abstainOptionId: undefined,
+  };
+  const updated = await db.votes.update(voteId, patch);
+  await audit(actor, 'Sửa phiếu lấy ý kiến (nháp)', `"${updated.title}"`);
+  return updated;
+}
+
 export async function openVote(actor: User, voteId: string) {
   // GĐ4 — chế độ máy chủ: endpoint nghiệp vụ kiểm tra sâu + tự thông báo/audit
   if (db.action) { await db.action(`/vote/${voteId}/open`); return; }
