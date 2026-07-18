@@ -473,9 +473,14 @@ function guardMeetings(existing, patch, user) {
     throw httpError(403, 'Chỉ chủ tọa/thư ký được cập nhật tiến trình mục chương trình');
   }
 
-  // biên bản: chữ ký & khóa chỉ qua /actions/sign; đã khóa là bất biến
+  // biên bản: chữ ký & khóa chỉ qua /actions/sign; đã khóa là bất biến.
+  // Vá 18/07 (chốt code chéo): NGAY KHI có ≥1 chữ ký (dù chưa đủ 2 để locked),
+  // nội dung biên bản bất biến qua CRUD chung — khớp hành vi client (saveMinutes
+  // chặn từ chữ ký đầu). Trước đây chỉ chặn khi locked=true nên khoảng "1 chữ ký,
+  // chưa đủ 2" còn cho PATCH ghi đè content (rủi ro toàn vẹn pháp lý — không lộ qua
+  // UI vì service chặn trước, nhưng lộ nếu PATCH trực tiếp).
   if (p.minutes !== undefined) {
-    if (existing.minutes?.locked) {
+    if (existing.minutes?.locked || (existing.minutes?.signatures?.length > 0)) {
       delete p.minutes;
     } else if (p.minutes) {
       p.minutes = {

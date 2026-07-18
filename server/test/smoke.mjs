@@ -570,6 +570,22 @@ await Case('guardPatch(meetings): minutes đã KHÓA (locked=true) -> id-match c
   const out = guardPatch('meetings', lockedMeeting, { minutes: { content: 'sửa lén' } }, U('u-delegate-chair', 'delegate'));
   assert.equal(out.minutes, undefined, 'minutes đã khóa: patch bị xóa hoàn toàn, kể cả với chairId id-match');
 });
+// Vá 18/07 — ca "khoảng giữa": có 1 chữ ký nhưng CHƯA đủ 2 (locked=false) vẫn phải bất biến nội dung
+await Case('guardPatch(meetings): minutes có 1 chữ ký (locked=false) -> KHÔNG ghi đè content được (chair id-match)', () => {
+  const oneSig = { ...meetingChairedByDelegate, minutes: { content: 'đã ký 1', signatures: [{ userId: 'u-x' }], locked: false } };
+  const out = guardPatch('meetings', oneSig, { minutes: { content: 'sửa lén giữa chừng' } }, U('u-delegate-chair', 'delegate'));
+  assert.equal(out.minutes, undefined, 'có ≥1 chữ ký: patch minutes bị xóa dù chưa locked (chống ghi đè nội dung đã ký)');
+});
+await Case('guardPatch(meetings): minutes có 1 chữ ký -> MANAGE role cũng KHÔNG ghi đè content', () => {
+  const oneSig = { id: 'm-sig1', chairId: 'u-a', secretaryId: 'u-b', status: 'ended', participants: [], minutes: { content: 'đã ký 1', signatures: [{ userId: 'u-a' }], locked: false } };
+  const out = guardPatch('meetings', oneSig, { minutes: { content: 'admin sửa lén' } }, U('u-admin', 'admin'));
+  assert.equal(out.minutes, undefined, 'có ≥1 chữ ký: admin/MANAGE cũng không ghi đè nội dung biên bản qua CRUD chung');
+});
+await Case('guardPatch(meetings): minutes CHƯA có chữ ký nào (dự thảo trắng) -> vẫn sửa được (không hồi quy)', () => {
+  const draft = { ...meetingChairedByDelegate, minutes: { content: 'nháp', signatures: [], locked: false } };
+  const out = guardPatch('meetings', draft, { minutes: { content: 'sửa nháp hợp lệ' } }, U('u-delegate-chair', 'delegate'));
+  assert.equal(out.minutes.content, 'sửa nháp hợp lệ', 'chưa ký: vẫn sửa dự thảo bình thường');
+});
 await Case('guardPatch(meetings): MANAGE (role=chairman thật, không id-match phiên NÀY) vẫn sửa được conclusions như cũ (không hồi quy)', () => {
   const meeting = { id: 'm-other', chairId: 'u-ct-khac-nua', secretaryId: 'u-tk-khac', status: 'live', participants: [] };
   const out = guardPatch('meetings', meeting, { conclusions: [{ id: 'c-manage', content: 'x', createdAt: 't1' }] }, U('u-chairman-role', 'chairman'));

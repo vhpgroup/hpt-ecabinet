@@ -500,7 +500,11 @@ public static class Guard
         if (J.Has(p, "minutes"))
         {
             var exMinutes = J.Obj(existing, "minutes");
-            if (exMinutes is not null && J.BoolOr(exMinutes, "locked", false))
+            // Vá 18/07 (chốt code chéo): NGAY KHI có ≥1 chữ ký (dù chưa đủ 2 để locked),
+            // nội dung biên bản bất biến qua CRUD chung — khớp hành vi client + bản Node.
+            var exHasSig = exMinutes is not null
+                && J.Arr(exMinutes, "signatures") is JsonArray exSigs && exSigs.Count > 0;
+            if (exMinutes is not null && (J.BoolOr(exMinutes, "locked", false) || exHasSig))
             {
                 p.Remove("minutes");
             }

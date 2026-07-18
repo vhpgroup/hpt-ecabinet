@@ -613,6 +613,18 @@ static async Task Group5_ActionsCas(TestRunner t)
         Assert.Eq("Bạn đã ký biên bản này", r.Error, "message đã ký");
     });
 
+    // Vá 18/07 — biên bản có 1 chữ ký (chutich, CHƯA đủ 2 nên locked=false):
+    // PATCH ghi đè content qua CRUD chung phải bị guard bảo toàn (chống ghi đè nội dung đã ký).
+    await t.Case("khóa biên bản: có 1 chữ ký (chưa locked) -> PATCH ghi đè content bị chặn (guardMeetings)", async () =>
+    {
+        var chair = await app.Login("chutich");
+        var patch = new JsonObject { ["minutes"] = new JsonObject { ["content"] = "SỬA LÉN GIỮA CHỪNG" } };
+        await app.Patch("/api/meetings/m-sign1", patch, chair); // guard xóa p.minutes -> không đổi
+        var m = await app.Get("/api/meetings/m-sign1", chair);
+        var content = m.Obj["minutes"]?["content"]?.GetValue<string>();
+        Assert.True(content != "SỬA LÉN GIỮA CHỪNG", "content biên bản đã ký (1 chữ ký) KHÔNG bị ghi đè qua CRUD chung");
+    });
+
     await t.Case("start/invite/end phiên họp qua actions", async () =>
     {
         var chair = await app.Login("chutich");
