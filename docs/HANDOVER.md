@@ -1,8 +1,14 @@
 # HỒ SƠ BÀN GIAO DỰ ÁN eCabinet (HPT TECH)
-*Cập nhật: 18/07/2026 01:15 (+07) — sau ca "hội đồng rà soát tổng + thực hiện" qua đêm (6 vai: TechLeader, BA, bên mời thầu giả định, chuyên gia phân tích hệ thống, FE/BE/DevOps dev, chuyên viên hồ sơ, Tester). Tài liệu này giúp bất kỳ AI agent / dev mới nắm toàn bộ dự án trong 5 phút.*
+*Cập nhật: 18/07/2026 08:30 (+07) — sau ca "hội đồng rà soát tổng + thực hiện" qua đêm và thẩm định đấu thầu sáng 18/07 (**gói mục tiêu ban đầu ĐÃ trúng thầu — đọc ngay khối ⚠️ ở mục 1**). Tài liệu này giúp bất kỳ AI agent / dev mới nắm toàn bộ dự án trong 5 phút.*
 
 ## 1. Dự án là gì
-Phần mềm **phòng họp không giấy** (tương đương VNPT eCabinet), xây để **dự thầu gói "Thuê phần mềm Họp không giấy tờ cho các xã, phường, đặc khu"** — Sở KH&CN TP Hải Phòng (thuê dịch vụ CNTT 60 tháng, chuẩn bị ≤3 tháng, 500 user/90 CCU, đặt tại Trung tâm dữ liệu TP, ATTT cấp độ 3).
+Phần mềm **phòng họp không giấy** (tương đương VNPT eCabinet) của HPT TECH — **sản phẩm dự thầu các gói "Thuê phần mềm Họp không giấy tờ"** cho khối chính quyền (xã/phường/đặc khu, sở ngành).
+
+> ⚠️ **TÌNH HÌNH MỚI (thẩm định 18/07/2026, nguồn chính thống muasamcong.mpi.gov.vn):** Gói mục tiêu ban đầu — "Thuê phần mềm Họp không giấy tờ cho các xã, phường, đặc khu", Sở KH&CN TP Hải Phòng, mã **IB2600235546-00** — **ĐÃ TRÚNG THẦU**: CTCP Tin học **Tân Dân**, giá **12,613 tỷ VND / 63 tháng** (giá gói 13,313 tỷ, giảm ~5,26%), QĐ 955/QĐ-SKHCN ngày 02/07/2026, đăng công khai 13/07/2026. Vietesoft trượt (giá xếp 3/3); VSD Việt Nam **bị loại kỹ thuật**. Không có hủy thầu/đấu lại; các gói còn lại trong KHLCNT là tư vấn chỉ định thầu. Chi tiết: `docs/ra-soat/2026-07-18/tham-dinh-goi-thau.md`.
+>
+> **Định hướng mới (chốt 18/07/2026):** giữ nguyên sản phẩm + bộ hồ sơ làm nền, **chuyển sang săn & chuẩn bị cho các gói tương tự ở tỉnh/thành khác** (làn sóng thuê "họp không giấy" sau sáp nhập hành chính). HSMT Hải Phòng (`docs/hsmt-chuong-v.md`) trở thành **khung yêu cầu tham chiếu** — các tỉnh thường dùng cấu trúc yêu cầu tương tự. Benchmark giá thị trường vừa có: **~200 triệu đồng/tháng** cho mô hình cấp xã/phường.
+
+Thông số gói tham chiếu (HSMT Hải Phòng): thuê dịch vụ CNTT 60 tháng, chuẩn bị ≤3 tháng, 500 user/90 CCU, đặt tại Trung tâm dữ liệu TP, ATTT cấp độ 3.
 
 - **Repo (nguồn chân lý duy nhất):** https://github.com/vhpgroup/hpt-ecabinet (nhánh `main`)
 - Yêu cầu kỹ thuật chi tiết của gói thầu: file E-HSMT "Phụ lục 01 Chương V" (chủ đầu tư phát hành — giữ bản gốc DOCX)
@@ -39,13 +45,13 @@ Tài khoản demo (mật khẩu chung `123456`): `chutich` (chủ trì) · `thuk
 - **Nền tảng (nói trung thực):** .NET 8 ✅ · SQL Server 🟡 mã sẵn sàng nhưng CHƯA test trên instance MSSQL thật · Windows Server + IIS 🔴 mới có outline. Đã bổ sung: backup/restore MSSQL (`deploy/backup-mssql.sh`), diễn tập DR (`deploy/test-restore.sh` + `docs/dr-runbook.md`), TLS profile cho compose .NET, script loadtest 90 CCU (`scripts/loadtest.mjs` + `docs/loadtest.md`), IPv6 dual-stack nginx.
 - **Hồ sơ thầu:** bộ **12 tài liệu** tại `docs/ho-so/` (mục lục, cam kết bảo mật, cam kết SLA, kịch bản vận hành thử, quy trình quản trị vận hành 8 quy trình con, quy trình bảo trì, chuyển giao dữ liệu, nâng cấp theo quy định mới, giáo trình đào tạo, kế hoạch 12 tuần, văn bản làm rõ HSMT, khung HDSD) — CẦN pháp nhân điền placeholder [Họ tên/Chức vụ/Ngày] + ký. **Website công bố sản phẩm**: `website/index.html` (điều kiện dự thầu — cần đăng lên domain công khai).
 - **Tư liệu:** HSMT Chương V toàn văn `docs/hsmt-chuong-v.md` (trích từ DOCX gốc chủ dự án cấp 17/07). 9 báo cáo hội đồng rà soát: `docs/ra-soat/2026-07-18/` (đọc `tester-qa.md` trước — có danh sách lỗi P2 còn ghi nhận).
-- **Còn lại để thắng thầu (cần pháp nhân/bên ngoài, KHÔNG code được):**
-  1. 🔴 **Ký số VGCA / VNPT SmartCA thật** — cần tài khoản/thiết bị CA (việc pháp nhân)
-  2. 🔴 **Hồ sơ ATTT cấp độ 3** + pentest độc lập (6-8 tuần, cần đơn vị kiểm định)
-  3. 🔴 **Chương I/III E-HSMT** (năng lực, kinh nghiệm, tiêu chuẩn đánh giá) — CHƯA đọc, quyết định bid/no-bid; cân nhắc liên danh
-  4. 🟠 **GỬI** văn bản làm rõ HSMT — đã soạn sẵn `docs/ho-so/10-van-ban-lam-ro-hsmt.md` (PWA vs native, chuẩn CA, LGSP XML/JSON, cấu hình 4 tầng Windows, số lượng xã/phường…)
-  5. 🟠 Đấu LGSP/IOC thật (chờ đặc tả TP) · test compose MSSQL instance thật · triển khai thử Windows/IIS · build app native lên store (cần máy có npm + Android Studio/Xcode)
-  6. 🟠 Đăng website công bố lên domain công khai · pháp nhân hoàn thiện + ký bộ `docs/ho-so/`
+- **Còn lại để SẴN SÀNG DỰ CÁC GÓI TƯƠNG TỰ (cần pháp nhân/bên ngoài, KHÔNG code được):**
+  1. 🔴 **Săn gói thầu mới** — theo dõi KHLCNT/TBMT "họp không giấy" các tỉnh/thành trên muasamcong.mpi.gov.vn, vào cuộc từ giai đoạn **KHLCNT** chứ đừng đợi TBMT (bài học Hải Phòng: KHLCNT duyệt 18/03, TBMT 27/05, đóng thầu 15/06 — biết muộn là lỡ cả vòng)
+  2. 🔴 **Ký số VGCA / VNPT SmartCA thật** — cần tài khoản/thiết bị CA (việc pháp nhân)
+  3. 🔴 **Hồ sơ ATTT cấp độ 3** + pentest độc lập (6-8 tuần) · **hồ sơ năng lực/hợp đồng tương tự** — rào cản lớn nhất của sản phẩm mới, cân nhắc liên danh (bài học gói Hải Phòng: VSD bị **loại kỹ thuật** ngay vòng đánh giá)
+  4. 🟠 Khi xuất hiện gói mới: đọc **Chương I/III E-HSMT của gói đó** trước khi bid/no-bid; tái dùng `docs/ho-so/10-van-ban-lam-ro-hsmt.md` làm template câu hỏi làm rõ (thay căn cứ/tên bên mời thầu theo gói mới)
+  5. 🟠 Đấu LGSP/IOC thật (đặc tả tùy tỉnh) · test compose MSSQL instance thật · triển khai thử Windows/IIS · build app native lên store (cần máy có npm + Android Studio/Xcode)
+  6. 🟠 Đăng website công bố lên domain công khai · pháp nhân hoàn thiện + ký bộ `docs/ho-so/` (soạn theo HSMT Hải Phòng — dùng cho gói mới phải cập nhật căn cứ trích dẫn)
   7. 🟡 Lỗi P2 ghi nhận làm sau (chi tiết `docs/ra-soat/2026-07-18/tester-qa.md`): quyền sửa kết luận lệch FE (id-match) vs BE (role-match); `signedCount` đếm trên dữ liệu đã ẩn danh; `server-dotnet` Program.cs bind IPv4-only.
 
 ## 5. Ghi chú cho AI agent tiếp quản (kinh nghiệm xương máu)
@@ -58,4 +64,4 @@ Tài khoản demo (mật khẩu chung `123456`): `chutich` (chủ trì) · `thuk
 - Làm tính năng FE + BE song song bằng nhiều agent: CHỐT HỢP ĐỒNG FIELD trước khi phát lệnh (tên field/endpoint/mã lỗi — xem `docs/ra-soat/2026-07-18/dev-backend.md`), phân vùng file nghiêm ngặt cho từng agent, và LUÔN cho Tester đối chiếu chéo 2 phía trước khi commit — đêm 18/07 bước này bắt được 1 lỗi P0 (docType bị guard chặn) + 1 lỗi P1 (lệch quyền feedbacks) trước khi lên GitHub.
 
 ## 6. Prompt khởi động cho thread mới (dán nguyên văn)
-> Tôi đang tiếp tục dự án eCabinet — phần mềm phòng họp không giấy của HPT TECH để dự thầu gói "Thuê phần mềm Họp không giấy tờ cho các xã, phường, đặc khu" (Sở KH&CN TP Hải Phòng). Toàn bộ mã nguồn và ngữ cảnh ở repo GitHub vhpgroup/hpt-ecabinet. Hãy đọc kỹ `docs/HANDOVER.md`, `docs/phan-tich-hsmt-BA.md`, `docs/phan-tich-hsmt-TechLeader.md` và `README.md` trước, tóm tắt lại hiện trạng cho tôi, rồi đề xuất việc tiếp theo theo mục 4 của HANDOVER.
+> Tôi đang tiếp tục dự án eCabinet — phần mềm phòng họp không giấy của HPT TECH, sản phẩm để dự thầu các gói "Thuê phần mềm Họp không giấy tờ" cho khối chính quyền. LƯU Ý: gói mục tiêu ban đầu tại Sở KH&CN TP Hải Phòng (IB2600235546) ĐÃ trúng thầu bởi Tân Dân 02/07/2026 — định hướng hiện tại là săn & chuẩn bị cho các gói tương tự ở tỉnh/thành khác. Toàn bộ mã nguồn và ngữ cảnh ở repo GitHub vhpgroup/hpt-ecabinet. Hãy đọc kỹ `docs/HANDOVER.md` (khối ⚠️ mục 1 + mục 4), `docs/ra-soat/2026-07-18/tham-dinh-goi-thau.md` và `README.md` trước, tóm tắt lại hiện trạng cho tôi, rồi đề xuất việc tiếp theo theo mục 4 của HANDOVER.
