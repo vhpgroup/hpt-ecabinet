@@ -14,12 +14,14 @@ interface Props { initial?: Meeting; onClose: () => void; onSaved: (id: string) 
 export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
   const { user, s, refresh, toast } = useApp();
   const activeUsers = s.users.filter((u) => u.status === 'active');
-  // V1 (P0-1 dungthu-tester.md): unit_admin TẠO phiên mới chỉ chọn được chủ trì/thư ký
-  // TRONG ĐƠN VỊ MÌNH (mirror enforceMeetingWrite phía server — chairId/secretaryId.unitId
-  // === unitId của unit_admin). Khi SỬA phiên đã có (initial), không siết lại — ngoài phạm
-  // vi vá P0-2 (chỉ áp cho 'create').
-  const isUnitAdminCreating = !initial && user?.role === 'unit_admin';
-  const chairSecCandidates = isUnitAdminCreating
+  // V1 (P0-1 dungthu-tester.md) + Khuyến nghị 1 (2026-07-18, chốt code chéo): unit_admin
+  // TẠO phiên mới HOẶC SỬA phiên đã có (nếu được phép mở form — xem MeetingDetailPage.tsx)
+  // chỉ chọn được chủ trì/thư ký TRONG ĐƠN VỊ MÌNH (mirror enforceMeetingWrite/
+  // enforceUnitAdminMeetingWrite — chairId/secretaryId.unitId === unitId của unit_admin).
+  // Mở rộng từ chỉ 'create' sang cả 'update' để khớp phạm vi Khuyến nghị 1 (unit_admin sửa
+  // phiên đơn vị mình KHÔNG được đổi chair/secretary sang đơn vị khác).
+  const isUnitAdminActing = user?.role === 'unit_admin';
+  const chairSecCandidates = isUnitAdminActing
     ? activeUsers.filter((u) => u.unitId === user?.unitId)
     : activeUsers;
 
@@ -36,11 +38,11 @@ export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
   const [isOnline, setIsOnline] = useState(initial?.isOnline ?? true);
   const [chairId, setChairId] = useState(
     initial?.chairId
-    ?? (isUnitAdminCreating ? (chairSecCandidates.find((u) => u.role === 'chairman')?.id ?? chairSecCandidates[0]?.id ?? '') : (user?.id ?? '')),
+    ?? (isUnitAdminActing ? (chairSecCandidates.find((u) => u.role === 'chairman')?.id ?? chairSecCandidates[0]?.id ?? '') : (user?.id ?? '')),
   );
   const [secretaryId, setSecretaryId] = useState(
     initial?.secretaryId
-    ?? (isUnitAdminCreating
+    ?? (isUnitAdminActing
       ? (chairSecCandidates.find((u) => u.role === 'secretary')?.id ?? chairSecCandidates[0]?.id ?? '')
       : (s.users.find((u) => u.role === 'secretary')?.id ?? '')),
   );
@@ -155,9 +157,10 @@ export default function MeetingFormModal({ initial, onClose, onSaved }: Props) {
           </select>
         </Field>
       </div>
-      {isUnitAdminCreating && (
+      {isUnitAdminActing && (
         <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>
-          Với vai Quản trị đơn vị: chủ trì và thư ký chỉ chọn được trong phạm vi đơn vị của bạn.
+          Với vai Quản trị đơn vị: chủ trì và thư ký chỉ chọn được trong phạm vi đơn vị của bạn
+          {initial ? ' (không đổi sang người thuộc đơn vị khác).' : '.'}
         </p>
       )}
 

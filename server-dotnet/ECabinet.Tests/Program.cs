@@ -1106,6 +1106,155 @@ static async Task Group8_UnitIsolation(TestRunner t)
         Assert.Status(200, r.Status, "unit_admin (owner) trình duyệt tài liệu phiên đơn vị mình");
         Assert.Eq("pending", r.Obj["reviewStatus"]?.GetValue<string>(), "reviewStatus=pending");
     });
+
+    // ---------------- KHUYẾN NGHỊ 1 (2026-07-18, chốt code chéo) — unit_admin SỬA/XÓA phiên
+    // họp THUỘC ĐƠN VỊ MÌNH + giới hạn thêm tài liệu theo đơn vị. m-qtdv-ok (tạo ở test P0-2
+    // phía trên, chairId=u-khdt, đơn vị un-khdt — CÙNG đơn vị qtdonvi) đã chuyển sang status
+    // "invited" sau bước "gửi giấy mời" ở trên — dùng LẠI đúng fixture này (không phải tạo
+    // mới) để phủ cả nhánh "sửa phiên invited" + "xóa phiên invited" (2 trạng thái thuộc
+    // NOT_STARTED_STATUSES) — TUYỆT ĐỐI KHÔNG dùng lại m-qtdv-ok ở bất kỳ test SAU test xóa
+    // (cuối Group này) vì bản ghi sẽ không còn tồn tại.
+    await t.Case("meetings: unit_admin SỬA phiên THUỘC ĐƠN VỊ MÌNH (m-qtdv-ok) -> 200, field nội dung ghi được như MANAGE", async () =>
+    {
+        var body = new JsonObject
+        {
+            ["title"] = "Họp do quản trị đơn vị tạo (đã sửa)", ["roomId"] = "r2",
+            ["agenda"] = new JsonArray(new JsonObject { ["id"] = "ag-qtdv-1", ["order"] = 1, ["title"] = "Mục do unit_admin thêm", ["durationMinutes"] = 20 }),
+        };
+        var r = await app.Patch("/api/meetings/m-qtdv-ok", body, qtdv);
+        Assert.Status(200, r.Status, "unit_admin sửa phiên đơn vị mình");
+        Assert.Eq("Họp do quản trị đơn vị tạo (đã sửa)", r.Obj["title"]?.GetValue<string>(), "title ghi được (KHÔNG bị guardMeetings xóa như đại biểu thường)");
+        Assert.Eq("r2", r.Obj["roomId"]?.GetValue<string>(), "roomId ghi được");
+        Assert.Eq(1, r.Obj["agenda"]!.AsArray().Count, "agenda ghi được");
+    });
+
+    await t.Case("meetings: unit_admin SỬA phiên ĐƠN VỊ KHÁC (m1, chủ trì u-ct thuộc un-vp) -> 403", async () =>
+    {
+        var r = await app.Patch("/api/meetings/m1", new JsonObject { ["title"] = "Chiếm quyền sửa" }, qtdv);
+        Assert.Status(403, r.Status, "unit_admin không sửa được phiên đơn vị khác");
+        Assert.Eq("Bạn chỉ quản lý phiên họp trong phạm vi đơn vị của mình", r.Error, "message đúng đơn vị");
+    });
+
+    await t.Case("meetings: unit_admin đổi CHAIRID sang người ĐƠN VỊ KHÁC (m-qtdv-ok -> u-tc thuộc un-tc) -> 403 (chống 'chuyển' phiên sang đơn vị khác)", async () =>
+    {
+        var r = await app.Patch("/api/meetings/m-qtdv-ok", new JsonObject { ["chairId"] = "u-tc" }, qtdv);
+        Assert.Status(403, r.Status, "unit_admin không đổi được chủ trì sang người đơn vị khác");
+        Assert.Eq("Chủ trì mới phải thuộc đơn vị của bạn", r.Error, "message đúng chủ trì mới sai đơn vị");
+        // xác nhận KHÔNG bị đổi lén (double-check bằng GET)
+        var check = await app.Get("/api/meetings/m-qtdv-ok", qtdv);
+        Assert.Eq("u-khdt", check.Obj["chairId"]?.GetValue<string>(), "chairId GIỮ NGUYÊN sau yêu cầu 403");
+    });
+
+    await t.Case("meetings: unit_admin đổi SECRETARYID sang người ĐƠN VỊ KHÁC -> 403", async () =>
+    {
+        var r = await app.Patch("/api/meetings/m-qtdv-ok", new JsonObject { ["secretaryId"] = "u-tc" }, qtdv);
+        Assert.Status(403, r.Status, "unit_admin không đổi được thư ký sang người đơn vị khác");
+        Assert.Eq("Thư ký mới phải thuộc đơn vị của bạn", r.Error, "message đúng thư ký mới sai đơn vị");
+    });
+
+    await t.Case("meetings: unit_admin đổi chairId sang người CÙNG đơn vị (u-qtdv chính mình, cùng un-khdt) -> 200 (không chặn nhầm khi đúng đơn vị)", async () =>
+    {
+        var r = await app.Patch("/api/meetings/m-qtdv-ok", new JsonObject { ["chairId"] = "u-qtdv" }, qtdv);
+        Assert.Status(200, r.Status, "đổi chair sang người CÙNG đơn vị mình -> vẫn hợp lệ (không hồi quy quá mức)");
+        Assert.Eq("u-qtdv", r.Obj["chairId"]?.GetValue<string>(), "chairId đã đổi đúng");
+    });
+
+    // Phiên ĐÃ KẾT THÚC (finished) thuộc ĐÚNG đơn vị qtdonvi (un-khdt) — dựng RIÊNG để test
+    // "xóa phiên finished bị chặn" mà KHÔNG đụng m-qtdv-ok (còn dùng ở test xóa OK dưới đây).
+    var mQtdvFinished = NewDraftMeeting("m-qtdv-finished", "u-khdt", "u-tk");
+    mQtdvFinished["status"] = "finished";
+    Assert.Status(201, (await app.Post("/api/meetings", mQtdvFinished, admin)).Status, "tạo m-qtdv-finished (đơn vị un-khdt, status=finished)");
+
+    await t.Case("meetings: unit_admin XÓA phiên ĐÃ KẾT THÚC (finished) đơn vị MÌNH -> 403 (chống mất dữ liệu phiên đã họp)", async () =>
+    {
+        var r = await app.Delete("/api/meetings/m-qtdv-finished", qtdv);
+        Assert.Status(403, r.Status, "unit_admin không xóa được phiên đã diễn ra dù cùng đơn vị");
+        Assert.Eq("Chỉ xóa được phiên họp CHƯA diễn ra (nháp/đã gửi giấy mời)", r.Error, "message đúng lý do chặn");
+        // xác nhận CHƯA bị xóa
+        var check = await app.Get("/api/meetings/m-qtdv-finished", admin);
+        Assert.Status(200, check.Status, "m-qtdv-finished vẫn còn tồn tại sau yêu cầu xóa bị chặn");
+    });
+
+    await t.Case("meetings: unit_admin XÓA phiên ĐANG DIỄN RA (live) đơn vị MÌNH -> 403", async () =>
+    {
+        var mLive = NewDraftMeeting("m-qtdv-live", "u-khdt", "u-tk");
+        mLive["status"] = "live";
+        Assert.Status(201, (await app.Post("/api/meetings", mLive, admin)).Status, "tạo m-qtdv-live");
+        var r = await app.Delete("/api/meetings/m-qtdv-live", qtdv);
+        Assert.Status(403, r.Status, "unit_admin không xóa được phiên đang diễn ra");
+    });
+
+    await t.Case("meetings: unit_admin XÓA phiên ĐƠN VỊ KHÁC (m3, chủ trì u-ct thuộc un-vp, status=draft) -> 403 (đơn vị sai, dù trạng thái đúng)", async () =>
+    {
+        var r = await app.Delete("/api/meetings/m3", qtdv);
+        Assert.Status(403, r.Status, "unit_admin không xóa được phiên đơn vị khác dù đang draft");
+        Assert.Eq("Bạn chỉ quản lý phiên họp trong phạm vi đơn vị của mình", r.Error, "message đúng đơn vị");
+        var check = await app.Get("/api/meetings/m3", admin);
+        Assert.Status(200, check.Status, "m3 vẫn còn tồn tại (thuộc admin, không bị unit_admin xóa nhầm)");
+    });
+
+    await t.Case("meetings: unit_admin XÓA phiên NHÁP đơn vị mình (m-qtdv-ok, status hiện tại='invited') -> 200 (chưa diễn ra + đúng đơn vị)", async () =>
+    {
+        // m-qtdv-ok đã chuyển 'draft' -> 'invited' ở test "gửi giấy mời" phía trên — vẫn thuộc
+        // NOT_STARTED_STATUSES (draft/invited) nên unit_admin xóa được. Đây là XÓA CUỐI CÙNG
+        // trong Group này — KHÔNG có test nào sau đây còn dùng m-qtdv-ok.
+        var r = await app.Delete("/api/meetings/m-qtdv-ok", qtdv);
+        Assert.Status(200, r.Status, "unit_admin xóa được phiên chưa diễn ra thuộc đơn vị mình");
+        var check = await app.Get("/api/meetings/m-qtdv-ok", admin);
+        Assert.Status(404, check.Status, "m-qtdv-ok đã bị xóa thật (không chỉ trả 200 giả)");
+    });
+
+    await t.Case("meetings: admin/MANAGE VẪN xóa được phiên ở BẤT KỲ trạng thái (m-qtdv-finished) -> 200 (giữ nguyên quyền cũ, không hồi quy)", async () =>
+    {
+        var r = await app.Delete("/api/meetings/m-qtdv-finished", admin);
+        Assert.Status(200, r.Status, "admin xóa được phiên đã kết thúc — quyền MANAGE không bị siết bởi ràng buộc mới của unit_admin");
+    });
+
+    await t.Case("meetings: delegate thường (sokhdt, không phải unit_admin/manage) SỬA phiên bất kỳ -> vẫn theo guardMeetings cũ (không phải 403 ACL, patch bị lọc rỗng nếu không id-match)", async () =>
+    {
+        // Xác nhận enforceMeetingWrite KHÔNG áp cho vai trò khác unit_admin — hành vi delegate
+        // giữ nguyên như trước đợt vá (guardMeetings lọc field, không phải 403 ở tầng enforce).
+        var tok = await app.Login("sokhdt");
+        var r = await app.Patch("/api/meetings/m3", new JsonObject { ["title"] = "Đại biểu thường cố sửa" }, tok);
+        Assert.Status(200, r.Status, "delegate KHÔNG bị 403 ở enforceMeetingWrite (role khác unit_admin -> bỏ qua hoàn toàn)");
+        Assert.True(r.Obj["title"]?.GetValue<string>() != "Đại biểu thường cố sửa", "title vẫn bị guardMeetings lọc sạch như cũ (không phải MANAGE, không id-match) — patch KHÔNG được ghi");
+    });
+
+    // ---------------- Khuyến nghị 1 — GIỚI HẠN THÊM TÀI LIỆU THEO ĐƠN VỊ CỦA PHIÊN ----------------
+    await t.Case("documents: unit_admin THÊM tài liệu vào phiên ĐƠN VỊ KHÁC (m1, chủ trì u-ct thuộc un-vp) -> 403", async () =>
+    {
+        var doc = new JsonObject
+        {
+            ["id"] = "d-qtdv-wrong-unit", ["name"] = "Trái phép.pdf", ["kind"] = "main", ["ownerId"] = "u-qtdv",
+            ["meetingId"] = "m1", ["content"] = "nội dung", ["reviewStatus"] = "draft", ["secret"] = false, ["version"] = 1,
+        };
+        var r = await app.Post("/api/documents", doc, qtdv);
+        Assert.Status(403, r.Status, "unit_admin không thêm được tài liệu cho phiên đơn vị khác");
+        Assert.Eq("Bạn chỉ được thêm tài liệu cho phiên họp thuộc đơn vị của mình", r.Error, "message đúng");
+    });
+
+    await t.Case("documents: unit_admin THÊM tài liệu KHÔNG gắn phiên nào (meetingId=null) -> 201 (ràng buộc đơn vị CHỈ áp khi gắn phiên)", async () =>
+    {
+        var doc = new JsonObject
+        {
+            ["id"] = "d-qtdv-personal", ["name"] = "Tài liệu tham khảo.pdf", ["kind"] = "personal", ["ownerId"] = "u-qtdv",
+            ["meetingId"] = null, ["content"] = "nội dung cá nhân", ["reviewStatus"] = "approved", ["secret"] = false, ["version"] = 1,
+        };
+        var r = await app.Post("/api/documents", doc, qtdv);
+        Assert.Status(201, r.Status, "tài liệu không gắn phiên KHÔNG bị ràng buộc đơn vị (chỉ áp khi có meetingId)");
+    });
+
+    await t.Case("documents: delegate thường (sokhdt) THÊM tài liệu cho phiên bất kỳ (m1, đơn vị un-vp) -> 201 (enforceDocumentWrite KHÔNG áp cho vai trò khác unit_admin)", async () =>
+    {
+        var tok = await app.Login("sokhdt");
+        var doc = new JsonObject
+        {
+            ["id"] = "d-delegate-any-unit", ["name"] = "Tài liệu đại biểu.pdf", ["kind"] = "main", ["ownerId"] = "u-khdt",
+            ["meetingId"] = "m1", ["content"] = "nội dung", ["reviewStatus"] = "draft", ["secret"] = false, ["version"] = 1,
+        };
+        var r = await app.Post("/api/documents", doc, tok);
+        Assert.Status(201, r.Status, "delegate thường không bị ràng buộc đơn vị khi thêm tài liệu (giữ hành vi cũ, chỉ siết riêng unit_admin)");
+    });
 }
 
 // ============================================================

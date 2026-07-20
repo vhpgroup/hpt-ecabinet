@@ -381,7 +381,13 @@ public static class App
             // P0-2: quản trị đơn vị tạo phiên họp — chủ trì/thư ký PHẢI thuộc đơn vị mình
             if (col == "meetings")
             {
-                var chk = await EnforceMeetingWrite(store, c.User!, "create", body);
+                var chk = await EnforceMeetingWrite(store, c.User!, "create", null, body);
+                if (chk is not null) { await HttpUtil.SendError(c.Res, chk.Value.status, chk.Value.error); return; }
+            }
+            // Khuyến nghị 1 (2026-07-18): unit_admin thêm tài liệu gắn phiên họp — CHỈ phiên thuộc đơn vị mình.
+            if (col == "documents")
+            {
+                var chk = await EnforceDocumentWrite(store, c.User!, "create", body);
                 if (chk is not null) { await HttpUtil.SendError(c.Res, chk.Value.status, chk.Value.error); return; }
             }
             // P1-6 — Phản hồi/góp ý: SERVER ép danh tính người gửi + phạm vi đơn vị (KHÔNG
@@ -440,6 +446,13 @@ public static class App
                 var chk = await EnforceUserWrite(store, c.User!, "update", existing, patch);
                 if (chk is not null) { await HttpUtil.SendError(c.Res, chk.Value.status, chk.Value.error); return; }
             }
+            // Khuyến nghị 1 (2026-07-18): unit_admin SỬA phiên họp — chỉ trong phạm vi đơn vị
+            // mình, không "chuyển" phiên sang đơn vị khác (xem EnforceMeetingWrite).
+            if (col == "meetings")
+            {
+                var chk = await EnforceMeetingWrite(store, c.User!, "update", existing, patch);
+                if (chk is not null) { await HttpUtil.SendError(c.Res, chk.Value.status, chk.Value.error); return; }
+            }
             Guard.ValidatePatch(col, patch, existing); // P1-7: chặn kiểu sai + định dạng tệp trước khi ghi
             // P0-3: tài liệu gắn phiên họp — nạp phiên đó (tái dùng nếu đã nạp ở bước ACL trên)
             // để GuardDocuments biết ai là "thành phần phiên" được phép duyệt, không chỉ MANAGE.
@@ -454,7 +467,19 @@ public static class App
                 var selfU = await store.GetByIdAsync("c_users", c.User.Sub);
                 actorUnitId = selfU is null ? null : J.Str(selfU, "unitId");
             }
-            patch = Guard.GuardPatch(col, existing, patch, c.User!, meetingCtx, actorUnitId);
+            // Khuyến nghị 1: unit_admin SỬA phiên — GuardMeetings cần đơn vị của CHÍNH unit_admin
+            // (actorUnitId) + đơn vị của phiên ĐANG SỬA (meetingUnitId, suy từ chairId/secretaryId
+            // HIỆN CÓ) để coi unit_admin-cùng-đơn-vị như MANAGE cho field nội dung.
+            // EnforceMeetingWrite() ở trên đã chặn 403 nếu KHÔNG cùng đơn vị — đây chỉ tính GIÁ
+            // TRỊ để GuardMeetings tự kiểm tra lại độc lập (defense-in-depth).
+            string? meetingUnitId = null;
+            if (col == "meetings" && c.User!.Role == "unit_admin")
+            {
+                var selfM = await store.GetByIdAsync("c_users", c.User.Sub);
+                actorUnitId = selfM is null ? null : J.Str(selfM, "unitId");
+                meetingUnitId = await UnitOfMeeting(store, existing);
+            }
+            patch = Guard.GuardPatch(col, existing, patch, c.User!, meetingCtx, actorUnitId, meetingUnitId);
 
             if (col == "users")
             {
@@ -487,6 +512,13 @@ public static class App
             if (existing is null) { await HttpUtil.SendError(c.Res, 404, "Không tìm thấy bản ghi"); return; }
             if (!Acl.Allowed(Acl.Rules[col].Remove, c.User!, existing, null)) { await HttpUtil.SendError(c.Res, 403, "Bạn không có quyền xóa bản ghi này"); return; }
             if (col == "users" && c.Params["id"] == c.User!.Sub) { await HttpUtil.SendError(c.Res, 400, "Không thể tự xóa tài khoản đang đăng nhập"); return; }
+            // Khuyến nghị 1 (2026-07-18): unit_admin XÓA phiên họp — chỉ đơn vị mình + CHƯA
+            // diễn ra (draft/invited) để tránh mất dữ liệu phiên "live"/"finished".
+            if (col == "meetings")
+            {
+                var chk = await EnforceMeetingWrite(store, c.User!, "delete", existing, null);
+                if (chk is not null) { await HttpUtil.SendError(c.Res, chk.Value.status, chk.Value.error); return; }
+            }
             await store.DeleteAsync(table, c.Params["id"]);
             Realtime.NotifyChange(col, "remove", c.Params["id"]);
             await HttpUtil.Send(c.Res, 200, new JsonObject { ["ok"] = true });
@@ -567,33 +599,120 @@ public static class App
         return null;
     }
 
+    /// <summary>Trạng thái phiên coi là "CHƯA diễn ra" (đủ điều kiện cho unit_admin XÓA).</summary>
+    private static readonly string[] NotStartedStatuses = { "draft", "invited" };
+
     /// <summary>
-    /// P0-2 — KIỂM TRA SÂU khi QUẢN TRỊ ĐƠN VỊ (unit_admin) TẠO phiên họp (HSMT dòng
-    /// 354-355). Meeting KHÔNG có field unitId riêng — "đơn vị của phiên" suy ra từ đơn vị
-    /// của chủ trì/thư ký (giống Open API/Access.cs). unitId của unit_admin ĐỌC TỪ store
-    /// (không tin body); chairId/secretaryId gửi lên cũng tra unitId THẬT từ store.
-    /// admin/secretary/chairman: bỏ qua (đã được ACL cho tạo tự do như trước). Chỉ áp cho
-    /// op "create" — PHẠM VI P0-2 không mở rộng quyền SỬA meeting cho unit_admin.
+    /// Đơn vị của MỘT phiên họp — suy từ đơn vị của chủ trì HOẶC thư ký (Meeting KHÔNG có
+    /// field unitId riêng). Port unitOfMeeting (index.js) — cùng khái niệm với Access.cs
+    /// MeetingInvolvesUnit nhưng đơn giản hơn (chỉ cần "đơn vị chủ trì/thư ký").
     /// </summary>
-    private static async Task<(int status, string error)?> EnforceMeetingWrite(IDocStore store, JwtPayload user, string op, JsonObject body)
+    private static async Task<string?> UnitOfMeeting(IDocStore store, JsonObject? m)
     {
-        if (user.Role != "unit_admin" || op != "create") return null;
+        var chairId = m is null ? null : J.Str(m, "chairId");
+        var chair = !string.IsNullOrEmpty(chairId) ? await store.GetByIdAsync("c_users", chairId) : null;
+        var chairUnit = chair is null ? null : J.Str(chair, "unitId");
+        if (!string.IsNullOrEmpty(chairUnit)) return chairUnit;
+        var secId = m is null ? null : J.Str(m, "secretaryId");
+        var sec = !string.IsNullOrEmpty(secId) ? await store.GetByIdAsync("c_users", secId) : null;
+        return sec is null ? null : J.Str(sec, "unitId");
+    }
+
+    /// <summary>
+    /// P0-2 (mở rộng đợt vá 2026-07-18, khuyến nghị 1) — KIỂM TRA SÂU khi QUẢN TRỊ ĐƠN VỊ
+    /// (unit_admin) TẠO/SỬA/XÓA phiên họp (HSMT dòng 354-355: "Quản trị đơn vị nhập thông
+    /// tin cuộc họp... quản lý phiên họp trong phạm vi đơn vị mình"). Meeting KHÔNG có field
+    /// unitId riêng — "đơn vị của phiên" suy từ đơn vị của chủ trì/thư ký (UnitOfMeeting()).
+    /// unitId của unit_admin ĐỌC TỪ store (không tin body); chairId/secretaryId (hiện có LẪN
+    /// gửi lên trong body) cũng tra unitId THẬT từ store. admin/secretary/chairman: bỏ qua
+    /// hoàn toàn ở MỌI op (không đổi hành vi MANAGE).
+    /// Port EnforceMeetingWrite (index.js).
+    ///
+    /// op = "create" | "update" | "delete".
+    ///  - create : chairId/secretaryId trong body PHẢI thuộc đơn vị mình (logic cũ, giữ nguyên).
+    ///  - update : đơn vị của phiên HIỆN TẠI (existing) PHẢI thuộc đơn vị mình; nếu body cố
+    ///             đổi chairId/secretaryId sang người KHÁC đơn vị -> chặn (chống "chuyển"
+    ///             phiên sang đơn vị khác).
+    ///  - delete : đơn vị của phiên (existing) PHẢI thuộc đơn vị mình; VÀ status phải CHƯA
+    ///             diễn ra (draft/invited) để tránh mất dữ liệu phiên "live"/"finished".
+    /// </summary>
+    private static async Task<(int status, string error)?> EnforceMeetingWrite(IDocStore store, JwtPayload user, string op, JsonObject? existing, JsonObject? body)
+    {
+        if (user.Role != "unit_admin") return null;
         var self = await store.GetByIdAsync("c_users", user.Sub);
         var myUnit = self is null ? null : J.Str(self, "unitId");
         if (string.IsNullOrEmpty(myUnit)) return (403, "Không xác định được đơn vị của bạn");
 
-        var chairId = J.Str(body, "chairId");
-        var chair = !string.IsNullOrEmpty(chairId) ? await store.GetByIdAsync("c_users", chairId) : null;
-        if (chair is null || J.Str(chair, "unitId") != myUnit)
-            return (403, "Chủ trì phiên họp phải thuộc đơn vị của bạn");
-
-        var secId = J.Str(body, "secretaryId");
-        if (!string.IsNullOrEmpty(secId))
+        if (op == "create")
         {
-            var sec = await store.GetByIdAsync("c_users", secId);
-            if (sec is null || J.Str(sec, "unitId") != myUnit)
-                return (403, "Thư ký phiên họp phải thuộc đơn vị của bạn");
+            var chairId = J.Str(body, "chairId");
+            var chair = !string.IsNullOrEmpty(chairId) ? await store.GetByIdAsync("c_users", chairId) : null;
+            if (chair is null || J.Str(chair, "unitId") != myUnit)
+                return (403, "Chủ trì phiên họp phải thuộc đơn vị của bạn");
+
+            var secId = J.Str(body, "secretaryId");
+            if (!string.IsNullOrEmpty(secId))
+            {
+                var sec = await store.GetByIdAsync("c_users", secId);
+                if (sec is null || J.Str(sec, "unitId") != myUnit)
+                    return (403, "Thư ký phiên họp phải thuộc đơn vị của bạn");
+            }
+            return null;
         }
+
+        // update/delete: phiên HIỆN TẠI phải thuộc đơn vị mình
+        var currentUnit = await UnitOfMeeting(store, existing);
+        if (currentUnit != myUnit)
+            return (403, "Bạn chỉ quản lý phiên họp trong phạm vi đơn vị của mình");
+
+        if (op == "delete")
+        {
+            var st = existing is null ? null : J.Str(existing, "status");
+            if (st is null || !NotStartedStatuses.Contains(st))
+                return (403, "Chỉ xóa được phiên họp CHƯA diễn ra (nháp/đã gửi giấy mời)");
+            return null;
+        }
+
+        // op == "update": nếu body cố đổi chủ trì/thư ký -> người MỚI cũng phải thuộc đơn vị mình
+        if (body is not null && J.Has(body, "chairId") && J.Str(body, "chairId") != J.Str(existing, "chairId"))
+        {
+            var newChairId = J.Str(body, "chairId");
+            var newChair = !string.IsNullOrEmpty(newChairId) ? await store.GetByIdAsync("c_users", newChairId) : null;
+            if (newChair is null || J.Str(newChair, "unitId") != myUnit)
+                return (403, "Chủ trì mới phải thuộc đơn vị của bạn");
+        }
+        if (body is not null && J.Has(body, "secretaryId") && J.Str(body, "secretaryId") != J.Str(existing, "secretaryId"))
+        {
+            var newSecId = J.Str(body, "secretaryId");
+            var newSec = !string.IsNullOrEmpty(newSecId) ? await store.GetByIdAsync("c_users", newSecId) : null;
+            if (newSec is null || J.Str(newSec, "unitId") != myUnit)
+                return (403, "Thư ký mới phải thuộc đơn vị của bạn");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Khuyến nghị 1 (2026-07-18, chốt code chéo) — QUẢN TRỊ ĐƠN VỊ (unit_admin) THÊM/GẮN
+    /// TÀI LIỆU VÀO PHIÊN HỌP: chỉ được thao tác cho phiên THUỘC ĐƠN VỊ MÌNH. Acl.Rules
+    /// documents.Create = "any" vốn cho MỌI vai trò đăng nhập tạo tài liệu (kể cả không
+    /// gắn phiên); nhánh này SIẾT THÊM riêng cho unit_admin khi body có meetingId — tra đơn
+    /// vị của phiên đó (UnitOfMeeting) và so với đơn vị của unit_admin. delegate/MANAGE
+    /// không bị ảnh hưởng. Port EnforceDocumentWrite (index.js).
+    /// Chỉ áp cho op "create" — sửa/trình-duyệt tài liệu ĐÃ TỒN TẠI đi qua ACL "ownerOrManage"
+    /// (chỉ owner/MANAGE update nội dung); tài liệu unit_admin tạo vốn đã đúng phạm vi.
+    /// </summary>
+    private static async Task<(int status, string error)?> EnforceDocumentWrite(IDocStore store, JwtPayload user, string op, JsonObject body)
+    {
+        var meetingId = J.Str(body, "meetingId");
+        if (user.Role != "unit_admin" || op != "create" || string.IsNullOrEmpty(meetingId)) return null;
+        var self = await store.GetByIdAsync("c_users", user.Sub);
+        var myUnit = self is null ? null : J.Str(self, "unitId");
+        if (string.IsNullOrEmpty(myUnit)) return (403, "Không xác định được đơn vị của bạn");
+        var meeting = await store.GetByIdAsync("c_meetings", meetingId);
+        if (meeting is null) return (404, "Không tìm thấy phiên họp");
+        var meetingUnit = await UnitOfMeeting(store, meeting);
+        if (meetingUnit != myUnit)
+            return (403, "Bạn chỉ được thêm tài liệu cho phiên họp thuộc đơn vị của mình");
         return null;
     }
 }

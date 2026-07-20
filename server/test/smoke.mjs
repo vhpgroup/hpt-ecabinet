@@ -592,5 +592,96 @@ await Case('guardPatch(meetings): MANAGE (role=chairman thật, không id-match 
   assert.notEqual(out.conclusions, undefined, 'MANAGE role sửa conclusions của BẤT KỲ phiên nào, đúng hành vi cũ');
 });
 
+// ============================================================
+// NHÓM 10 — KHUYẾN NGHỊ 1 (2026-07-18, chốt code chéo): unit_admin SỬA/XÓA phiên
+// THUỘC ĐƠN VỊ MÌNH. ACL.meetings.remove + guardMeetings(extra.actorUnitId/meetingUnitId).
+// enforceMeetingWrite() (index.js) cần DB thật (getExisting) nên KHÔNG test được ở đây
+// (hàm không thuần) — phủ đầy đủ ở ECabinet.Tests (TestHost, level HTTP) NHÓM 8-MULTITENANT.
+// ============================================================
+Group('10-UNIT-ADMIN-MEETING-WRITE');
+
+await Case('ACL.meetings.remove: unit_admin ĐƯỢC xóa (Khuyến nghị 1 — ACL lỏng, siết sâu ở enforceMeetingWrite)', () => {
+  assert.equal(allowed(ACL.meetings.remove, { user: U('u-qtdv', 'unit_admin') }, {}, null), true);
+});
+await Case('ACL.meetings.remove: delegate thường VẪN KHÔNG được xóa (giữ hành vi cũ)', () => {
+  assert.equal(allowed(ACL.meetings.remove, { user: U('u-x', 'delegate') }, {}, null), false);
+});
+await Case('ACL.meetings.remove: MANAGE (admin/secretary/chairman) vẫn xóa được như trước (không hồi quy)', () => {
+  for (const role of MANAGE) {
+    assert.equal(allowed(ACL.meetings.remove, { user: U('u-x', role) }, {}, null), true, `role=${role}`);
+  }
+});
+
+const meetingQtdvOwn = {
+  id: 'm-unit-admin-own', chairId: 'u-khdt-chair', secretaryId: 'u-khdt-sec', status: 'draft',
+  participants: [], conclusions: [], minutes: null,
+};
+
+await Case('guardPatch(meetings): unit_admin CÙNG đơn vị phiên (actorUnitId===meetingUnitId) sửa title/roomId/agenda -> qua được như MANAGE (Khuyến nghị 1)', () => {
+  const out = guardPatch(
+    'meetings', meetingQtdvOwn,
+    { title: 'Đổi tên phiên', roomId: 'r2', agenda: [{ id: 'a1', order: 1, title: 'Mục mới' }] },
+    U('u-qtdv', 'unit_admin'),
+    { actorUnitId: 'un-khdt', meetingUnitId: 'un-khdt' },
+  );
+  assert.equal(out.title, 'Đổi tên phiên', 'unit_admin cùng đơn vị phiên sửa được title (KHÔNG bị xóa như đại biểu thường)');
+  assert.equal(out.roomId, 'r2', 'sửa được roomId');
+  assert.deepEqual(out.agenda, [{ id: 'a1', order: 1, title: 'Mục mới' }], 'sửa được agenda');
+});
+await Case('guardPatch(meetings): unit_admin KHÁC đơn vị phiên (actorUnitId!==meetingUnitId) -> title/roomId bị xóa sạch như đại biểu thường (defense-in-depth, độc lập với enforceMeetingWrite)', () => {
+  const out = guardPatch(
+    'meetings', meetingQtdvOwn,
+    { title: 'Đổi tên phiên', roomId: 'r2' },
+    U('u-qtdv', 'unit_admin'),
+    { actorUnitId: 'un-khac', meetingUnitId: 'un-khdt' },
+  );
+  assert.equal(out.title, undefined, 'unit_admin KHÁC đơn vị: title bị xóa (không được coi như MANAGE)');
+  assert.equal(out.roomId, undefined, 'roomId bị xóa');
+});
+await Case('guardPatch(meetings): unit_admin KHÔNG có extra (thiếu actorUnitId/meetingUnitId) -> coi như đại biểu thường, field bị xóa (an toàn mặc định)', () => {
+  const out = guardPatch('meetings', meetingQtdvOwn, { title: 'Lén sửa' }, U('u-qtdv', 'unit_admin'));
+  assert.equal(out.title, undefined, 'thiếu ngữ cảnh đơn vị -> KHÔNG coi như MANAGE (an toàn mặc định)');
+});
+await Case('guardPatch(meetings): unit_admin CÙNG đơn vị phiên vẫn KHÔNG mở được questionSession (field điều hành trực tiếp tại phòng họp, CHỦ Ý không gộp isUnitAdminHere)', () => {
+  assert.throws(
+    () => guardPatch(
+      'meetings', meetingQtdvOwn, { questionSession: 'open' }, U('u-qtdv', 'unit_admin'),
+      { actorUnitId: 'un-khdt', meetingUnitId: 'un-khdt' },
+    ),
+    (e) => e.status === 403,
+  );
+});
+await Case('guardPatch(meetings): unit_admin CÙNG đơn vị phiên vẫn KHÔNG mở được seatAssignments (field điều hành trực tiếp)', () => {
+  assert.throws(
+    () => guardPatch(
+      'meetings', meetingQtdvOwn, { seatAssignments: { '1-1': 'u-x' } }, U('u-qtdv', 'unit_admin'),
+      { actorUnitId: 'un-khdt', meetingUnitId: 'un-khdt' },
+    ),
+    (e) => e.status === 403,
+  );
+});
+await Case('guardPatch(meetings): unit_admin CÙNG đơn vị phiên -> minutes có ≥1 chữ ký VẪN bất biến (khóa cứng không đổi bất kể isUnitAdminHere)', () => {
+  const signed = { ...meetingQtdvOwn, minutes: { content: 'đã ký 1', signatures: [{ userId: 'u-x' }], locked: false } };
+  const out = guardPatch(
+    'meetings', signed, { minutes: { content: 'sửa lén' } }, U('u-qtdv', 'unit_admin'),
+    { actorUnitId: 'un-khdt', meetingUnitId: 'un-khdt' },
+  );
+  assert.equal(out.minutes, undefined, 'có ≥1 chữ ký: unit_admin cùng đơn vị cũng KHÔNG ghi đè được nội dung biên bản');
+});
+await Case('guardPatch(meetings): unit_admin CÙNG đơn vị phiên -> participants dùng keepServerCheckins (giống MANAGE, không bị bó hẹp delegateOwnRowOnly)', () => {
+  const meeting = {
+    ...meetingQtdvOwn,
+    participants: [{ userId: 'u-a', meetingRole: 'member', attendStatus: 'pending', checkedInAt: 't-server' }],
+  };
+  const out = guardPatch(
+    'meetings', meeting,
+    { participants: [{ userId: 'u-a', meetingRole: 'member', attendStatus: 'accepted', checkedInAt: 'gia-mao' }] },
+    U('u-qtdv', 'unit_admin'),
+    { actorUnitId: 'un-khdt', meetingUnitId: 'un-khdt' },
+  );
+  assert.equal(out.participants[0].attendStatus, 'accepted', 'unit_admin cùng đơn vị sửa được attendStatus của MỌI dòng (như MANAGE)');
+  assert.equal(out.participants[0].checkedInAt, 't-server', 'checkedInAt vẫn giữ từ server (keepServerCheckins), không tin client');
+});
+
 const exitCode = report();
 process.exit(exitCode);

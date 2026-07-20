@@ -39,10 +39,20 @@ export default function MeetingDetailPage() {
 
   const manage = can.manageMeetings(user);
   const chairCtl = can.chairControls(user, m.chairId, m.secretaryId);
-  // V1 (P0-1 dungthu-tester.md): unit_admin gửi được giấy mời cho phiên do đơn vị mình
-  // chủ trì (mirror BE) — KHÔNG mở thêm quyền Chỉnh sửa/Xóa (vẫn chỉ MANAGE — phạm vi
-  // vá P0-2 chỉ gồm tạo phiên + gửi giấy mời).
+  // V1 (P0-1 dungthu-tester.md): unit_admin gửi được giấy mời cho phiên do đơn vị mình chủ trì.
   const canInviteThis = manage || can.sendInvitations(user, users.get(m.chairId)?.unitId);
+  // Khuyến nghị 1 (2026-07-18, chốt code chéo): unit_admin SỬA/XÓA phiên THUỘC ĐƠN VỊ MÌNH
+  // (đơn vị của phiên = đơn vị của chủ trì, cùng khái niệm dùng ở canInviteThis) — XÓA thêm
+  // điều kiện CHƯA diễn ra (draft/invited). Kiểm tra sâu thật nằm ở meetingService (demo)/
+  // enforceMeetingWrite (REST); các biến này CHỈ gate nút bấm trên UI.
+  // canDeleteThis (dùng ở khối 'draft', giữ ĐÚNG UI cũ cho MANAGE — chỉ hiện Xóa ở draft)
+  // vs canDeleteInvited (unit_admin THÊM được Xóa ở 'invited' — MANAGE KHÔNG thay đổi hành
+  // vi UI, dù can.deleteMeeting() cũng trả true cho MANAGE ở mọi status — tách riêng để
+  // không vô tình thêm nút Xóa cho MANAGE ở 'invited', ngoài phạm vi yêu cầu "giữ nguyên
+  // quyền xóa như cũ" cho admin/MANAGE).
+  const canEditThis = can.editMeeting(user, users.get(m.chairId)?.unitId);
+  const canDeleteThis = can.deleteMeeting(user, users.get(m.chairId)?.unitId, m.status);
+  const canDeleteInvited = user?.role === 'unit_admin' && canDeleteThis;
   const mine = m.participants.find((p) => p.userId === user?.id);
   const st = MEETING_STATUS[m.status];
   const meetingVotes = s.votes.filter((v) => v.meetingId === m.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -69,20 +79,20 @@ export default function MeetingDetailPage() {
         subtitle={`Mã: ${m.code} · ${fmtDT(m.startTime)} → ${fmtTime(m.endTime)} · ${rooms.get(m.roomId)?.name ?? ''}${m.isOnline ? ' · Kết hợp trực tuyến' : ''}`}
         actions={
           <>
-            {m.status === 'draft' && (manage || canInviteThis) && (
+            {m.status === 'draft' && (manage || canInviteThis || canEditThis || canDeleteThis) && (
               <>
                 {canInviteThis && (
                   <button className="btn" onClick={() => act(() => meetingService.sendInvitations(user!, m.id), 'Đã gửi giấy mời đến các đại biểu (email + SMS)')}>
                     <Icon name="send" size={15} />Gửi giấy mời
                   </button>
                 )}
-                {manage && (
-                  <>
-                    <button className="btn outline" onClick={() => setEditing(true)}><Icon name="edit" size={15} />Chỉnh sửa</button>
-                    <button className="btn danger" onClick={() => { if (window.confirm('Xóa phiên họp này?')) act(async () => { await meetingService.deleteMeeting(user!, m.id); nav('/meetings'); }, 'Đã xóa phiên họp'); }}>
-                      <Icon name="trash" size={15} />
-                    </button>
-                  </>
+                {canEditThis && (
+                  <button className="btn outline" onClick={() => setEditing(true)}><Icon name="edit" size={15} />Chỉnh sửa</button>
+                )}
+                {canDeleteThis && (
+                  <button className="btn danger" onClick={() => { if (window.confirm('Xóa phiên họp này?')) act(async () => { await meetingService.deleteMeeting(user!, m.id); nav('/meetings'); }, 'Đã xóa phiên họp'); }}>
+                    <Icon name="trash" size={15} />
+                  </button>
                 )}
               </>
             )}
@@ -93,7 +103,12 @@ export default function MeetingDetailPage() {
                     <Icon name="mic" size={15} />Bắt đầu phiên họp
                   </button>
                 )}
-                {manage && <button className="btn outline" onClick={() => setEditing(true)}><Icon name="edit" size={15} />Chỉnh sửa</button>}
+                {canEditThis && <button className="btn outline" onClick={() => setEditing(true)}><Icon name="edit" size={15} />Chỉnh sửa</button>}
+                {canDeleteInvited && (
+                  <button className="btn danger" onClick={() => { if (window.confirm('Xóa phiên họp này?')) act(async () => { await meetingService.deleteMeeting(user!, m.id); nav('/meetings'); }, 'Đã xóa phiên họp'); }}>
+                    <Icon name="trash" size={15} />
+                  </button>
+                )}
               </>
             )}
             {m.status === 'live' && (
@@ -405,10 +420,12 @@ function DocsTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
   const [upOpen, setUpOpen] = useState(false);
   const manage = can.manageMeetings(user);
   // V1 (P0-1 dungthu-tester.md, HSMT dòng 354-358 "Quản trị đơn vị chuẩn bị tài liệu họp và
-  // trình duyệt"): unit_admin cũng thấy được nút tải tài liệu lên phiên họp — backend ACL
-  // `documents.create = 'any'` đã cho phép mọi vai trò đăng nhập tạo tài liệu, nút này trước
-  // đây chỉ hiện cho MANAGE (chủ trì/thư ký/admin) khiến unit_admin không thấy đường vào.
-  const canUpload = manage || user?.role === 'unit_admin';
+  // trình duyệt") + Khuyến nghị 1 (2026-07-18, chốt code chéo): unit_admin thấy nút tải tài
+  // liệu lên phiên họp CHỈ khi phiên THUỘC ĐƠN VỊ MÌNH (trước đây mở cho MỌI unit_admin bất
+  // kể đơn vị — lỏng hơn thiết kế "quản trị đơn vị mình" nhất quán với việc tạo phiên/nút
+  // Sửa/Xóa). Kiểm tra sâu thật nằm ở documentService.enforceUnitAdminDocumentWrite (demo)/
+  // enforceDocumentWrite (REST); biến này CHỈ gate nút bấm trên UI.
+  const canUpload = can.uploadMeetingDoc(user, s.users.find((u) => u.id === m.chairId)?.unitId);
   const docById = indexBy(s.documents);
   // E-HSMT mục 24: đại biểu thường chỉ thấy tài liệu ĐÃ DUYỆT (owner/manage thấy mọi trạng thái)
   const canSee = (d: DocFile) =>
@@ -613,6 +630,14 @@ export function VoteCard({ v, chairCtl, act, onViewDoc, usersMap, compact }: {
   const comments = v.ballots.filter((b) => b.comment);
   const isPoll = v.kind === 'poll';
   const outcome = voteService.voteOutcome(v);
+  // Khuyến nghị 2 (2026-07-18, chốt code chéo) — mirror PollsPage.tsx: với biểu quyết/lấy ý
+  // kiến KÍN trong phiên họp, người xem KHÔNG phải chủ trì/thư ký/admin của CHÍNH phiên này
+  // (chairCtl) HOẶC người tạo nội dung biểu quyết (v.createdBy) chỉ thấy đầy đủ danh tính +
+  // NỘI DUNG góp ý của CHÍNH MÌNH — góp ý người khác ẩn CẢ danh tính LẪN nội dung (trước đây
+  // đoạn render dưới chỉ đổi nhãn "Đại biểu (ẩn danh)", vẫn hiện nguyên văn b.comment của
+  // MỌI người — không khớp REST projectVote strip cả comment).
+  const isOwner = chairCtl || v.createdBy === user?.id;
+  const canSeeIdentities = !v.secret || isOwner;
 
   // E-HSMT mục 42: "Xem đại biểu sẵn sàng biểu quyết" — khi đang mở & là chủ tọa,
   // hiển thị AI ĐÃ / CHƯA biểu quyết (KHÔNG lộ chọn gì). Với phiếu kín: chỉ dựa vào
@@ -727,12 +752,16 @@ export function VoteCard({ v, chairCtl, act, onViewDoc, usersMap, compact }: {
               {comments.length > 0 && (
                 <div style={{ marginTop: 10 }}>
                   <b style={{ fontSize: 12.5, color: 'var(--muted)' }}>Ý kiến kèm theo:</b>
-                  {comments.map((b, i) => (
-                    <div key={i} className="anno" style={{ marginTop: 6 }}>
-                      {b.comment}
-                      <small>{v.secret ? 'Đại biểu (ẩn danh)' : usersMap.get(b.userId)?.fullName ?? '—'}</small>
-                    </div>
-                  ))}
+                  {comments.map((b, i) => {
+                    const isMine = b.userId === user?.id;
+                    const identityVisible = canSeeIdentities || isMine;
+                    return (
+                      <div key={i} className="anno" style={{ marginTop: 6 }}>
+                        {identityVisible ? b.comment : <span style={{ color: 'var(--muted)', fontStyle: 'italic' }}>Đã bỏ phiếu — nội dung góp ý ẩn danh (phiếu kín)</span>}
+                        <small>{identityVisible ? (usersMap.get(b.userId)?.fullName ?? '—') : 'Đại biểu (ẩn danh — phiếu kín)'}</small>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </>

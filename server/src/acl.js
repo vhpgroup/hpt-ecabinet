@@ -27,9 +27,14 @@ export const ACL = {
   // P0-2 (HSMT dòng 354-355): "Quản trị đơn vị" là actor CHÍNH tạo phiên họp — thêm
   // unit_admin vào quyền tạo. Kiểm tra sâu (chairId/secretaryId PHẢI thuộc đơn vị
   // unit_admin, đọc từ DB không tin body) nằm ở enforceMeetingWrite() trong index.js.
-  // update/remove GIỮ NGUYÊN (unit_admin không nằm trong MANAGE cho sửa/xóa — ngoài
-  // phạm vi P0-2, xem báo cáo dev-backend.md mục "rủi ro còn lại").
-  meetings:      { create: [...MANAGE, 'unit_admin'], update: 'any', remove: MANAGE },
+  // Đợt vá 2026-07-18 (chốt code chéo, khuyến nghị 1): unit_admin SỬA/XÓA phiên
+  // THUỘC ĐƠN VỊ MÌNH (suy đơn vị của phiên từ chairId/secretaryId, giống
+  // meetingInvolvesUnit). ACL ở đây LỎNG (chỉ chặn vai trò hoàn toàn ngoài phạm vi
+  // như 'delegate'); ràng buộc "cùng đơn vị" + "chưa diễn ra" (khi xóa) SIẾT SÂU ở
+  // enforceMeetingWrite() cho op 'update'/'delete' — cùng triết lý ACL lỏng/enforce
+  // chặt đã dùng cho 'create'. update giữ 'any' (mọi vai trò khác vẫn qua guardMeetings
+  // để siết field như cũ); remove thêm 'unit_admin' (trước đây CHỈ MANAGE).
+  meetings:      { create: [...MANAGE, 'unit_admin'], update: 'any', remove: [...MANAGE, 'unit_admin'] },
   documents:     { create: 'any', update: 'ownerOrManage', remove: 'ownerOrManage' },
   annotations:   { create: 'self:userId', update: 'owner:userId', remove: 'owner:userId' },
   votes:         { create: MANAGE, update: 'any', remove: MANAGE },

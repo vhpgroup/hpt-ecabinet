@@ -245,14 +245,18 @@ export function validatePatch(col, body, existing) {
 
 /**
  * Trả về patch đã làm sạch cho collection; ném lỗi 403 khi bị cấm hoàn toàn.
- * `extra` (OPTIONAL): ngữ cảnh bổ sung KHÔNG lấy được chỉ từ existing/patch — hiện chỉ
- * dùng cho documents: `{ meeting }` — bản ghi phiên họp chứa tài liệu (nạp trước ở
- * index.js từ `existing.meetingId`) để guardDocuments biết ai là "thành phần phiên"
- * (P0-3, HSMT dòng 356-358 "Thành viên dự họp thực hiện duyệt").
+ * `extra` (OPTIONAL): ngữ cảnh bổ sung KHÔNG lấy được chỉ từ existing/patch — hiện gồm:
+ *  - documents: `{ meeting }` — bản ghi phiên họp chứa tài liệu (nạp trước ở index.js từ
+ *    `existing.meetingId`) để guardDocuments biết ai là "thành phần phiên" (P0-3, HSMT
+ *    dòng 356-358 "Thành viên dự họp thực hiện duyệt").
+ *  - feedbacks: `{ actorUnitId }` — đơn vị của unit_admin đang PATCH (đọc từ DB ở index.js).
+ *  - meetings (Khuyến nghị 1, 2026-07-18): `{ actorUnitId, meetingUnitId }` — đơn vị của
+ *    unit_admin đang PATCH + đơn vị của CHÍNH phiên đang sửa (suy từ chairId/secretaryId
+ *    HIỆN CÓ, tính SẴN ở index.js vì cần await tra DB — guardMeetings là hàm thuần đồng bộ).
  */
 export function guardPatch(col, existing, patch, user, extra) {
   if (col === 'votes') return guardVotes(patch, user);
-  if (col === 'meetings') return guardMeetings(existing, patch, user);
+  if (col === 'meetings') return guardMeetings(existing, patch, user, extra);
   if (col === 'questions') return guardQuestions(existing, patch, user);
   if (col === 'documents') return guardDocuments(existing, patch, user, extra?.meeting);
   if (col === 'apiKeys') return guardApiKeys(patch);
@@ -446,9 +450,32 @@ function guardVotes(patch, user) {
 // âm thầm xóa sạch patch — mở đúng thiết kế nghiệp vụ, KHÔNG mở rộng ACL toàn cục).
 const CHAIR_CONTENT_FIELDS = ['conclusions', 'agenda', 'minutes'];
 
-function guardMeetings(existing, patch, user) {
+/**
+ * Khuyến nghị 1 (2026-07-18, chốt code chéo) — QUẢN TRỊ ĐƠN VỊ (unit_admin) SỬA phiên họp
+ * THUỘC ĐƠN VỊ MÌNH: `extra.meetingUnitId` (đơn vị của phiên ĐANG SỬA, suy từ chairId/
+ * secretaryId hiện có — tính SẴN ở index.js vì cần await tra DB) phải khớp
+ * `extra.actorUnitId` (đơn vị của unit_admin, đọc từ DB, không tin JWT/body). enforceMeetingWrite()
+ * ở index.js đã CHẶN 403 trước khi vào đây nếu KHÔNG khớp đơn vị hoặc cố đổi chair/secretary
+ * sang đơn vị khác — guardMeetings chỉ cần biết "unit_admin CÓ được coi như MANAGE cho các
+ * field nội dung phiên NÀY hay không" (defense-in-depth: độc lập tính lại, không chỉ tin đã
+ * qua enforce ở tầng trên).
+ */
+function isUnitAdminOfThisMeeting(existing, user, extra) {
+  if (user.role !== 'unit_admin') return false;
+  if (!extra?.actorUnitId || !extra?.meetingUnitId) return false;
+  return extra.meetingUnitId === extra.actorUnitId;
+}
+
+function guardMeetings(existing, patch, user, extra) {
   const isManage = MANAGE.includes(user.role);
   const isChairOfThisMeeting = existing.chairId === user.sub || existing.secretaryId === user.sub;
+  // Khuyến nghị 1: unit_admin của ĐÚNG đơn vị phiên này được coi như MANAGE cho MỌI field
+  // nội dung phiên (title/description/thời gian/phòng/chairId/secretaryId/participants/
+  // agenda/meetingType…) — NHƯNG KHÔNG mở các field điều hành TRỰC TIẾP tại phòng họp
+  // (questionSession/seatAssignments/currentItemStartedAt — 3 nhánh dưới đây CHỦ Ý giữ
+  // `!isManage` riêng, không gộp isUnitAdminHere, vì đó là hành vi chủ tọa/thư ký điều hành
+  // ngay lúc họp, KHÔNG thuộc phạm vi "quản trị đơn vị lập kế hoạch phiên họp").
+  const isUnitAdminHere = isUnitAdminOfThisMeeting(existing, user, extra);
   const p = { ...patch };
 
   // trạng thái phiên họp: chỉ qua /actions (start / invite / end)
@@ -478,7 +505,8 @@ function guardMeetings(existing, patch, user) {
   // nội dung biên bản bất biến qua CRUD chung — khớp hành vi client (saveMinutes
   // chặn từ chữ ký đầu). Trước đây chỉ chặn khi locked=true nên khoảng "1 chữ ký,
   // chưa đủ 2" còn cho PATCH ghi đè content (rủi ro toàn vẹn pháp lý — không lộ qua
-  // UI vì service chặn trước, nhưng lộ nếu PATCH trực tiếp).
+  // UI vì service chặn trước, nhưng lộ nếu PATCH trực tiếp). Áp dụng bất kể isManage/
+  // isUnitAdminHere — TUYỆT ĐỐI bất biến sau chữ ký đầu tiên.
   if (p.minutes !== undefined) {
     if (existing.minutes?.locked || (existing.minutes?.signatures?.length > 0)) {
       delete p.minutes;
@@ -491,9 +519,10 @@ function guardMeetings(existing, patch, user) {
     }
   }
 
-  // thành phần tham dự
+  // thành phần tham dự — unit_admin CÙNG đơn vị phiên coi như MANAGE (được đặt lại toàn bộ
+  // danh sách như lúc tạo phiên), giữ nguyên checkedInAt do server ghi (điểm danh qua /actions).
   if (p.participants !== undefined && Array.isArray(p.participants)) {
-    p.participants = isManage
+    p.participants = (isManage || isUnitAdminHere)
       ? keepServerCheckins(existing, p.participants)
       : delegateOwnRowOnly(existing, p.participants, user.sub);
   }
@@ -501,7 +530,10 @@ function guardMeetings(existing, patch, user) {
   // đại biểu thường: ngoài dòng tham dự của mình, không sửa gì khác — TRỪ chairId/
   // secretaryId của CHÍNH phiên này được thêm quyền ghi conclusions/agenda/minutes
   // (đã sanitize signatures/locked ở nhánh trên, KHÔNG mở status/checkedInAt/chữ ký).
-  if (!isManage) {
+  // unit_admin CÙNG đơn vị phiên: coi như MANAGE ở bước này (giữ TOÀN BỘ field còn lại
+  // trong patch sau các bước lọc/khóa cứng trên — không giới hạn về participants/
+  // conclusions/agenda/minutes như id-match chair/secretary).
+  if (!isManage && !isUnitAdminHere) {
     const keepFields = isChairOfThisMeeting
       ? ['participants', ...CHAIR_CONTENT_FIELDS]
       : ['participants'];

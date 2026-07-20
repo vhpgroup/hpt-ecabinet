@@ -61,6 +61,36 @@ export const can = {
   sendInvitations: (actor: User | null, chairUnitId: string | undefined) =>
     !!actor && (['admin', 'secretary', 'chairman'].includes(actor.role)
       || (actor.role === 'unit_admin' && !!actor.unitId && actor.unitId === chairUnitId)),
+  /**
+   * Khuyến nghị 1 (2026-07-18, chốt code chéo) — SỬA phiên họp: quản lý toàn cục HOẶC
+   * unit_admin với phiên THUỘC ĐƠN VỊ MÌNH ("đơn vị của phiên" = đơn vị của chủ trì —
+   * cùng khái niệm dùng lúc tạo phiên/gửi giấy mời, mirror `chairUnitId` ở
+   * `sendInvitations` — nhất quán với cách MeetingsPage.tsx lọc "đơn vị chủ trì").
+   * Kiểm tra sâu thật (chống đổi chair/secretary sang đơn vị khác) nằm ở
+   * `meetingService.enforceUnitAdminMeetingWrite` (đọc unitId từ DB, không tin actor.unitId
+   * hiển thị) — hàm này CHỈ dùng để GATE nút bấm trên UI.
+   */
+  editMeeting: (actor: User | null, chairUnitId: string | undefined) =>
+    !!actor && (['admin', 'secretary', 'chairman'].includes(actor.role)
+      || (actor.role === 'unit_admin' && !!actor.unitId && actor.unitId === chairUnitId)),
+  /**
+   * Khuyến nghị 1 — XÓA phiên họp: quản lý toàn cục (mọi trạng thái, giữ nguyên hành vi cũ)
+   * HOẶC unit_admin với phiên THUỘC ĐƠN VỊ MÌNH VÀ CHƯA diễn ra (draft/invited — tránh mất
+   * dữ liệu phiên đã họp). Mirror `enforceMeetingWrite('delete')` phía server.
+   */
+  deleteMeeting: (actor: User | null, chairUnitId: string | undefined, status: string) =>
+    !!actor && (['admin', 'secretary', 'chairman'].includes(actor.role)
+      || (actor.role === 'unit_admin' && !!actor.unitId && actor.unitId === chairUnitId
+        && (status === 'draft' || status === 'invited'))),
+  /**
+   * Khuyến nghị 1 — THÊM tài liệu vào phiên họp: quản lý toàn cục HOẶC unit_admin với phiên
+   * THUỘC ĐƠN VỊ MÌNH (không phải MỌI phiên nhìn thấy — trước đây `canUpload` ở
+   * `MeetingDetailPage.tsx` cho MỌI unit_admin bất kể đơn vị). Mirror
+   * `enforceDocumentWrite`/`EnforceDocumentWrite` phía server.
+   */
+  uploadMeetingDoc: (actor: User | null, chairUnitId: string | undefined) =>
+    !!actor && (['admin', 'secretary', 'chairman'].includes(actor.role)
+      || (actor.role === 'unit_admin' && !!actor.unitId && actor.unitId === chairUnitId)),
   // ---- Quản trị đơn vị (unit_admin) — E-HSMT vai trò thứ 5 ----
   /** Được vào phân hệ quản trị (admin toàn quyền; unit_admin CHỈ thấy tab Người dùng). */
   openAdmin: (u: User | null) => !!u && (u.role === 'admin' || u.role === 'unit_admin'),

@@ -31,23 +31,75 @@ export interface MeetingDraft {
 }
 
 /**
- * V1 (P0-1 dungthu-tester.md) — mirror kiểm tra sâu `enforceMeetingWrite` phía server:
- * unit_admin TẠO phiên mới (không áp cho SỬA) chỉ được chọn chủ trì/thư ký THUỘC ĐƠN VỊ
- * MÌNH. Chế độ demo (localStorage) không có server guard nên phải chặn ở tầng service.
+ * Đơn vị của MỘT phiên họp — suy từ đơn vị của chủ trì HOẶC thư ký (Meeting KHÔNG có field
+ * unitId riêng). Mirror `unitOfMeeting`/`UnitOfMeeting` phía server (Khuyến nghị 1,
+ * 2026-07-18). Trả undefined nếu không xác định được. EXPORT để `documentService.ts` tái
+ * sử dụng (chặn unit_admin thêm tài liệu vào phiên KHÔNG thuộc đơn vị mình) — tránh viết
+ * lại logic 2 nơi.
  */
-async function enforceUnitAdminMeetingCreate(actor: User, draft: MeetingDraft) {
-  if (actor.role !== 'unit_admin' || draft.id) return;
+export async function unitOfMeeting(m: Pick<Meeting, 'chairId' | 'secretaryId'>): Promise<string | undefined> {
+  const chair = m.chairId ? await db.users.get(m.chairId) : undefined;
+  if (chair?.unitId) return chair.unitId;
+  const sec = m.secretaryId ? await db.users.get(m.secretaryId) : undefined;
+  return sec?.unitId;
+}
+
+/** Trạng thái phiên coi là "CHƯA diễn ra" — mirror NOT_STARTED_STATUSES phía server. */
+const NOT_STARTED_STATUSES = ['draft', 'invited'];
+
+/**
+ * V1 (P0-1 dungthu-tester.md) + Khuyến nghị 1 (2026-07-18, chốt code chéo) — mirror kiểm
+ * tra sâu `enforceMeetingWrite` phía server: unit_admin chỉ TẠO/SỬA/XÓA phiên họp trong
+ * phạm vi đơn vị mình. Chế độ demo (localStorage) không có server guard nên phải chặn ở
+ * tầng service (đủ để demo đúng nghiệp vụ — không phải phòng thủ bảo mật thật, vì client
+ * demo luôn tin được actor.unitId từ chính bản ghi User đang đăng nhập).
+ *
+ * op = 'create' | 'update' | 'delete'.
+ *  - create : chairId/secretaryId trong `draft` PHẢI thuộc đơn vị mình (logic cũ, giữ nguyên).
+ *  - update : đơn vị của phiên HIỆN TẠI (`existing`) PHẢI thuộc đơn vị mình; nếu draft đổi
+ *             chairId/secretaryId sang người KHÁC đơn vị -> chặn (chống "chuyển" phiên).
+ *  - delete : đơn vị của phiên (`existing`) PHẢI thuộc đơn vị mình; VÀ status phải CHƯA
+ *             diễn ra (draft/invited) để tránh mất dữ liệu phiên đã họp.
+ */
+async function enforceUnitAdminMeetingWrite(
+  actor: User, op: 'create' | 'update' | 'delete', draft: MeetingDraft | null, existing: Meeting | null,
+) {
+  if (actor.role !== 'unit_admin') return;
   if (!actor.unitId) throw new Error('Không xác định được đơn vị của bạn');
-  const [chair, secretary] = await Promise.all([db.users.get(draft.chairId), db.users.get(draft.secretaryId)]);
-  if (!chair || chair.unitId !== actor.unitId) throw new Error('Chủ trì phiên họp phải thuộc đơn vị của bạn');
-  if (!secretary || secretary.unitId !== actor.unitId) throw new Error('Thư ký phiên họp phải thuộc đơn vị của bạn');
+
+  if (op === 'create') {
+    const [chair, secretary] = await Promise.all([db.users.get(draft!.chairId), db.users.get(draft!.secretaryId)]);
+    if (!chair || chair.unitId !== actor.unitId) throw new Error('Chủ trì phiên họp phải thuộc đơn vị của bạn');
+    if (!secretary || secretary.unitId !== actor.unitId) throw new Error('Thư ký phiên họp phải thuộc đơn vị của bạn');
+    return;
+  }
+
+  const currentUnit = await unitOfMeeting(existing!);
+  if (currentUnit !== actor.unitId) throw new Error('Bạn chỉ quản lý phiên họp trong phạm vi đơn vị của mình');
+
+  if (op === 'delete') {
+    if (!NOT_STARTED_STATUSES.includes(existing!.status)) {
+      throw new Error('Chỉ xóa được phiên họp CHƯA diễn ra (nháp/đã gửi giấy mời)');
+    }
+    return;
+  }
+
+  // op === 'update': nếu draft đổi chủ trì/thư ký -> người MỚI cũng phải thuộc đơn vị mình
+  if (draft!.chairId !== existing!.chairId) {
+    const newChair = await db.users.get(draft!.chairId);
+    if (!newChair || newChair.unitId !== actor.unitId) throw new Error('Chủ trì mới phải thuộc đơn vị của bạn');
+  }
+  if (draft!.secretaryId !== existing!.secretaryId) {
+    const newSec = await db.users.get(draft!.secretaryId);
+    if (!newSec || newSec.unitId !== actor.unitId) throw new Error('Thư ký mới phải thuộc đơn vị của bạn');
+  }
 }
 
 export async function saveMeeting(actor: User, draft: MeetingDraft): Promise<Meeting> {
-  await enforceUnitAdminMeetingCreate(actor, draft);
   if (draft.id) {
     const existing = await db.meetings.get(draft.id);
     if (!existing) throw new Error('Không tìm thấy phiên họp');
+    await enforceUnitAdminMeetingWrite(actor, 'update', draft, existing);
     // giữ trạng thái xác nhận cũ của người đã có trong danh sách
     const participants: Participant[] = buildParticipants(draft, existing.participants);
     const updated = await db.meetings.update(draft.id, {
@@ -61,6 +113,7 @@ export async function saveMeeting(actor: User, draft: MeetingDraft): Promise<Mee
     await audit(actor, 'Cập nhật phiên họp', `Cập nhật "${updated.title}"`);
     return updated;
   }
+  await enforceUnitAdminMeetingWrite(actor, 'create', draft, null);
   const meeting: Meeting = {
     id: uid(),
     code: `PH-${new Date().getFullYear()}/${String(new Date().getMonth() + 1).padStart(2, '0')}-${Math.floor(Math.random() * 90 + 10)}`,
@@ -140,8 +193,10 @@ export function buildAttendanceRows(
 
 export async function deleteMeeting(actor: User, id: string) {
   const m = await db.meetings.get(id);
+  if (!m) throw new Error('Không tìm thấy phiên họp');
+  await enforceUnitAdminMeetingWrite(actor, 'delete', null, m);
   await db.meetings.remove(id);
-  await audit(actor, 'Xóa phiên họp', `Xóa "${m?.title ?? id}"`);
+  await audit(actor, 'Xóa phiên họp', `Xóa "${m.title}"`);
 }
 
 /**

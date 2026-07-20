@@ -118,30 +118,115 @@ async function enforceUserWrite(req, op, existing, body) {
   return { ok: true };
 }
 
+/** Trạng thái phiên coi là "CHƯA diễn ra" (đủ điều kiện cho unit_admin XÓA) — draft/invited. */
+const NOT_STARTED_STATUSES = ['draft', 'invited'];
+
 /**
- * P0-2 — KIỂM TRA SÂU khi QUẢN TRỊ ĐƠN VỊ (unit_admin) TẠO phiên họp (HSMT dòng 354-355:
- * "Quản trị đơn vị nhập thông tin cuộc họp trên hệ thống"). Meeting KHÔNG có field unitId
- * riêng — "đơn vị của phiên" suy ra từ đơn vị của chủ trì/thư ký (giống Open API/access.js).
- * An ninh: unitId của unit_admin ĐỌC TỪ DB (không tin body); chairId/secretaryId GỬI LÊN
- * cũng phải tra unitId THẬT của người đó từ DB (không tin nhãn/role trong body).
- * admin/secretary/chairman: bỏ qua (đã được ACL cho tạo tự do như trước — không đổi hành vi).
- * Chỉ áp cho op 'create' — PHẠM VI P0-2 không mở rộng quyền SỬA meeting cho unit_admin
- * (xem báo cáo dev-backend.md mục "rủi ro còn lại").
+ * Đơn vị của MỘT phiên họp — suy từ đơn vị của chủ trì HOẶC thư ký (Meeting KHÔNG có field
+ * unitId riêng). Cùng khái niệm với meetingInvolvesUnit() (open.js/access.js) nhưng đơn giản
+ * hơn (chỉ cần "đơn vị chủ trì/thư ký", không cần quét participants — khớp đúng cách
+ * enforceMeetingWrite('create') VÀ can.sendInvitations()/sendInvitations() phía FE đã dùng
+ * "đơn vị của chủ trì" làm chuẩn "đơn vị của phiên"). Trả null nếu không xác định được.
  */
-async function enforceMeetingWrite(req, op, body) {
-  if (req.user.role !== 'unit_admin' || op !== 'create') return { ok: true };
+async function unitOfMeeting(m) {
+  const chair = m?.chairId ? await getExisting('c_users', m.chairId) : null;
+  if (chair?.unitId) return chair.unitId;
+  const sec = m?.secretaryId ? await getExisting('c_users', m.secretaryId) : null;
+  return sec?.unitId ?? null;
+}
+
+/**
+ * P0-2 (mở rộng đợt vá 2026-07-18, khuyến nghị 1) — KIỂM TRA SÂU khi QUẢN TRỊ ĐƠN VỊ
+ * (unit_admin) TẠO/SỬA/XÓA phiên họp (HSMT dòng 354-355: "Quản trị đơn vị nhập thông tin
+ * cuộc họp... quản lý phiên họp trong phạm vi đơn vị mình"). Meeting KHÔNG có field unitId
+ * riêng — "đơn vị của phiên" suy từ đơn vị của chủ trì/thư ký (unitOfMeeting(), giống
+ * meetingInvolvesUnit() ở open.js/access.js). An ninh: unitId của unit_admin ĐỌC TỪ DB
+ * (không tin body); chairId/secretaryId (hiện có LẪN gửi lên trong body) cũng tra unitId
+ * THẬT từ DB (không tin nhãn/role trong body).
+ * admin/secretary/chairman: bỏ qua hoàn toàn (đã được ACL cho tự do như trước — không đổi
+ * hành vi MANAGE ở bất kỳ op nào).
+ *
+ * op = 'create' | 'update' | 'delete'.
+ *  - create : chairId/secretaryId trong `body` PHẢI thuộc đơn vị mình (giữ nguyên logic cũ).
+ *  - update : đơn vị của phiên HIỆN TẠI (existing) PHẢI thuộc đơn vị mình; nếu body cố đổi
+ *             chairId/secretaryId sang người KHÁC đơn vị -> chặn (chống "chuyển" phiên sang
+ *             đơn vị khác — kiểm chair/secretary MỚI trong body, không chỉ existing).
+ *  - delete : đơn vị của phiên (existing) PHẢI thuộc đơn vị mình; VÀ status phải CHƯA diễn ra
+ *             (draft/invited — NOT_STARTED_STATUSES) để tránh mất dữ liệu phiên 'live'/'finished'.
+ */
+async function enforceMeetingWrite(req, op, existing, body) {
+  if (req.user.role !== 'unit_admin') return { ok: true };
   const self = await getExisting('c_users', req.user.sub);
   const myUnit = self?.unitId;
   if (!myUnit) return { status: 403, error: 'Không xác định được đơn vị của bạn' };
-  const chair = body.chairId ? await getExisting('c_users', body.chairId) : null;
-  if (!chair || chair.unitId !== myUnit) {
-    return { status: 403, error: 'Chủ trì phiên họp phải thuộc đơn vị của bạn' };
-  }
-  if (body.secretaryId) {
-    const sec = await getExisting('c_users', body.secretaryId);
-    if (!sec || sec.unitId !== myUnit) {
-      return { status: 403, error: 'Thư ký phiên họp phải thuộc đơn vị của bạn' };
+
+  if (op === 'create') {
+    const chair = body.chairId ? await getExisting('c_users', body.chairId) : null;
+    if (!chair || chair.unitId !== myUnit) {
+      return { status: 403, error: 'Chủ trì phiên họp phải thuộc đơn vị của bạn' };
     }
+    if (body.secretaryId) {
+      const sec = await getExisting('c_users', body.secretaryId);
+      if (!sec || sec.unitId !== myUnit) {
+        return { status: 403, error: 'Thư ký phiên họp phải thuộc đơn vị của bạn' };
+      }
+    }
+    return { ok: true };
+  }
+
+  // update/delete: phiên HIỆN TẠI phải thuộc đơn vị mình
+  const currentUnit = await unitOfMeeting(existing);
+  if (currentUnit !== myUnit) {
+    return { status: 403, error: 'Bạn chỉ quản lý phiên họp trong phạm vi đơn vị của mình' };
+  }
+
+  if (op === 'delete') {
+    if (!NOT_STARTED_STATUSES.includes(existing?.status)) {
+      return { status: 403, error: 'Chỉ xóa được phiên họp CHƯA diễn ra (nháp/đã gửi giấy mời)' };
+    }
+    return { ok: true };
+  }
+
+  // op === 'update': nếu body cố đổi chủ trì/thư ký -> người MỚI cũng phải thuộc đơn vị mình
+  // (chống "chuyển" phiên sang đơn vị khác qua PATCH chairId/secretaryId).
+  if (body.chairId !== undefined && body.chairId !== existing?.chairId) {
+    const newChair = await getExisting('c_users', body.chairId);
+    if (!newChair || newChair.unitId !== myUnit) {
+      return { status: 403, error: 'Chủ trì mới phải thuộc đơn vị của bạn' };
+    }
+  }
+  if (body.secretaryId !== undefined && body.secretaryId !== existing?.secretaryId) {
+    const newSec = await getExisting('c_users', body.secretaryId);
+    if (!newSec || newSec.unitId !== myUnit) {
+      return { status: 403, error: 'Thư ký mới phải thuộc đơn vị của bạn' };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Khuyến nghị 1 (2026-07-18, chốt code chéo) — QUẢN TRỊ ĐƠN VỊ (unit_admin) THÊM/GẮN TÀI
+ * LIỆU VÀO PHIÊN HỌP: chỉ được thao tác cho phiên THUỘC ĐƠN VỊ MÌNH (không phải MỌI phiên
+ * nhìn thấy được). ACL `documents.create = 'any'` vốn cho MỌI vai trò đăng nhập tạo tài
+ * liệu (kể cả không gắn phiên — tài liệu tham khảo/cá nhân, KHÔNG bị ràng buộc này); nhánh
+ * này SIẾT THÊM riêng cho unit_admin khi `body.meetingId` khác null — tra đơn vị của phiên
+ * đó (chairId/secretaryId, unitOfMeeting) và so với đơn vị của unit_admin (đọc từ DB).
+ * delegate/MANAGE không bị ảnh hưởng (giữ hành vi cũ — MANAGE toàn quyền, delegate vẫn theo
+ * ACL/guardDocuments hiện có, không liên quan phạm vi đơn vị).
+ * Chỉ áp cho op 'create' (gắn phiên NGAY LÚC TẠO) — sửa/trình-duyệt tài liệu ĐÃ TỒN TẠI
+ * đi qua ACL `ownerOrManage` (chỉ owner/MANAGE mới update nội dung); vì lúc TẠO đã bị chặn
+ * theo đơn vị, tài liệu unit_admin tạo/sở hữu vốn đã nằm trong đúng phạm vi đơn vị mình.
+ */
+async function enforceDocumentWrite(req, op, body) {
+  if (req.user.role !== 'unit_admin' || op !== 'create' || !body.meetingId) return { ok: true };
+  const self = await getExisting('c_users', req.user.sub);
+  const myUnit = self?.unitId;
+  if (!myUnit) return { status: 403, error: 'Không xác định được đơn vị của bạn' };
+  const meeting = await getExisting('c_meetings', body.meetingId);
+  if (!meeting) return { status: 404, error: 'Không tìm thấy phiên họp' };
+  const meetingUnit = await unitOfMeeting(meeting);
+  if (meetingUnit !== myUnit) {
+    return { status: 403, error: 'Bạn chỉ được thêm tài liệu cho phiên họp thuộc đơn vị của mình' };
   }
   return { ok: true };
 }
@@ -380,7 +465,12 @@ app.add('POST', '/api/:collection', requireAuth, async (req, res) => {
   }
   // P0-2: quản trị đơn vị tạo phiên họp — chủ trì/thư ký PHẢI thuộc đơn vị mình
   if (col === 'meetings') {
-    const chk = await enforceMeetingWrite(req, 'create', body);
+    const chk = await enforceMeetingWrite(req, 'create', null, body);
+    if (!chk.ok) return send(res, chk.status, { error: chk.error });
+  }
+  // Khuyến nghị 1 (2026-07-18): unit_admin thêm tài liệu gắn phiên họp — CHỈ phiên thuộc đơn vị mình.
+  if (col === 'documents') {
+    const chk = await enforceDocumentWrite(req, 'create', body);
     if (!chk.ok) return send(res, chk.status, { error: chk.error });
   }
   // P1-6 — Phản hồi/góp ý: SERVER ép danh tính người gửi + phạm vi đơn vị (KHÔNG tin
@@ -437,6 +527,12 @@ app.add('PATCH', '/api/:collection/:id', requireAuth, async (req, res) => {
     const chk = await enforceUserWrite(req, 'update', existing, patch);
     if (!chk.ok) return send(res, chk.status, { error: chk.error });
   }
+  // Khuyến nghị 1 (2026-07-18): unit_admin SỬA phiên họp — chỉ trong phạm vi đơn vị mình,
+  // không "chuyển" phiên sang đơn vị khác qua đổi chairId/secretaryId (xem enforceMeetingWrite).
+  if (col === 'meetings') {
+    const chk = await enforceMeetingWrite(req, 'update', existing, patch);
+    if (!chk.ok) return send(res, chk.status, { error: chk.error });
+  }
   validatePatch(col, patch, existing); // GĐ6 (P0-2)/P1-7: chặn kiểu sai + định dạng tệp trước khi ghi
   // P0-3: tài liệu gắn phiên họp — nạp phiên đó (tái dùng nếu đã nạp ở bước ACL trên) để
   // guardDocuments biết ai là "thành phần phiên" được phép duyệt, không chỉ MANAGE toàn cục.
@@ -450,6 +546,15 @@ app.add('PATCH', '/api/:collection/:id', requireAuth, async (req, res) => {
   if (col === 'feedbacks' && req.user.role === 'unit_admin') {
     const self = await getExisting('c_users', req.user.sub);
     extra = { actorUnitId: self?.unitId ?? null };
+  }
+  // Khuyến nghị 1 (2026-07-18): unit_admin SỬA phiên — guardMeetings cần biết đơn vị của
+  // CHÍNH unit_admin (actorUnitId) + đơn vị của phiên ĐANG SỬA (meetingUnitId, suy từ
+  // chairId/secretaryId HIỆN CÓ) để coi unit_admin-cùng-đơn-vị như MANAGE cho field nội
+  // dung. enforceMeetingWrite() ở trên đã chặn 403 nếu KHÔNG cùng đơn vị — nhánh này chỉ
+  // tính GIÁ TRỊ để guardMeetings tự kiểm tra lại độc lập (defense-in-depth).
+  if (col === 'meetings' && req.user.role === 'unit_admin') {
+    const self = await getExisting('c_users', req.user.sub);
+    extra = { actorUnitId: self?.unitId ?? null, meetingUnitId: await unitOfMeeting(existing) };
   }
   // GĐ4: khóa cứng trường nhạy cảm — chỉ đổi được qua /api/actions
   patch = guardPatch(col, existing, patch, req.user, extra);
@@ -490,6 +595,12 @@ app.add('DELETE', '/api/:collection/:id', requireAuth, async (req, res) => {
   }
   if (col === 'users' && req.params.id === req.user.sub) {
     return send(res, 400, { error: 'Không thể tự xóa tài khoản đang đăng nhập' });
+  }
+  // Khuyến nghị 1 (2026-07-18): unit_admin XÓA phiên họp — chỉ đơn vị mình + CHƯA diễn ra
+  // (draft/invited) để tránh mất dữ liệu phiên 'live'/'finished'. admin/MANAGE bỏ qua.
+  if (col === 'meetings') {
+    const chk = await enforceMeetingWrite(req, 'delete', existing, null);
+    if (!chk.ok) return send(res, chk.status, { error: chk.error });
   }
   await query(`DELETE FROM ${table} WHERE id = $1`, [req.params.id]);
   notifyChange(col, 'remove', req.params.id);

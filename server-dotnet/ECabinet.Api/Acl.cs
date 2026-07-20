@@ -32,8 +32,12 @@ public static class Acl
         ["rooms"]         = new("roles:admin", "roles:admin", "roles:admin"),
         // P0-2 (HSMT dòng 354-355): "Quản trị đơn vị" là actor CHÍNH tạo phiên họp — thêm
         // unit_admin vào quyền tạo. Kiểm tra sâu (chairId/secretaryId PHẢI thuộc đơn vị
-        // unit_admin) nằm ở App.EnforceMeetingWrite(). update/remove GIỮ NGUYÊN.
-        ["meetings"]      = new("roles:admin,secretary,chairman,unit_admin", "any", M),
+        // unit_admin) nằm ở App.EnforceMeetingWrite().
+        // Đợt vá 2026-07-18 (chốt code chéo, khuyến nghị 1) — port acl.js: unit_admin SỬA/XÓA
+        // phiên THUỘC ĐƠN VỊ MÌNH. Rule ở đây LỎNG (chỉ chặn vai trò ngoài phạm vi); ràng buộc
+        // "cùng đơn vị" + "chưa diễn ra" (xóa) SIẾT SÂU ở App.EnforceMeetingWrite() cho
+        // op "update"/"delete". update giữ "any"; remove thêm unit_admin.
+        ["meetings"]      = new("roles:admin,secretary,chairman,unit_admin", "any", "roles:admin,secretary,chairman,unit_admin"),
         ["documents"]     = new("any", "ownerOrManage", "ownerOrManage"),
         ["annotations"]   = new("self:userId", "owner:userId", "owner:userId"),
         ["votes"]         = new(M, "any", M),

@@ -6,8 +6,28 @@ import { uid, type Annotation, type DocFile, type DocKind, type Meeting, type Us
 import { can } from './authService';
 import { audit } from './adminService';
 import { notify } from './notificationService';
+import { unitOfMeeting } from './meetingService';
 
 const nowIso = () => new Date().toISOString();
+
+/**
+ * Khuyến nghị 1 (2026-07-18, chốt code chéo) — QUẢN TRỊ ĐƠN VỊ (unit_admin) THÊM TÀI LIỆU
+ * VÀO PHIÊN HỌP: chỉ được thao tác cho phiên THUỘC ĐƠN VỊ MÌNH (không phải MỌI phiên nhìn
+ * thấy — trước đây `canUpload` ở MeetingDetailPage.tsx cho MỌI unit_admin bất kể đơn vị).
+ * Mirror `enforceDocumentWrite`/`EnforceDocumentWrite` phía server. Chỉ áp khi có meetingId
+ * (tài liệu tham khảo/cá nhân KHÔNG gắn phiên không bị ràng buộc này); delegate/MANAGE
+ * không bị ảnh hưởng (giữ hành vi cũ).
+ */
+async function enforceUnitAdminDocumentWrite(actor: User, meetingId: string | null | undefined) {
+  if (actor.role !== 'unit_admin' || !meetingId) return;
+  if (!actor.unitId) throw new Error('Không xác định được đơn vị của bạn');
+  const m = await db.meetings.get(meetingId);
+  if (!m) throw new Error('Không tìm thấy phiên họp');
+  const meetingUnit = await unitOfMeeting(m);
+  if (meetingUnit !== actor.unitId) {
+    throw new Error('Bạn chỉ được thêm tài liệu cho phiên họp thuộc đơn vị của mình');
+  }
+}
 
 /**
  * Trạng thái duyệt mặc định khi TẠO tài liệu (E-HSMT mục 24):
@@ -51,6 +71,7 @@ export async function addTextDocument(
   actor: User, name: string, content: string, kind: DocKind,
   opts: AddDocOpts = {},
 ): Promise<DocFile> {
+  await enforceUnitAdminDocumentWrite(actor, opts.meetingId);
   const doc: DocFile = {
     id: uid(), name: name.endsWith('.pdf') || name.includes('.') ? name : name + '.pdf',
     kind, meetingId: opts.meetingId ?? null, agendaItemId: opts.agendaItemId ?? null,
@@ -70,6 +91,7 @@ export async function addFileDocument(
   actor: User, file: File, kind: DocKind,
   opts: AddDocOpts = {},
 ): Promise<DocFile> {
+  await enforceUnitAdminDocumentWrite(actor, opts.meetingId);
   if (file.size > MAX_UPLOAD) {
     throw new Error(`Tệp vượt giới hạn ${MAX_UPLOAD_LABEL}`);
   }

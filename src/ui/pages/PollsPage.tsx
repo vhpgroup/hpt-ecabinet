@@ -234,10 +234,21 @@ function PollCard({ p, usersMap, onViewDoc, onEdit }: {
             <div style={{ marginTop: 10 }}>
               <b style={{ fontSize: 12.5, color: 'var(--muted)' }}>Tổng hợp ý kiến góp ý:</b>
               {comments.map((b, i) => {
-                const identityVisible = canSeeIdentities || b.userId === user?.id;
+                const isMine = b.userId === user?.id;
+                const identityVisible = canSeeIdentities || isMine;
+                // Khuyến nghị 2 (2026-07-18, chốt code chéo): với phiếu KÍN, người xem KHÔNG
+                // phải người tạo/quản lý CHỈ thấy đầy đủ NỘI DUNG góp ý của CHÍNH MÌNH — góp
+                // ý của người khác ẩn CẢ danh tính (đã có, identityFor) LẪN nội dung (mới —
+                // trước đây chỉ đổi nhãn người nói thành "ẩn danh" nhưng vẫn hiện nguyên văn
+                // `b.comment`, không khớp mức độ ẩn danh của REST projectVote ở access.js,
+                // vốn strip cả comment). contentVisible dùng CHUNG điều kiện với
+                // identityVisible (cùng ranh giới "ballot của mình hoặc mình được phép xem
+                // đủ") — chỉ khi phiếu KHÔNG kín (canSeeIdentities đã gồm !p.secret) hoặc
+                // đúng là ballot của chính mình mới lộ nội dung.
+                const contentVisible = identityVisible;
                 return (
                   <div key={i} className="anno" style={{ marginTop: 6 }}>
-                    {b.comment}
+                    {contentVisible ? b.comment : <span style={{ color: 'var(--muted)', fontStyle: 'italic' }}>Đã bỏ phiếu — nội dung góp ý ẩn danh (phiếu kín)</span>}
                     <small>
                       {identityFor(b)} · {timeAgo(b.castAt)}
                       {b.signature && identityVisible && <> · <Badge color="green">Đã ký số</Badge></>}

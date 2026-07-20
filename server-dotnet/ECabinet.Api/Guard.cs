@@ -318,13 +318,18 @@ public static class Guard
     /// `meeting` (OPTIONAL, P0-3): phiên họp chứa tài liệu (nếu col == "documents" và có
     /// meetingId) — nạp trước ở App.cs từ existing["meetingId"] để GuardDocuments biết ai
     /// là "thành phần phiên" được phép duyệt, không chỉ nhóm MANAGE toàn cục.
+    /// `actorUnitId` (OPTIONAL): đơn vị của unit_admin đang PATCH — dùng cho feedbacks
+    /// (P1-6) VÀ meetings (Khuyến nghị 1, 2026-07-18, ý nghĩa tương ứng theo `col`).
+    /// `meetingUnitId` (OPTIONAL, Khuyến nghị 1): đơn vị của CHÍNH phiên đang PATCH (chỉ
+    /// dùng khi col == "meetings" — suy từ chairId/secretaryId HIỆN CÓ, tính SẴN ở App.cs
+    /// vì cần await tra store, GuardMeetings là hàm thuần đồng bộ).
     /// </summary>
-    public static JsonObject GuardPatch(string col, JsonObject existing, JsonObject patch, JwtPayload user, JsonObject? meeting = null, string? actorUnitId = null)
+    public static JsonObject GuardPatch(string col, JsonObject existing, JsonObject patch, JwtPayload user, JsonObject? meeting = null, string? actorUnitId = null, string? meetingUnitId = null)
     {
         return col switch
         {
             "votes" => GuardVotes(patch, user),
-            "meetings" => GuardMeetings(existing, patch, user),
+            "meetings" => GuardMeetings(existing, patch, user, actorUnitId, meetingUnitId),
             "questions" => GuardQuestions(existing, patch, user),
             "documents" => GuardDocuments(existing, patch, user, meeting),
             "apiKeys" => GuardApiKeys(patch),
@@ -480,10 +485,32 @@ public static class Guard
     // âm thầm xóa sạch patch — mở đúng thiết kế nghiệp vụ, KHÔNG mở rộng ACL toàn cục).
     private static readonly string[] ChairContentFields = { "conclusions", "agenda", "minutes" };
 
-    private static JsonObject GuardMeetings(JsonObject existing, JsonObject patch, JwtPayload user)
+    /// <summary>
+    /// Khuyến nghị 1 (2026-07-18, chốt code chéo) — QUẢN TRỊ ĐƠN VỊ (unit_admin) SỬA phiên
+    /// họp THUỘC ĐƠN VỊ MÌNH: `meetingUnitId` (đơn vị của phiên ĐANG SỬA, suy từ chairId/
+    /// secretaryId hiện có — tính SẴN ở App.cs vì cần await tra store) phải khớp
+    /// `actorUnitId` (đơn vị của unit_admin, đọc từ store, không tin JWT/body).
+    /// App.EnforceMeetingWrite() đã CHẶN 403 trước khi vào đây nếu KHÔNG khớp đơn vị hoặc
+    /// cố đổi chair/secretary sang đơn vị khác — GuardMeetings chỉ cần biết "unit_admin CÓ
+    /// được coi như MANAGE cho các field nội dung phiên NÀY hay không" (defense-in-depth).
+    /// Port isUnitAdminOfThisMeeting (guard.js).
+    /// </summary>
+    private static bool IsUnitAdminOfThisMeeting(JwtPayload user, string? actorUnitId, string? meetingUnitId)
+    {
+        if (user.Role != "unit_admin") return false;
+        if (string.IsNullOrEmpty(actorUnitId) || string.IsNullOrEmpty(meetingUnitId)) return false;
+        return meetingUnitId == actorUnitId;
+    }
+
+    private static JsonObject GuardMeetings(JsonObject existing, JsonObject patch, JwtPayload user, string? actorUnitId = null, string? meetingUnitId = null)
     {
         var isManage = Manage.Contains(user.Role);
         var isChairOfThisMeeting = J.Str(existing, "chairId") == user.Sub || J.Str(existing, "secretaryId") == user.Sub;
+        // Khuyến nghị 1: unit_admin của ĐÚNG đơn vị phiên này được coi như MANAGE cho MỌI
+        // field nội dung phiên — NHƯNG KHÔNG mở các field điều hành TRỰC TIẾP tại phòng họp
+        // (questionSession/seatAssignments/currentItemStartedAt — 3 nhánh dưới đây CHỦ Ý
+        // giữ `!isManage` riêng, không gộp isUnitAdminHere).
+        var isUnitAdminHere = IsUnitAdminOfThisMeeting(user, actorUnitId, meetingUnitId);
         var p = J.CloneObj(patch);
 
         p.Remove("status");
@@ -518,10 +545,11 @@ public static class Guard
             }
         }
 
-        // thành phần tham dự
+        // thành phần tham dự — unit_admin CÙNG đơn vị phiên coi như MANAGE (được đặt lại
+        // toàn bộ danh sách như lúc tạo phiên), giữ nguyên checkedInAt do server ghi.
         if (J.Has(p, "participants") && p["participants"] is JsonArray incoming)
         {
-            p["participants"] = isManage
+            p["participants"] = (isManage || isUnitAdminHere)
                 ? KeepServerCheckins(existing, incoming)
                 : DelegateOwnRowOnly(existing, incoming, user.Sub);
         }
@@ -529,7 +557,9 @@ public static class Guard
         // đại biểu thường: ngoài dòng tham dự của mình, không sửa gì khác — TRỪ chairId/
         // secretaryId của CHÍNH phiên này được thêm quyền ghi conclusions/agenda/minutes
         // (đã sanitize signatures/locked ở nhánh trên, KHÔNG mở status/checkedInAt/chữ ký).
-        if (!isManage)
+        // unit_admin CÙNG đơn vị phiên: coi như MANAGE ở bước này (giữ TOÀN BỘ field còn lại
+        // trong patch sau các bước lọc/khóa cứng trên).
+        if (!isManage && !isUnitAdminHere)
         {
             var keepFields = isChairOfThisMeeting
                 ? new[] { "participants" }.Concat(ChairContentFields).ToArray()
