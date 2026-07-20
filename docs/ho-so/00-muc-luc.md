@@ -30,6 +30,7 @@ Mỗi tài liệu trong bộ hồ sơ đều trích dẫn số dòng cụ thể 
 | 09 | `09-ke-hoach-trien-khai.md` | Kế hoạch chuẩn bị cung cấp dịch vụ (12 tuần / ≤3 tháng) | 19, 254–260, 601–637, 633–636 | Nghị định 45/2026/NĐ-CP; TT 16/2024/TT-BTTTT |
 | 10 | `10-van-ban-lam-ro-hsmt.md` | Văn bản đề nghị làm rõ E-HSMT | Toàn văn (điểm cụ thể trích trong từng câu hỏi) | Luật Đấu thầu 2023 và văn bản hướng dẫn về giai đoạn hỏi–đáp E-HSMT |
 | 11 | `11-tai-lieu-hdsd-tong-quan.md` | Khung tài liệu Hướng dẫn sử dụng (HDSD) | 140, 244, 388–515 | — |
+| 12 | `12-phuong-an-trien-khai-ha-tang.md` | Phương án triển khai hạ tầng (mô hình 4 cụm / 7 VM, cân bằng tải, HA) | 308–322, 71/527–528, 549–550, 593–597, 98/117 | TT 39/2017/TT-BTTTT; NĐ 85/2016/NĐ-CP; TT 12/2022/TT-BTTTT; QĐ 4435/QĐ-UBND (Khung CQĐT TP HP v4.0) |
 
 ## 3. Bảng ánh xạ yêu cầu HSMT → tài liệu → trạng thái
 
@@ -49,6 +50,7 @@ Mỗi tài liệu trong bộ hồ sơ đều trích dẫn số dòng cụ thể 
 | Website công bố các chức năng của sản phẩm chào thầu | 633 | `website/index.html` (Nhiệm vụ 2, ngoài `docs/ho-so/`) | Đã xuất bản (file tĩnh HTML) |
 | Đề nghị làm rõ HSMT (nền tảng công nghệ, chuẩn ký số, đặc tả LGSP/IOC, hạ tầng, mâu thuẫn nội tại văn bản...) | Nhiều mục | `10-van-ban-lam-ro-hsmt.md` | Soạn đầy đủ 14 câu hỏi, chờ gửi trong giai đoạn hỏi–đáp |
 | Tài liệu hướng dẫn sử dụng đầy đủ phục vụ đào tạo và khai thác hệ thống | 140, 244 | `11-tai-lieu-hdsd-tong-quan.md` | Soạn khung outline đầy đủ, nội dung chi tiết từng chương do module HDSD trong ứng dụng cung cấp |
+| Mô hình triển khai 4 cụm server, bảng cấu hình 7 máy ảo, cân bằng tải + thiết bị bảo mật, ảo hóa tập trung tại TTDL; dự phòng và chuyển mạch tự động | 308–322, 98/117 | `12-phuong-an-trien-khai-ha-tang.md` | Soạn đầy đủ; phối hợp TTDL cấp 7 VM/LB và pháp nhân chốt bản quyền Windows/SQL Server |
 
 ## 4. Cách sử dụng bộ hồ sơ
 

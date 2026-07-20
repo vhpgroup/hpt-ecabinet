@@ -143,6 +143,8 @@ Dùng `docker-compose.coolify.yml`: Coolify → New → Docker Compose → repo 
 | 7 | (Nếu HSMT bắt buộc) triển khai **Windows Server + IIS** | A6 |
 | 8 | Giám sát 24/7 (Prometheus/Grafana/Uptime Kuma) + cảnh báo — cần dựng thêm | ngoài repo |
 
+> **Mô hình 4 cụm / 7 VM + cân bằng tải + HA (lời giải cho khoảng cách hạ tầng lớn nhất — bom 💣1 rà soát 20/07):** phương án triển khai hạ tầng đầy đủ (sơ đồ kiến trúc, bảng 7 VM đúng HSMT dòng 318–322, ánh xạ từ bản 1-node hiện tại, xử lý state per-process, DB AlwaysOn, MinIO, HA/chuyển mạch tự động, checklist làm việc với TTDL) xem `docs/ho-so/12-phuong-an-trien-khai-ha-tang.md`.
+
 ### B3. 🔴 Việc CẦN PHÁP NHÂN / BÊN THỨ BA (không code được — quyết định của công ty)
 | # | Việc | Vì sao cần bên ngoài |
 |---|---|---|
