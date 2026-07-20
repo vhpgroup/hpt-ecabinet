@@ -36,8 +36,11 @@ React SPA (1 mã nguồn) ──► Web · PWA · Android · iOS (Capacitor — 
 | Coolify (VPS đang dùng) | Resource Docker Compose → `/docker-compose.coolify.yml`, env `DB_PASSWORD`+`JWT_SECRET`, domain gán service `web` |
 | App Android/iOS | `docs/mobile-app.md` (Capacitor, cần máy có npm + Android Studio/Xcode) |
 | Windows Server + IIS | README mục "Backend .NET" |
+| **Lưu tệp ra object storage** (tách khỏi DB — mô hình Cụm Server-File HSMT) | Đặt env `S3_*` (MinIO/S3) — GATED, để trống thì giữ base64-trong-DB. Xem `docs/HUONG-DAN-TRIEN-KHAI-VA-HSMT.md` A3.1 + README 6.1 |
 
 Tài khoản demo (mật khẩu chung `123456`): `chutich` (chủ trì) · `thuky` · `quantri` (admin) · `qtdonvi` (quản trị đơn vị) · `sokhdt`/`soyt`/… (đại biểu). Họp video: đặt env `LIVEKIT_URL/API_KEY/API_SECRET` (LiveKit Cloud). Khóa Open API demo: `ecab_demo_qlvb_2026` (THU HỒI khi chạy thật).
+
+**Lưu ý hợp tác (20/07):** chủ repo có làm việc SONG SONG trên `main` (vd commit `bc3aba4` "support local tunnel development" — thêm `package-lock.json`, sửa `.gitignore`, `vite.config.ts` proxy dev cho tunnel `ecabinet.vhpdata.com`). LUÔN `list_commits` trước khi push và CHỈ push đúng danh sách file mình đổi (đừng đè 3 file này). Test hiện tại: **Node smoke 105/105 · .NET 153/153**.
 
 ## 4. Trạng thái so với HSMT (cập nhật 18/07/2026 — sau ca rà soát & thực hiện qua đêm)
 - **Chức năng (mục 3.4):** web **58/59** — còn duy nhất **ký số PKI thật (mục 30, đang mô phỏng; đã mở rộng ký mô phỏng cho cả Ý KIẾN VĂN BẢN đúng quy trình HSMT)**. Ma trận 97 mục kèm bằng chứng file/dòng: `docs/ra-soat/2026-07-18/ba-compliance-matrix.md`. Đêm 17→18/07 vá thêm: mục 8 (danh mục loại tài liệu CRUD) · 13 (phiếu nháp chưa gửi) · 21 (lọc đơn vị chủ trì) · 48/53/92/97 (thống kê ý kiến văn bản + xuất CSV) · 51 (sửa/xóa + đính kèm kết luận) · module **Phản hồi người dùng** (tiêu chí 5.1–5.4) · Cán bộ theo dõi phiếu ý kiến · loại đơn vị xã/phường/đặc khu · whitelist định dạng tệp TT 39/2017.
