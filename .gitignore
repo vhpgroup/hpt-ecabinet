@@ -1,5 +1,7 @@
 node_modules
 dist
+.tools/
+loadtest-result.json
 *.local
 *.zip
 

@@ -7,4 +7,19 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 export default defineConfig({
   plugins: [react(), viteSingleFile()],
   build: { target: 'es2018', chunkSizeWarningLimit: 4000 },
+  // Dev/test: giữ frontend và API cùng origin để có thể đưa duy nhất cổng
+  // Vite qua HTTPS tunnel. `ws: true` chuyển tiếp realtime WebSocket.
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+        ws: true,
+      },
+      '/health': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
+    },
+  },
 });
