@@ -1894,28 +1894,35 @@ static async Task Group11_BlobS3(TestRunner t)
         Assert.True(!stored!.ContainsKey("storageKey"), "không set storageKey khi S3 tắt");
     });
 
-    await t.Case("E2E LGSP: GET /api/open/v1/documents/{id}/content dựng lại dataUrl từ S3, KHÔNG lộ storageKey", async () =>
+    await t.Case("E2E LGSP (stream mode): /documents/{id}/content dựng lại dataUrl từ S3, KHÔNG lộ storageKey", async () =>
     {
-        var blob = new MemBlob(on: true);
-        await using var app = await TestApp.CreateAsync(blob);
-        var admin = await app.Login("quantri");
-        // tạo khóa API scope documents
-        var keyRes = await app.Post("/api/apikeys/create", new JsonObject { ["name"] = "LGSP", ["scopes"] = new JsonArray("documents") }, admin);
-        Assert.Status(201, keyRes.Status, "tạo khóa API");
-        var apiKey = keyRes.Obj["key"]!.GetValue<string>();
-        var pdfB64 = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(1500));
-        var url = $"data:application/pdf;base64,{pdfB64}";
-        var doc = new JsonObject
+        // Chế độ stream: giữ hành vi cũ (JSON + dataUrl base64 dựng lại) — dùng khi client LGSP
+        // không tới được endpoint S3 trực tiếp / cần đúng spec dataUrl đã công bố.
+        Environment.SetEnvironmentVariable("S3_DOWNLOAD_MODE", "stream");
+        try
         {
-            ["id"] = "doc-lgsp", ["name"] = "cong-bo.pdf", ["kind"] = "main", ["ownerId"] = "u-admin",
-            ["sharedWith"] = new JsonArray(), ["size"] = 0, ["mime"] = "application/pdf", ["secret"] = false, ["version"] = 1,
-            ["uploadedAt"] = NowIsoT(), ["reviewStatus"] = "approved", ["dataUrl"] = url,
-        };
-        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-lgsp (approved, không mật)");
-        var r = await app.Send("GET", "/api/open/v1/documents/doc-lgsp/content", headers: new Dictionary<string, string> { ["X-API-Key"] = apiKey });
-        Assert.Status(200, r.Status, "GET nội dung tài liệu qua Open API");
-        Assert.Eq(url, r.Obj["dataUrl"]?.GetValue<string>(), "dataUrl dựng lại từ S3 khớp gốc");
-        Assert.True(!r.Obj.ContainsKey("storageKey"), "storageKey KHÔNG lộ ra bên thứ 3");
+            var blob = new MemBlob(on: true);
+            await using var app = await TestApp.CreateAsync(blob);
+            var admin = await app.Login("quantri");
+            // tạo khóa API scope documents
+            var keyRes = await app.Post("/api/apikeys/create", new JsonObject { ["name"] = "LGSP", ["scopes"] = new JsonArray("documents") }, admin);
+            Assert.Status(201, keyRes.Status, "tạo khóa API");
+            var apiKey = keyRes.Obj["key"]!.GetValue<string>();
+            var pdfB64 = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(1500));
+            var url = $"data:application/pdf;base64,{pdfB64}";
+            var doc = new JsonObject
+            {
+                ["id"] = "doc-lgsp", ["name"] = "cong-bo.pdf", ["kind"] = "main", ["ownerId"] = "u-admin",
+                ["sharedWith"] = new JsonArray(), ["size"] = 0, ["mime"] = "application/pdf", ["secret"] = false, ["version"] = 1,
+                ["uploadedAt"] = NowIsoT(), ["reviewStatus"] = "approved", ["dataUrl"] = url,
+            };
+            Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-lgsp (approved, không mật)");
+            var r = await app.Send("GET", "/api/open/v1/documents/doc-lgsp/content", headers: new Dictionary<string, string> { ["X-API-Key"] = apiKey });
+            Assert.Status(200, r.Status, "GET nội dung tài liệu qua Open API");
+            Assert.Eq(url, r.Obj["dataUrl"]?.GetValue<string>(), "dataUrl dựng lại từ S3 khớp gốc");
+            Assert.True(!r.Obj.ContainsKey("storageKey"), "storageKey KHÔNG lộ ra bên thứ 3");
+        }
+        finally { Environment.SetEnvironmentVariable("S3_DOWNLOAD_MODE", null); }
     });
 
     await t.Case("E2E BẢO MẬT: tài liệu MẬT không externalize lộ nội dung — Open API vẫn 404 (giữ lọc quyền)", async () =>
@@ -1956,6 +1963,253 @@ static async Task Group11_BlobS3(TestRunner t)
         var r = await app.Get("/api/guides/g-e2e", admin);
         Assert.Eq(url, r.Obj["fileData"]?.GetValue<string>(), "fileData dựng lại khớp gốc");
     });
+
+    // ============================================================
+    // TỐI ƯU 1 — PRESIGNED URL (SigV4 query-string): round-trip tự tính lại chữ ký.
+    // ============================================================
+    await t.Case("PRESIGNED SigV4 round-trip: parse lại query -> tự tính X-Amz-Signature KHỚP; đủ X-Amz-*", () =>
+    {
+        var r = Blob.PresignV4("GET", "https://minio.example:9000/ecabinet-docs/documents/d1/v1.pdf",
+            "minio.example:9000", "/ecabinet-docs/documents/d1/v1.pdf", 300, null, ak, sk, "us-east-1", "s3", date);
+        var (given, recomputed, sp) = RecomputePresign(r.Url, sk, "us-east-1", "s3");
+        Assert.Eq("AWS4-HMAC-SHA256", sp["X-Amz-Algorithm"], "có X-Amz-Algorithm");
+        Assert.Eq($"{ak}/20150830/us-east-1/s3/aws4_request", sp["X-Amz-Credential"], "X-Amz-Credential đúng scope");
+        Assert.Eq("host", sp["X-Amz-SignedHeaders"], "chỉ ký host");
+        Assert.True(System.Text.RegularExpressions.Regex.IsMatch(given, "^[0-9a-f]{64}$"), "chữ ký 64 hex");
+        Assert.Eq(given, recomputed, "CHỮ KÝ TÍNH LẠI TỪ QUERY == chữ ký trong URL (canonical query đúng chuẩn)");
+        Assert.Eq(r.Signature, given, "khớp cả signature PresignV4 trả về");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("PRESIGNED: TTL/expiry nằm trong query (X-Amz-Date + X-Amz-Expires); kẹp biên 1..604800", () =>
+    {
+        var r = Blob.PresignV4("GET", "https://h/b/k.pdf", "h", "/b/k.pdf", 120, null, ak, sk, "us-east-1", "s3", date);
+        var sp = System.Web.HttpUtility.ParseQueryString(new Uri(r.Url).Query);
+        Assert.Eq("120", sp["X-Amz-Expires"], "X-Amz-Expires = TTL");
+        Assert.Eq("20150830T123600Z", sp["X-Amz-Date"], "X-Amz-Date có trong query");
+        Assert.Eq(120, r.Expires, "Expires trả về");
+        Assert.Eq(1, Blob.PresignV4("GET", "https://h/k", "h", "/k", 0, null, ak, sk, "us-east-1", "s3", date).Expires, "kẹp dưới -> 1");
+        Assert.Eq(604800, Blob.PresignV4("GET", "https://h/k", "h", "/k", 999999, null, ak, sk, "us-east-1", "s3", date).Expires, "kẹp trên -> 7 ngày");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("PRESIGNED: response-content-disposition (tên tiếng Việt) ký trong query & round-trip khớp", () =>
+    {
+        var extra = new Dictionary<string, string> { ["response-content-disposition"] = Blob.ContentDisposition("Báo cáo.pdf") };
+        var r = Blob.PresignV4("GET", "https://h/b/k.pdf", "h", "/b/k.pdf", 300, extra, ak, sk, "us-east-1", "s3", date);
+        var (given, recomputed, _) = RecomputePresign(r.Url, sk, "us-east-1", "s3");
+        Assert.Eq(given, recomputed, "thêm response-content-disposition -> vẫn ký/round-trip đúng");
+        return Task.CompletedTask;
+    });
+
+    // ---- TẢI NỘI BỘ /api/documents/:id/download (redirect mặc định) ----
+    await t.Case("E2E TẢI (redirect): document có storageKey -> 302 tới presigned URL (KHÔNG nạp base64 vào body)", async () =>
+    {
+        var blob = new MemBlob(on: true);
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(1024))}";
+        var doc = MakeDoc("doc-dl", secret: false, reviewStatus: "approved", dataUrl: url);
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-dl");
+        var r = await app.SendNoRedirect("GET", "/api/documents/doc-dl/download", admin);
+        Assert.Status(302, r.Status, "trả 302 redirect (không nạp tệp vào RAM backend)");
+        var loc = r.Message.Headers.Location?.ToString() ?? "";
+        Assert.True(loc.Contains("documents/doc-dl/v1.pdf") && loc.Contains("X-Amz-Signature="), "Location là presigned URL của đúng key");
+        Assert.True(blob.Presigned.Contains("documents/doc-dl/v1.pdf"), "đã cấp presigned đúng key");
+        Assert.True(string.IsNullOrEmpty(r.Raw) || !r.Raw.Contains("base64"), "thân KHÔNG chứa base64");
+    });
+
+    await t.Case("E2E TẢI (redirect) BẢO MẬT: tài liệu MẬT -> 404, KHÔNG cấp presigned (giữ lọc quyền đọc)", async () =>
+    {
+        var blob = new MemBlob(on: true);
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(256))}";
+        var doc = MakeDoc("doc-dl-secret", secret: true, reviewStatus: "approved", dataUrl: url);
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo tài liệu MẬT");
+        // đại biểu thường (delegate — không phải owner/manage, không được chia sẻ) -> KHÔNG đọc được
+        var member = await app.Login("sokhdt");
+        var r = await app.SendNoRedirect("GET", "/api/documents/doc-dl-secret/download", member);
+        Assert.Status(404, r.Status, "người KHÔNG có quyền đọc tài liệu mật -> 404 (không tải được)");
+        Assert.True(blob.Presigned.Count == 0, "KHÔNG cấp presigned cho người không có quyền (không rò URL)");
+    });
+
+    await t.Case("E2E TẢI (stream mode): S3_DOWNLOAD_MODE=stream -> backend trả bytes + Content-Disposition attachment", async () =>
+    {
+        Environment.SetEnvironmentVariable("S3_DOWNLOAD_MODE", "stream");
+        try
+        {
+            var blob = new MemBlob(on: true);
+            await using var app = await TestApp.CreateAsync(blob);
+            var admin = await app.Login("quantri");
+            var raw = System.Security.Cryptography.RandomNumberGenerator.GetBytes(777);
+            var url = $"data:application/pdf;base64,{Convert.ToBase64String(raw)}";
+            var doc = MakeDoc("doc-stream", secret: false, reviewStatus: "approved", dataUrl: url);
+            Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-stream");
+            var r = await app.SendNoRedirect("GET", "/api/documents/doc-stream/download", admin);
+            Assert.Status(200, r.Status, "stream mode -> 200 (không redirect)");
+            var disp = r.Message.Content.Headers.ContentDisposition?.ToString() ?? "";
+            Assert.True(disp.StartsWith("attachment"), "Content-Disposition attachment");
+            var bytes = await r.Message.Content.ReadAsByteArrayAsync();
+            Assert.True(bytes.SequenceEqual(raw), "bytes stream KHỚP nội dung gốc");
+        }
+        finally { Environment.SetEnvironmentVariable("S3_DOWNLOAD_MODE", null); }
+    });
+
+    await t.Case("E2E TẢI tương thích ngược: S3 TẮT + bản ghi base64 cũ -> vẫn tải được (giải mã stream)", async () =>
+    {
+        var blob = new MemBlob(on: false);
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var raw = System.Security.Cryptography.RandomNumberGenerator.GetBytes(333);
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(raw)}";
+        var doc = MakeDoc("doc-legacy-dl", secret: false, reviewStatus: "approved", dataUrl: url);
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc base64 (S3 tắt)");
+        var r = await app.SendNoRedirect("GET", "/api/documents/doc-legacy-dl/download", admin);
+        Assert.Status(200, r.Status, "S3 tắt: tải bằng cách giải mã base64 -> 200");
+        var bytes = await r.Message.Content.ReadAsByteArrayAsync();
+        Assert.True(bytes.SequenceEqual(raw), "bytes khớp base64 gốc (tương thích ngược)");
+    });
+
+    // ---- LGSP /content với presigned redirect ----
+    await t.Case("E2E LGSP (redirect): /documents/{id}/content -> 302 presigned; KHÔNG lộ storageKey/base64", async () =>
+    {
+        var blob = new MemBlob(on: true);
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var keyRes = await app.Post("/api/apikeys/create", new JsonObject { ["name"] = "LGSP-R", ["scopes"] = new JsonArray("documents") }, admin);
+        var apiKey = keyRes.Obj["key"]!.GetValue<string>();
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(1500))}";
+        var doc = MakeDoc("doc-lgsp-r", secret: false, reviewStatus: "approved", dataUrl: url);
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-lgsp-r");
+        var r = await app.SendNoRedirect("GET", "/api/open/v1/documents/doc-lgsp-r/content", headers: new Dictionary<string, string> { ["X-API-Key"] = apiKey });
+        Assert.Status(302, r.Status, "LGSP redirect tới presigned (client tải thẳng từ S3)");
+        var loc = r.Message.Headers.Location?.ToString() ?? "";
+        Assert.True(loc.Contains("documents/doc-lgsp-r/v1.pdf"), "Location presigned đúng key");
+        Assert.True(!loc.Contains("storageKey"), "không lộ chuỗi khóa nội bộ trong body");
+    });
+
+    await t.Case("E2E LGSP BẢO MẬT: khóa API SAI scope (meetings) gọi /content -> 403, KHÔNG cấp presigned", async () =>
+    {
+        var blob = new MemBlob(on: true);
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var keyRes = await app.Post("/api/apikeys/create", new JsonObject { ["name"] = "LGSP-badscope", ["scopes"] = new JsonArray("meetings") }, admin);
+        var apiKey = keyRes.Obj["key"]!.GetValue<string>();
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(128))}";
+        var doc = MakeDoc("doc-badscope", secret: false, reviewStatus: "approved", dataUrl: url);
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-badscope");
+        var r = await app.SendNoRedirect("GET", "/api/open/v1/documents/doc-badscope/content", headers: new Dictionary<string, string> { ["X-API-Key"] = apiKey });
+        Assert.Status(403, r.Status, "khóa thiếu scope documents -> 403 (chặn trước khi cấp presigned)");
+        Assert.True(blob.Presigned.Count == 0, "KHÔNG cấp presigned khi sai scope");
+    });
+
+    // ============================================================
+    // TỐI ƯU 2 — XÓA DỌN OBJECT S3 (best-effort, đa version).
+    // ============================================================
+    await t.Case("DocumentStorageKeys/GuideStorageKeys: gom key hiện tại + version cũ, loại trùng/rỗng", () =>
+    {
+        var doc = new JsonObject
+        {
+            ["storageKey"] = "documents/d1/v3.pdf",
+            ["versions"] = new JsonArray(
+                new JsonObject { ["storageKey"] = "documents/d1/v1.pdf" },
+                new JsonObject { ["storageKey"] = "documents/d1/v2.pdf" },
+                new JsonObject { ["storageKey"] = "documents/d1/v3.pdf" },
+                new JsonObject { ["note"] = "không key" }),
+        };
+        var keys = Blob.DocumentStorageKeys(doc);
+        keys.Sort();
+        Assert.Eq("documents/d1/v1.pdf,documents/d1/v2.pdf,documents/d1/v3.pdf", string.Join(",", keys), "gom hết version + loại trùng + bỏ thiếu");
+        Assert.Eq(0, Blob.DocumentStorageKeys(new JsonObject { ["content"] = "soạn tay" }).Count, "không tệp -> 0 khóa");
+        Assert.Eq("guides/g1/file.pdf", string.Join(",", Blob.GuideStorageKeys(new JsonObject { ["storageKey"] = "guides/g1/file.pdf" })), "guide 1 khóa");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("E2E XÓA: document có storageKey (+version cũ) -> blob.Delete gọi ĐÚNG mọi key; DB xóa", async () =>
+    {
+        var blob = new MemBlob(on: true);
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(512))}";
+        var doc = MakeDoc("doc-del", secret: false, reviewStatus: "approved", dataUrl: url);
+        // gắn thêm 1 version cũ để kiểm dọn nhiều key
+        doc["versions"] = new JsonArray(new JsonObject { ["storageKey"] = "documents/doc-del/v0.pdf" });
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-del");
+        // sau externalize: storageKey = documents/doc-del/v1.pdf; version cũ v0 giữ trong versions[]
+        var del = await app.Delete("/api/documents/doc-del", admin);
+        Assert.Status(200, del.Status, "xóa DB thành công");
+        Assert.True(await app.Store.GetByIdAsync("c_documents", "doc-del") is null, "bản ghi DB đã xóa");
+        blob.Deleted.Sort();
+        Assert.Eq("documents/doc-del/v0.pdf,documents/doc-del/v1.pdf", string.Join(",", blob.Deleted), "blob.Delete gọi đúng TỪNG key (kể cả version cũ)");
+    });
+
+    await t.Case("E2E XÓA best-effort: S3 xóa LỖI -> vẫn xóa DB + KHÔNG ném (không chặn nghiệp vụ)", async () =>
+    {
+        var blob = new MemBlob(on: true) { FailDeleteWhen = _ => true }; // mọi lần delete đều ném
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(256))}";
+        var doc = MakeDoc("doc-del-fail", secret: false, reviewStatus: "approved", dataUrl: url);
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-del-fail");
+        var del = await app.Delete("/api/documents/doc-del-fail", admin);
+        Assert.Status(200, del.Status, "S3 xóa lỗi nhưng nghiệp vụ xóa VẪN 200 (best-effort)");
+        Assert.True(await app.Store.GetByIdAsync("c_documents", "doc-del-fail") is null, "bản ghi DB VẪN bị xóa dù S3 lỗi");
+        Assert.True(blob.Deleted.Contains("documents/doc-del-fail/v1.pdf"), "đã CỐ gọi delete (nhưng lỗi được nuốt)");
+    });
+
+    await t.Case("E2E XÓA S3 TẮT: KHÔNG gọi blob.Delete (bản ghi base64 cũ, không có gì để dọn)", async () =>
+    {
+        var blob = new MemBlob(on: false);
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(128))}";
+        var doc = MakeDoc("doc-del-off", secret: false, reviewStatus: "approved", dataUrl: url);
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-del-off (S3 tắt)");
+        Assert.Status(200, (await app.Delete("/api/documents/doc-del-off", admin)).Status, "xóa 200");
+        Assert.Eq(0, blob.Deleted.Count, "S3 tắt -> KHÔNG gọi blob.Delete (giữ hành vi cũ)");
+    });
+}
+
+/// <summary>Dựng document tối thiểu cho test tải/xóa (TỐI ƯU 1/2).</summary>
+static JsonObject MakeDoc(string id, bool secret, string reviewStatus, string dataUrl) => new()
+{
+    ["id"] = id, ["name"] = "tep.pdf", ["kind"] = "main", ["ownerId"] = "u-admin",
+    ["sharedWith"] = new JsonArray(), ["size"] = 0, ["mime"] = "application/pdf",
+    ["secret"] = secret, ["version"] = 1, ["uploadedAt"] = NowIsoT(),
+    ["reviewStatus"] = reviewStatus, ["dataUrl"] = dataUrl,
+};
+
+/// <summary>
+/// Tự tính lại X-Amz-Signature từ URL presigned (độc lập với PresignV4) — chứng minh
+/// canonical query đúng chuẩn. Trả (given, recomputed, dict query trừ chữ ký).
+/// </summary>
+static (string given, string recomputed, Dictionary<string, string> sp) RecomputePresign(string urlStr, string secretKey, string region, string service)
+{
+    var u = new Uri(urlStr);
+    var host = u.Authority;
+    var canonicalUri = u.AbsolutePath;
+    var parsed = System.Web.HttpUtility.ParseQueryString(u.Query);
+    var given = parsed["X-Amz-Signature"] ?? "";
+    var amzDate = parsed["X-Amz-Date"] ?? "";
+    var dateStamp = amzDate.Length >= 8 ? amzDate.Substring(0, 8) : "";
+    var dict = new Dictionary<string, string>();
+    var pairs = new List<(string k, string v)>();
+    foreach (string? k in parsed.AllKeys)
+    {
+        if (k is null || k == "X-Amz-Signature") continue;
+        dict[k] = parsed[k] ?? "";
+        pairs.Add((Blob.UriEncode(k), Blob.UriEncode(parsed[k] ?? "")));
+    }
+    pairs.Sort((a, b) => string.CompareOrdinal(a.k, b.k));
+    var canonicalQuery = string.Join("&", pairs.Select(p => $"{p.k}={p.v}"));
+    var canonicalRequest = string.Join("\n", new[] { "GET", canonicalUri, canonicalQuery, $"host:{host}\n", "host", "UNSIGNED-PAYLOAD" });
+    var scope = $"{dateStamp}/{region}/{service}/aws4_request";
+    var stringToSign = string.Join("\n", new[] { "AWS4-HMAC-SHA256", amzDate, scope, Blob.Sha256Hex(System.Text.Encoding.UTF8.GetBytes(canonicalRequest)) });
+    var signingKey = Blob.SigningKey(secretKey, dateStamp, region, service);
+    using var h = new System.Security.Cryptography.HMACSHA256(signingKey);
+    var recomputed = Convert.ToHexString(h.ComputeHash(System.Text.Encoding.UTF8.GetBytes(stringToSign))).ToLowerInvariant();
+    return (given, recomputed, dict);
 }
 
 // ============================================================
@@ -2021,7 +2275,27 @@ sealed class MemBlob : IBlobStore
     public MemBlob(bool on) => _on = on;
     public bool Configured() => _on;
     public bool Has(string key) => _map.ContainsKey(key);
+    /// <summary>Đếm lời gọi DeleteAsync theo key (kiểm dọn S3 khi XÓA — TỐI ƯU 2).</summary>
+    public List<string> Deleted { get; } = new();
+    /// <summary>Cho phép mô phỏng S3 lỗi khi xóa 1 key cụ thể (kiểm best-effort không ném).</summary>
+    public Func<string, bool>? FailDeleteWhen { get; set; }
+    /// <summary>Ghi lại lời gọi presign (kiểm chỉ cấp SAU khi qua lọc quyền — TỐI ƯU 1).</summary>
+    public List<string> Presigned { get; } = new();
     public Task PutAsync(string key, byte[] bytes, string? contentType) { _map[key] = (byte[])bytes.Clone(); return Task.CompletedTask; }
     public Task<byte[]> GetAsync(string key) => _map.TryGetValue(key, out var v) ? Task.FromResult(v) : throw new Exception("404");
-    public Task DeleteAsync(string key) { _map.Remove(key); return Task.CompletedTask; }
+    public Task DeleteAsync(string key)
+    {
+        Deleted.Add(key);
+        if (FailDeleteWhen != null && FailDeleteWhen(key)) throw new Exception("S3 5xx khi xóa");
+        _map.Remove(key);
+        return Task.CompletedTask;
+    }
+    // presigned GIẢ: URL ổn định gắn TTL + tên tệp (đủ để test 302/Location; không ký thật).
+    public string PresignGetUrl(string key, int ttlSec = 300, string? filename = null, string? contentType = null)
+    {
+        if (!_on) throw new Exception("S3 chưa cấu hình");
+        Presigned.Add(key);
+        var disp = string.IsNullOrEmpty(filename) ? "" : "&rcd=" + Uri.EscapeDataString(Blob.ContentDisposition(filename));
+        return $"https://mem-s3.local/{key}?X-Amz-Expires={ttlSec}&X-Amz-Signature=deadbeef{disp}";
+    }
 }

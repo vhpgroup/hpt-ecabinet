@@ -31,7 +31,8 @@ import { mintLiveKitToken, rtcConfigured, rtcUrl } from './rtc.js';
 import { registerOpenApi } from './open.js';
 import {
   blobConfigured, externalizeDocumentWrite, externalizeGuideWrite,
-  inlineDocumentRead, inlineGuideRead,
+  inlineDocumentRead, inlineGuideRead, blobStore,
+  downloadMode, presignTtlSec, mimeFromKey, documentStorageKeys, guideStorageKeys,
 } from './blob.js';
 
 // GĐ4: rate-limit
@@ -416,6 +417,90 @@ app.add('POST', '/api/apikeys/:id/enable', requireAuth, requireAdmin, async (req
 // Mount /api/open/v1/... TRƯỚC CRUD chung /api/:collection (router khớp theo thứ tự).
 registerOpenApi(app);
 
+// ---------------- TỐI ƯU 1: TẢI NỘI DUNG TỆP KHÔNG QUA BASE64 ----------------
+// GET /api/documents/:id/download  và  /api/guides/:id/download
+//   - Tài liệu/guide đã externalize sang S3 (có storageKey) + S3 bật:
+//       redirect (mặc định): 302 tới presigned URL TTL ngắn -> client tải THẲNG từ S3
+//                            (backend KHÔNG nạp tệp vào RAM/băng thông — mục tiêu tối ưu).
+//       stream: backend GET bytes từ S3 rồi stream lại (khi client không tới được S3 sau proxy).
+//   - Bản ghi CŨ (dataUrl/fileData base64, không storageKey) HOẶC S3 tắt: stream base64 đã giải mã
+//     (giữ tải được, không phá tương thích) — vẫn tránh nhồi base64 vào JSON.
+// BẢO MẬT: đi qua ĐÚNG readOne() như GET document (tài liệu mật/lọc quyền bản ghi) TRƯỚC khi
+//   cấp presigned; TTL ngắn; KHÔNG log URL. Đăng ký TRƯỚC CRUD chung để không bị bắt nhầm.
+function contentDispositionAscii(name) {
+  const ascii = String(name || 'download').replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  return { ascii };
+}
+
+async function handleFileDownload(req, res, col) {
+  const table = col === 'documents' ? 'c_documents' : 'c_guides';
+  const data = await getExisting(table, req.params.id);
+  if (!data) return send(res, 404, { error: 'Không tìm thấy bản ghi' });
+  // KIỂM QUYỀN ĐỌC Y HỆT GET :id (lọc theo bản ghi — tài liệu mật/chưa duyệt -> 404).
+  const readable = await readOne(col, data, req.user);
+  if (!readable) return send(res, 404, { error: 'Không tìm thấy bản ghi' });
+
+  const name = col === 'documents' ? readable.name : (readable.fileName ?? readable.name ?? 'download');
+  const key = readable.storageKey;
+
+  // Nhánh 1: đã externalize (storageKey) + S3 bật.
+  if (key && blobStore.configured()) {
+    const mime = col === 'documents' ? (readable.mime || mimeFromKey(key)) : mimeFromKey(key);
+    if (downloadMode() === 'redirect') {
+      // 302 -> presigned URL (client tải thẳng từ S3). KHÔNG log URL (chứa chữ ký).
+      let url;
+      try {
+        url = blobStore.presignGetUrl(key, presignTtlSec(), { filename: name, contentType: mime });
+      } catch (e) {
+        return send(res, 502, { error: `Không tạo được liên kết tải tệp: ${e?.message ?? 'lỗi S3'}` });
+      }
+      res.writeHead(302, {
+        Location: url,
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': process.env.CORS_ORIGIN ?? '*',
+      });
+      return res.end();
+    }
+    // stream: backend kéo bytes rồi trả (Content-Type/Disposition/Length đúng).
+    try {
+      const bytes = await blobStore.get(key);
+      const { ascii } = contentDispositionAscii(name);
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': bytes.length,
+        'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': process.env.CORS_ORIGIN ?? '*',
+      });
+      return res.end(bytes);
+    } catch (e) {
+      return send(res, 502, { error: `Không đọc được nội dung tệp từ kho lưu trữ: ${e?.message ?? 'lỗi S3'}` });
+    }
+  }
+
+  // Nhánh 2: bản ghi cũ (base64 trong DB) hoặc S3 tắt -> giải mã base64 rồi stream.
+  const dataUrl = col === 'documents' ? readable.dataUrl : readable.fileData;
+  if (typeof dataUrl === 'string' && /^data:[^;,]*;base64,/i.test(dataUrl)) {
+    const m = /^data:([^;,]*)(;[^,]*)?,(.*)$/s.exec(dataUrl);
+    const mime = (m && m[1]) || readable.mime || 'application/octet-stream';
+    const bytes = Buffer.from(m[3], 'base64');
+    const { ascii } = contentDispositionAscii(name);
+    res.writeHead(200, {
+      'Content-Type': mime,
+      'Content-Length': bytes.length,
+      'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': process.env.CORS_ORIGIN ?? '*',
+    });
+    return res.end(bytes);
+  }
+  // Tài liệu soạn tay (content thuần) hoặc không có nội dung tệp.
+  return send(res, 404, { error: 'Tài liệu không có tệp đính kèm để tải' });
+}
+
+app.add('GET', '/api/documents/:id/download', requireAuth, (req, res) => handleFileDownload(req, res, 'documents'));
+app.add('GET', '/api/guides/:id/download', requireAuth, (req, res) => handleFileDownload(req, res, 'guides'));
+
 // ---------------- Quản trị ----------------
 app.add('POST', '/api/admin/reset', requireAuth, requireAdmin, async (req, res) => {
   await seedIfEmpty(true);
@@ -637,6 +722,20 @@ app.add('DELETE', '/api/:collection/:id', requireAuth, async (req, res) => {
   }
   await query(`DELETE FROM ${table} WHERE id = $1`, [req.params.id]);
   notifyChange(col, 'remove', req.params.id);
+  // TỐI ƯU 2: tài liệu/guide đã externalize (storageKey) + S3 bật -> DỌN object S3 mồ côi.
+  // BEST-EFFORT: chạy SAU khi xóa DB thành công; lỗi S3 chỉ LOG cảnh báo, KHÔNG ném (không
+  // để rác S3 chặn nghiệp vụ xóa). Xóa HẾT key liên quan (kể cả version cũ nếu có versions[]).
+  if ((col === 'documents' || col === 'guides') && blobStore.configured()) {
+    const keys = col === 'documents' ? documentStorageKeys(existing) : guideStorageKeys(existing);
+    for (const k of keys) {
+      try {
+        await blobStore.delete(k);
+      } catch (e) {
+        // KHÔNG log key/URL nhạy cảm quá chi tiết — chỉ đủ để vận hành lần theo.
+        console.warn(`[blob] Dọn object S3 khi xóa ${col}/${req.params.id} thất bại (bỏ qua): ${e?.message ?? e}`);
+      }
+    }
+  }
   send(res, 200, { ok: true });
 });
 

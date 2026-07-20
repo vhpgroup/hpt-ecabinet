@@ -165,6 +165,85 @@ public static class App
         try { return await Blob.InlineGuideReadAsync(guide, blob); } catch { return guide; }
     }
 
+    // TỐI ƯU 1: tải nội dung tệp KHÔNG qua base64 (port handleFileDownload của Node).
+    private static async Task HandleFileDownload(Ctx c, IDocStore store, Access access, IBlobStore blob, string col)
+    {
+        var table = col == "documents" ? "c_documents" : "c_guides";
+        var data = await store.GetByIdAsync(table, c.Params["id"]);
+        if (data is null) { await HttpUtil.SendError(c.Res, 404, "Không tìm thấy bản ghi"); return; }
+        // KIỂM QUYỀN ĐỌC Y HỆT GET :id (tài liệu mật/chưa duyệt/không thuộc phạm vi -> 404).
+        var readable = await access.ReadOne(col, data, c.User!);
+        if (readable is null) { await HttpUtil.SendError(c.Res, 404, "Không tìm thấy bản ghi"); return; }
+
+        var name = col == "documents"
+            ? J.Str(readable, "name")
+            : (J.Str(readable, "fileName") ?? J.Str(readable, "name") ?? "download");
+        var key = J.Str(readable, "storageKey");
+
+        // Nhánh 1: đã externalize (storageKey) + S3 bật.
+        if (!string.IsNullOrEmpty(key) && blob.Configured())
+        {
+            var mime = col == "documents" ? (J.Str(readable, "mime") ?? Blob.MimeFromKey(key!)) : Blob.MimeFromKey(key!);
+            if (Blob.DownloadMode() == "redirect")
+            {
+                string url;
+                try { url = blob.PresignGetUrl(key!, Blob.PresignTtlSec(), name, mime); }
+                catch (Exception e) { await HttpUtil.SendError(c.Res, 502, $"Không tạo được liên kết tải tệp: {e.Message}"); return; }
+                await SendRedirect(c.Res, url);
+                return;
+            }
+            // stream: kéo bytes rồi trả với Content-Type/Disposition/Length đúng.
+            try
+            {
+                var bytes = await blob.GetAsync(key!);
+                await SendBinary(c.Res, bytes, mime, name);
+            }
+            catch (Exception e) { await HttpUtil.SendError(c.Res, 502, $"Không đọc được nội dung tệp từ kho lưu trữ: {e.Message}"); return; }
+            return;
+        }
+
+        // Nhánh 2: bản ghi cũ (base64 trong DB) hoặc S3 tắt -> giải mã base64 rồi stream.
+        var dataUrl = col == "documents" ? J.Str(readable, "dataUrl") : J.Str(readable, "fileData");
+        if (!string.IsNullOrEmpty(dataUrl) && Blob.IsDataUri(dataUrl))
+        {
+            var (mime, bytes) = Blob.DecodeDataUri(dataUrl!);
+            var mimeOut = col == "documents" ? (J.Str(readable, "mime") ?? mime) : mime;
+            await SendBinary(c.Res, bytes, mimeOut, name);
+            return;
+        }
+        // Tài liệu soạn tay (content thuần) / không có tệp.
+        await HttpUtil.SendError(c.Res, 404, "Tài liệu không có tệp đính kèm để tải");
+    }
+
+    /// <summary>
+    /// Gửi 302 redirect tới presigned URL (TỐI ƯU 1). Ghi body RỖNG để đánh dấu response đã bắt
+    /// đầu (Res.HasStarted=true) — nếu không Router sẽ tưởng handler chưa trả và ghi đè 500.
+    /// KHÔNG log URL (chứa chữ ký cấp quyền đọc tạm thời).
+    /// </summary>
+    private static async Task SendRedirect(HttpResponse res, string url)
+    {
+        if (res.HasStarted) return;
+        res.StatusCode = 302;
+        res.Headers["Location"] = url;
+        res.Headers["Cache-Control"] = "no-store";
+        res.Headers["Access-Control-Allow-Origin"] = HttpUtil.CorsOrigin();
+        res.ContentLength = 0;
+        await res.Body.WriteAsync(Array.Empty<byte>());
+    }
+
+    /// <summary>Gửi nhị phân (attachment) với Content-Type/Disposition/Length + CORS. Dùng cho stream/base64.</summary>
+    private static async Task SendBinary(HttpResponse res, byte[] bytes, string mime, string? name)
+    {
+        if (res.HasStarted) return;
+        res.StatusCode = 200;
+        res.Headers["Access-Control-Allow-Origin"] = HttpUtil.CorsOrigin();
+        res.Headers["Content-Disposition"] = Blob.ContentDisposition(name);
+        res.Headers["Cache-Control"] = "no-store";
+        res.ContentType = string.IsNullOrEmpty(mime) ? "application/octet-stream" : mime;
+        res.ContentLength = bytes.Length;
+        await res.Body.WriteAsync(bytes);
+    }
+
     // ---------------- Router (port toàn bộ route index.js theo đúng thứ tự) ----------------
     private static Router BuildRouter(IDocStore store, IBlobStore blob)
     {
@@ -337,6 +416,15 @@ public static class App
 
         // ---------------- BỘ API CÔNG BỐ (TRƯỚC CRUD chung) ----------------
         open.Register(app);
+
+        // ---------------- TỐI ƯU 1: TẢI NỘI DUNG TỆP KHÔNG QUA BASE64 ----------------
+        // GET /api/documents/:id/download và /api/guides/:id/download (TRƯỚC CRUD chung).
+        // Kiểm quyền đọc Y HỆT GET :id (Access.ReadOne — tài liệu mật/lọc bản ghi -> 404) TRƯỚC
+        // khi cấp presigned. redirect (mặc định): 302 tới presigned URL TTL ngắn (client tải
+        // thẳng từ S3, backend 0 byte RAM). stream: backend kéo bytes rồi trả. Bản ghi cũ
+        // (base64) / S3 tắt: giải mã base64 rồi stream (giữ tải được, không phá tương thích).
+        app.Add("GET", "/api/documents/:id/download", Auth.RequireAuth, c => HandleFileDownload(c, store, access, blob, "documents"));
+        app.Add("GET", "/api/guides/:id/download", Auth.RequireAuth, c => HandleFileDownload(c, store, access, blob, "guides"));
 
         // ---------------- Quản trị ----------------
         app.Add("POST", "/api/admin/reset", Auth.RequireAuth, Auth.RequireAdmin, async c =>
@@ -562,6 +650,18 @@ public static class App
             }
             await store.DeleteAsync(table, c.Params["id"]);
             Realtime.NotifyChange(col, "remove", c.Params["id"]);
+            // TỐI ƯU 2: tài liệu/guide đã externalize (storageKey) + S3 bật -> DỌN object S3 mồ côi.
+            // BEST-EFFORT sau khi xóa DB thành công; lỗi S3 chỉ nuốt (không ném) để rác S3 không
+            // chặn nghiệp vụ xóa. Xóa HẾT key liên quan (kể cả version cũ nếu có versions[]).
+            if ((col == "documents" || col == "guides") && blob.Configured())
+            {
+                var keys = col == "documents" ? Blob.DocumentStorageKeys(existing) : Blob.GuideStorageKeys(existing);
+                foreach (var k in keys)
+                {
+                    try { await blob.DeleteAsync(k); }
+                    catch (Exception e) { Console.Error.WriteLine($"[blob] Dọn object S3 khi xóa {col}/{c.Params["id"]} thất bại (bỏ qua): {e.Message}"); }
+                }
+            }
             await HttpUtil.Send(c.Res, 200, new JsonObject { ["ok"] = true });
         });
 

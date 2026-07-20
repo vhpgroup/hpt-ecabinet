@@ -98,6 +98,19 @@ public sealed class TestApp : IAsyncDisposable
     public async Task<Resp> Send(string method, string path, string? token = null, JsonNode? body = null, IDictionary<string, string>? headers = null)
         => await Read(await Client.SendAsync(Build(method, path, token, body, headers)));
 
+    /// <summary>
+    /// Gửi KHÔNG tự đi theo redirect (dùng kiểm 302 -> presigned URL của TỐI ƯU 1).
+    /// Server.CreateHandler() KHÔNG bọc RedirectHandler nên 302 được trả nguyên (không follow
+    /// tới host S3 giả không tồn tại). Trả cả Location header.
+    /// </summary>
+    public async Task<Resp> SendNoRedirect(string method, string path, string? token = null, IDictionary<string, string>? headers = null)
+    {
+        using var client = new HttpClient(_host.GetTestServer().CreateHandler());
+        client.BaseAddress = new Uri("http://localhost");
+        var req = Build(method, path, token, null, headers);
+        return await Read(await client.SendAsync(req));
+    }
+
     public Task<Resp> Get(string path, string? token = null) => Send("GET", path, token);
     public Task<Resp> Post(string path, JsonNode? body = null, string? token = null) => Send("POST", path, token, body);
     public Task<Resp> Patch(string path, JsonNode? body = null, string? token = null) => Send("PATCH", path, token, body);

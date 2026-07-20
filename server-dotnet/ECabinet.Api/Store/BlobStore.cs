@@ -24,6 +24,13 @@ public interface IBlobStore
     Task PutAsync(string key, byte[] bytes, string? contentType);
     Task<byte[]> GetAsync(string key);
     Task DeleteAsync(string key);
+
+    /// <summary>
+    /// TỐI ƯU 1 — presigned GET URL TTL ngắn để client tải THẲNG từ S3 (không nạp RAM backend).
+    /// filename -> gắn response-content-disposition=attachment (tải đúng tên, kể cả tiếng Việt).
+    /// KHÔNG I/O (chỉ ký). Ném nếu S3 chưa cấu hình (điểm gọi đã kiểm Configured() trước).
+    /// </summary>
+    string PresignGetUrl(string key, int ttlSec = 300, string? filename = null, string? contentType = null);
 }
 
 /// <summary>Cấu hình S3 đọc từ env (parity s3Config của Node).</summary>
@@ -51,6 +58,11 @@ public sealed record S3Config(
 public sealed record SigV4Result(
     string Authorization, string AmzDate, string SignedHeaders,
     string CanonicalRequest, string StringToSign, string Signature);
+
+/// <summary>Kết quả 1 lần ký PRESIGNED URL (đủ trường để round-trip assert).</summary>
+public sealed record PresignResult(
+    string Url, string AmzDate, string Signature, string CanonicalRequest,
+    string StringToSign, string CanonicalQuery, int Expires);
 
 /// <summary>Hàm SigV4 thuần + tách/dựng data URI thuần (test không cần mạng).</summary>
 public static class Blob
@@ -205,6 +217,103 @@ public static class Blob
         return new SigV4Result(authorization, amzDate, signedHeaders, canonicalRequest, stringToSign, signature);
     }
 
+    /// <summary>
+    /// Ký PRESIGNED URL (SigV4 query-string). THUẦN (không I/O) -> round-trip test được.
+    /// Khác header-based: credential/date/expires/signed-headers nằm trong QUERY (X-Amz-*),
+    /// payloadHash = 'UNSIGNED-PAYLOAD', CHỈ ký host. Port presignV4 (blob.js). Parity BYTE.
+    /// </summary>
+    public static PresignResult PresignV4(
+        string method, string href, string host, string canonicalUri, int expiresSec,
+        IDictionary<string, string>? extraQuery,
+        string accessKey, string secretKey, string region, string service, DateTime date)
+    {
+        var (amzDate, dateStamp) = AmzDates(date);
+        var expires = Math.Max(1, Math.Min(604800, expiresSec));
+        var scope = $"{dateStamp}/{region}/{service}/aws4_request";
+        const string signedHeaders = "host";
+        var canonicalHeaders = $"host:{host.Trim()}\n";
+
+        var query = new Dictionary<string, string>
+        {
+            ["X-Amz-Algorithm"] = "AWS4-HMAC-SHA256",
+            ["X-Amz-Credential"] = $"{accessKey}/{scope}",
+            ["X-Amz-Date"] = amzDate,
+            ["X-Amz-Expires"] = expires.ToString(CultureInfo.InvariantCulture),
+            ["X-Amz-SignedHeaders"] = signedHeaders,
+        };
+        if (extraQuery != null) foreach (var kv in extraQuery) query[kv.Key] = kv.Value;
+
+        var canonicalQuery = string.Join("&", query
+            .Select(kv => (k: UriEncode(kv.Key), v: UriEncode(kv.Value)))
+            .OrderBy(p => p.k, StringComparer.Ordinal)
+            .Select(p => $"{p.k}={p.v}"));
+
+        var canonicalRequest = string.Join("\n", new[]
+        {
+            method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, "UNSIGNED-PAYLOAD",
+        });
+        var stringToSign = string.Join("\n", new[]
+        {
+            "AWS4-HMAC-SHA256", amzDate, scope, Sha256Hex(Encoding.UTF8.GetBytes(canonicalRequest)),
+        });
+        var key = SigningKey(secretKey, dateStamp, region, service);
+        var signature = Convert.ToHexString(Hmac(key, stringToSign)).ToLowerInvariant();
+        var url = $"{href}?{canonicalQuery}&X-Amz-Signature={signature}";
+        return new PresignResult(url, amzDate, signature, canonicalRequest, stringToSign, canonicalQuery, expires);
+    }
+
+    // ---------------- TỐI ƯU 1/2 — cấu hình tải + gom khóa dọn (thuần) ----------------
+    /// <summary>
+    /// Chế độ tải tệp có storageKey khi S3 bật: "redirect" (mặc định, 302 tới presigned —
+    /// client tải thẳng từ S3, backend 0 byte RAM) | "stream" (backend kéo bytes rồi trả).
+    /// Env S3_DOWNLOAD_MODE (parity downloadMode() của Node).
+    /// </summary>
+    public static string DownloadMode()
+        => (Environment.GetEnvironmentVariable("S3_DOWNLOAD_MODE") ?? "redirect").ToLowerInvariant() == "stream" ? "stream" : "redirect";
+
+    /// <summary>TTL (giây) presigned URL — env S3_PRESIGN_TTL, mặc định 300, kẹp 1..604800.</summary>
+    public static int PresignTtlSec()
+    {
+        var raw = Environment.GetEnvironmentVariable("S3_PRESIGN_TTL");
+        if (int.TryParse(raw, out var n)) return Math.Max(1, Math.Min(604800, n));
+        return 300;
+    }
+
+    /// <summary>
+    /// TỐI ƯU 2 — gom TẤT CẢ khóa S3 cần dọn khi XÓA 1 tài liệu: storageKey hiện tại +
+    /// storageKey của mỗi version cũ (versions[]). Loại trùng/rỗng. Port documentStorageKeys.
+    /// </summary>
+    public static List<string> DocumentStorageKeys(JsonObject? doc)
+    {
+        var keys = new List<string>();
+        if (doc is null) return keys;
+        void Add(string? k) { if (!string.IsNullOrEmpty(k) && !keys.Contains(k)) keys.Add(k!); }
+        Add(J.Str(doc, "storageKey"));
+        if (J.Arr(doc, "versions") is JsonArray versions)
+            foreach (var v in versions.OfType<JsonObject>()) Add(J.Str(v, "storageKey"));
+        return keys;
+    }
+
+    /// <summary>TỐI ƯU 2 — khóa S3 của 1 guide (0/1 phần tử). Port guideStorageKeys.</summary>
+    public static List<string> GuideStorageKeys(JsonObject? guide)
+    {
+        var k = guide is null ? null : J.Str(guide, "storageKey");
+        return string.IsNullOrEmpty(k) ? new List<string>() : new List<string> { k! };
+    }
+
+    /// <summary>
+    /// TỐI ƯU 1 — dựng response-content-disposition=attachment với ASCII fallback + filename*
+    /// UTF-8 (RFC 5987/6266) để tải đúng tên tiếng Việt. Dùng chung presign + stream.
+    /// </summary>
+    public static string ContentDisposition(string? name)
+    {
+        var raw = string.IsNullOrEmpty(name) ? "download" : name!;
+        var sb = new StringBuilder();
+        foreach (var ch in raw)
+            sb.Append(ch is >= (char)0x20 and <= (char)0x7E && ch is not '"' and not '\\' ? ch : '_');
+        return $"attachment; filename=\"{sb}\"; filename*=UTF-8''{UriEncode(raw)}";
+    }
+
     // ---------------- Tách / dựng (thuần, bơm store để test) ----------------
     /// <summary>Ghi document: S3 bật + có dataUrl base64 -> PUT S3, set storageKey/size, xóa dataUrl (đột biến tại chỗ).</summary>
     public static async Task<JsonObject> ExternalizeDocumentWriteAsync(JsonObject doc, IBlobStore store)
@@ -337,5 +446,17 @@ public sealed class S3BlobStore : IBlobStore
         using var res = await Http.SendAsync(req);
         if (!res.IsSuccessStatusCode && (int)res.StatusCode != 404)
             throw new Exception($"S3 DELETE {key} thất bại: {(int)res.StatusCode}");
+    }
+
+    public string PresignGetUrl(string key, int ttlSec = 300, string? filename = null, string? contentType = null)
+    {
+        var cfg = S3Config.FromEnv() ?? throw new Exception("S3 chưa cấu hình");
+        var (host, canonicalUri, href) = Target(cfg, key);
+        var extra = new Dictionary<string, string>();
+        if (!string.IsNullOrEmpty(filename)) extra["response-content-disposition"] = Blob.ContentDisposition(filename);
+        if (!string.IsNullOrEmpty(contentType)) extra["response-content-type"] = contentType!;
+        var r = Blob.PresignV4("GET", href, host, canonicalUri, ttlSec, extra,
+            cfg.AccessKey, cfg.SecretKey, cfg.Region, cfg.Service, DateTime.UtcNow);
+        return r.Url; // KHÔNG log URL (chứa chữ ký cấp quyền đọc tạm thời)
     }
 }

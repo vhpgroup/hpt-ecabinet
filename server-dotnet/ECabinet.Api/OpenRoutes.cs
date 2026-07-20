@@ -473,15 +473,34 @@ public sealed class OpenRoutes
 
                 var accessors = await LoadAccessors();
                 var outp = r.Fn(c, accessors);
-                // Tách file (GĐ3): endpoint nội dung tài liệu — nếu đã externalize sang S3
-                // (storageKey) và chưa có dataUrl, dựng lại dataUrl từ S3 cho LGSP; LUÔN xóa
-                // storageKey khỏi phản hồi (khóa S3 nội bộ, không lộ ra bên thứ 3).
+                // Tách file (GĐ3 + TỐI ƯU 1): endpoint nội dung tài liệu. storageKey NỘI BỘ — LUÔN
+                // xóa khỏi phản hồi (không lộ khóa S3). Lọc quyền (IsPublishableDoc: đã duyệt + KHÔNG
+                // mật) đã chạy trong hàm thuần TRƯỚC -> tài liệu mật vẫn 404, chưa cấp gì.
                 if (outp.Status == 200 && outp.Body is JsonObject ob && ob.ContainsKey("storageKey"))
                 {
                     var key = J.Str(ob, "storageKey");
                     ob.Remove("storageKey");
                     if (!string.IsNullOrEmpty(key) && J.Str(ob, "dataUrl") is null && _blob.Configured())
                     {
+                        // redirect (mặc định): 302 tới presigned URL, LGSP tải THẲNG từ S3 (backend 0
+                        // byte RAM). stream: dựng lại dataUrl JSON như cũ (giữ spec dataUrl / môi
+                        // trường không cho client tới S3 trực tiếp).
+                        if (Blob.DownloadMode() == "redirect")
+                        {
+                            try
+                            {
+                                var url = _blob.PresignGetUrl(key!, Blob.PresignTtlSec(), J.Str(ob, "name"), J.Str(ob, "mime") ?? Blob.MimeFromKey(key!));
+                                // Ghi body RỖNG để đánh dấu response đã bắt đầu (tránh Router ghi đè 500).
+                                c.Res.StatusCode = 302;
+                                c.Res.Headers["Location"] = url; // KHÔNG log URL (chứa chữ ký)
+                                c.Res.Headers["Cache-Control"] = "no-store";
+                                c.Res.Headers["Access-Control-Allow-Origin"] = "*";
+                                c.Res.ContentLength = 0;
+                                await c.Res.Body.WriteAsync(Array.Empty<byte>());
+                                return;
+                            }
+                            catch { await SendOpen(c.Res, 502, new JsonObject { ["error"] = "Không tạo được liên kết tải tệp từ kho lưu trữ" }); return; }
+                        }
                         try
                         {
                             var bytes = await _blob.GetAsync(key!);

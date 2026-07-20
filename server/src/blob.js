@@ -141,6 +141,65 @@ export function signingKey(secretKey, dateStamp, region, service) {
 }
 
 /**
+ * Ký PRESIGNED URL (SigV4 query-string). HÀM THUẦN (không I/O) -> test vector/round-trip được.
+ * Khác header-based: credential/date/expires/signed-headers nằm trong QUERY (X-Amz-*),
+ * payloadHash cố định 'UNSIGNED-PAYLOAD' (client GET không gửi body), CHỈ ký host (đủ & chuẩn
+ * cho presigned GET). Trả URL đầy đủ + các trường trung gian để test assert.
+ *
+ * Tham chiếu: docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+ * @param {object} o
+ *   method (thường 'GET'), href (URL đầy đủ chưa ký), host, canonicalUri (path đã encode giữ '/'),
+ *   expiresSec (TTL giây, kẹp 1..604800), accessKey, secretKey, region, service, date(Date),
+ *   extraQuery{} (tùy chọn — vd response-content-disposition).
+ * @returns {{ url, amzDate, signature, canonicalRequest, stringToSign, canonicalQuery, expires }}
+ */
+export function presignV4(o) {
+  const { amzDate, dateStamp } = amzDates(o.date);
+  const expires = Math.max(1, Math.min(604800, Math.floor(o.expiresSec ?? 300)));
+  const scope = `${dateStamp}/${o.region}/${o.service}/aws4_request`;
+  // CHỈ ký host (SignedHeaders=host) — chuẩn tối thiểu cho presigned GET.
+  const signedHeaders = 'host';
+  const canonicalHeaders = `host:${String(o.host).trim()}\n`;
+
+  // Query PHẢI gồm các tham số ký; sort theo key đã encode (giống canonical query header-based).
+  const query = {
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${o.accessKey}/${scope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expires),
+    'X-Amz-SignedHeaders': signedHeaders,
+    ...(o.extraQuery ?? {}),
+  };
+  const canonicalQuery = Object.keys(query)
+    .map((k) => [uriEncode(k), uriEncode(query[k])])
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([k, v]) => `${k}=${v}`)
+    .join('&');
+
+  const canonicalRequest = [
+    o.method ?? 'GET',
+    o.canonicalUri,
+    canonicalQuery,
+    canonicalHeaders,
+    signedHeaders,
+    'UNSIGNED-PAYLOAD',
+  ].join('\n');
+
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    scope,
+    sha256hex(canonicalRequest),
+  ].join('\n');
+
+  const key = signingKey(o.secretKey, dateStamp, o.region, o.service);
+  const signature = crypto.createHmac('sha256', key).update(stringToSign, 'utf8').digest('hex');
+
+  const url = `${o.href}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+  return { url, amzDate, signature, canonicalRequest, stringToSign, canonicalQuery, expires };
+}
+
+/**
  * Ký 1 request S3 (SigV4, header-based). HÀM THUẦN (không I/O) -> test vector được.
  * @param {object} o
  *   method, canonicalUri (đã là path tuyệt đối, vd '/bucket/key'), query{},
@@ -274,6 +333,34 @@ export const blobStore = {
       throw new Error(`S3 DELETE ${key} thất bại: ${res.status}`);
     }
   },
+
+  /**
+   * TỐI ƯU 1 — presigned GET URL TTL ngắn để client tải THẲNG từ S3 (không nạp vào RAM
+   * backend). KHÔNG I/O (chỉ ký) — nhanh. ttlSec mặc định 300s. opts.filename -> gắn
+   * response-content-disposition=attachment để trình duyệt tải đúng tên (S3 áp header này).
+   * KHÔNG log URL (chứa chữ ký cấp quyền đọc tạm thời). Ném nếu S3 chưa cấu hình (điểm gọi
+   * đã kiểm configured() trước).
+   */
+  presignGetUrl(key, ttlSec = 300, opts = {}) {
+    const cfg = s3Config();
+    if (!cfg) throw new Error('S3 chưa cấu hình');
+    const { host, canonicalUri, href } = s3Target(cfg, key);
+    const extraQuery = {};
+    if (opts.filename) {
+      // RFC 5987/6266: ASCII fallback + filename* UTF-8 (tên tiếng Việt tải đúng).
+      const ascii = String(opts.filename).replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+      extraQuery['response-content-disposition'] =
+        `attachment; filename="${ascii}"; filename*=UTF-8''${uriEncode(opts.filename)}`;
+    }
+    if (opts.contentType) extraQuery['response-content-type'] = opts.contentType;
+    const { url } = presignV4({
+      method: 'GET', href, host, canonicalUri,
+      expiresSec: ttlSec, extraQuery,
+      accessKey: cfg.accessKey, secretKey: cfg.secretKey,
+      region: cfg.region, service: cfg.service, date: new Date(),
+    });
+    return url;
+  },
 };
 
 // ============================================================
@@ -339,8 +426,49 @@ export async function inlineGuideRead(guide, store = blobStore) {
   return out;
 }
 
-function mimeFromKey(key) {
+export function mimeFromKey(key) {
   const ext = /\.([a-zA-Z0-9]+)$/.exec(String(key))?.[1]?.toLowerCase();
   const map = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', txt: 'text/plain', zip: 'application/zip' };
   return map[ext] ?? 'application/octet-stream';
+}
+
+/**
+ * TỐI ƯU 1 — chế độ tải tệp có storageKey khi S3 bật:
+ *   'redirect' (mặc định): 302 tới presigned URL — client tải THẲNG từ S3, backend 0 byte RAM.
+ *   'stream': backend GET bytes từ S3 rồi stream lại (dùng khi client KHÔNG tới được endpoint
+ *             S3 trực tiếp — vd MinIO chỉ trong mạng nội bộ docker sau proxy).
+ * Đọc động từ env S3_DOWNLOAD_MODE (parity 2 backend).
+ */
+export function downloadMode() {
+  return String(process.env.S3_DOWNLOAD_MODE ?? 'redirect').toLowerCase() === 'stream' ? 'stream' : 'redirect';
+}
+
+/** TTL (giây) cho presigned URL tải tệp — env S3_PRESIGN_TTL, mặc định 300, kẹp 1..604800. */
+export function presignTtlSec() {
+  const n = Math.floor(Number(process.env.S3_PRESIGN_TTL ?? 300));
+  return Number.isFinite(n) ? Math.max(1, Math.min(604800, n)) : 300;
+}
+
+/**
+ * TỐI ƯU 2 — gom TẤT CẢ khóa S3 cần dọn khi XÓA 1 tài liệu. Bản ghi lưu `storageKey`
+ * (khóa version HIỆN TẠI). Nếu tài liệu có LỊCH SỬ version (mảng `versions[]` — E-HSMT
+ * versioning), mỗi phần tử có thể mang `storageKey` riêng (các version cũ KHÔNG đè nhau vì
+ * key theo v<version>). Trả mảng key DUY NHẤT (loại trùng/rỗng). HÀM THUẦN, test được.
+ */
+export function documentStorageKeys(doc) {
+  if (!doc || typeof doc !== 'object') return [];
+  const keys = new Set();
+  if (typeof doc.storageKey === 'string' && doc.storageKey) keys.add(doc.storageKey);
+  if (Array.isArray(doc.versions)) {
+    for (const v of doc.versions) {
+      if (v && typeof v.storageKey === 'string' && v.storageKey) keys.add(v.storageKey);
+    }
+  }
+  return [...keys];
+}
+
+/** TỐI ƯU 2 — khóa S3 của 1 guide (chỉ 1 tệp/guide). Trả mảng (0 hoặc 1 phần tử). */
+export function guideStorageKeys(guide) {
+  return guide && typeof guide === 'object' && typeof guide.storageKey === 'string' && guide.storageKey
+    ? [guide.storageKey] : [];
 }

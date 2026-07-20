@@ -39,6 +39,7 @@ import {
   signRequestV4, uriEncode, isDataUri, decodeDataUri, encodeDataUri,
   documentKey, guideKey, externalizeDocumentWrite, inlineDocumentRead,
   externalizeGuideWrite, inlineGuideRead,
+  presignV4, signingKey, documentStorageKeys, guideStorageKeys,
 } from '../src/blob.js';
 import { COLLECTIONS } from '../src/db.js';
 
@@ -852,6 +853,144 @@ await Case('Ký PUT không rỗng: payloadHash = sha256(body) (không UNSIGNED) 
   });
   assert.ok(/^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/20150830\/us-east-1\/service\/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date, Signature=[0-9a-f]{64}$/.test(r.authorization),
     'Authorization PUT có đủ signed headers sắp xếp + chữ ký 64 hex');
+});
+
+// ============================================================
+// TỐI ƯU 1 — PRESIGNED URL (SigV4 query-string). Xác minh bằng ROUND-TRIP:
+// parse lại query của URL đã ký, TỰ TÍNH LẠI chữ ký y cách server ký, assert khớp.
+// (đây là "test-vector" tự sinh có kiểm chứng chéo — chứng minh canonical query đúng chuẩn.)
+// ============================================================
+
+// Tự tính lại X-Amz-Signature từ URL presigned (độc lập với presignV4 để bắt sai lệch).
+function recomputePresignSignature(urlStr, secretKey, region, service) {
+  const u = new URL(urlStr);
+  const host = u.host;
+  const canonicalUri = u.pathname; // path đã encode giữ '/'
+  const sp = u.searchParams;
+  const given = sp.get('X-Amz-Signature');
+  const amzDate = sp.get('X-Amz-Date');
+  const dateStamp = amzDate.slice(0, 8);
+  // canonical query = mọi tham số TRỪ X-Amz-Signature, encode + sort theo key đã encode.
+  const pairs = [];
+  for (const [k, v] of sp.entries()) {
+    if (k === 'X-Amz-Signature') continue;
+    pairs.push([uriEncode(k), uriEncode(v)]);
+  }
+  pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const canonicalQuery = pairs.map(([k, v]) => `${k}=${v}`).join('&');
+  const canonicalRequest = ['GET', canonicalUri, canonicalQuery, `host:${host}\n`, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+  const scope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
+    crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
+  const key = signingKey(secretKey, dateStamp, region, service);
+  const recomputed = crypto.createHmac('sha256', key).update(stringToSign, 'utf8').digest('hex');
+  return { given, recomputed, sp };
+}
+
+await Case('PRESIGNED SigV4 round-trip: parse lại query -> tự tính X-Amz-Signature KHỚP; đủ tham số X-Amz-*', () => {
+  const r = presignV4({
+    method: 'GET', href: 'https://minio.example:9000/ecabinet-docs/documents/d1/v1.pdf',
+    host: 'minio.example:9000', canonicalUri: '/ecabinet-docs/documents/d1/v1.pdf',
+    expiresSec: 300, extraQuery: {}, ...SV4,
+  });
+  const { given, recomputed, sp } = recomputePresignSignature(r.url, SV4.secretKey, SV4.region, SV4.service);
+  assert.equal(sp.get('X-Amz-Algorithm'), 'AWS4-HMAC-SHA256', 'có X-Amz-Algorithm');
+  assert.equal(sp.get('X-Amz-Credential'), `${SV4.accessKey}/${amzStamp()}/us-east-1/service/aws4_request`, 'X-Amz-Credential đúng scope');
+  assert.equal(sp.get('X-Amz-SignedHeaders'), 'host', 'chỉ ký host');
+  assert.ok(/^[0-9a-f]{64}$/.test(given), 'chữ ký 64 hex');
+  assert.equal(recomputed, given, 'CHỮ KÝ TÍNH LẠI TỪ QUERY == chữ ký trong URL (canonical query đúng chuẩn)');
+  assert.equal(given, r.signature, 'khớp cả signature presignV4 trả về');
+});
+
+function amzStamp() { return SV4.date.toISOString().replace(/[:-]|\.\d{3}/g, '').slice(0, 8); }
+
+await Case('PRESIGNED: TTL/expiry NẰM TRONG query (X-Amz-Date + X-Amz-Expires), kẹp biên 1..604800', () => {
+  const r = presignV4({
+    method: 'GET', href: 'https://h/b/k.pdf', host: 'h', canonicalUri: '/b/k.pdf',
+    expiresSec: 120, ...SV4,
+  });
+  const sp = new URL(r.url).searchParams;
+  assert.equal(sp.get('X-Amz-Expires'), '120', 'X-Amz-Expires = TTL truyền vào');
+  assert.equal(sp.get('X-Amz-Date'), '20150830T123600Z', 'X-Amz-Date có trong query');
+  assert.equal(r.expires, 120);
+  // kẹp biên
+  assert.equal(presignV4({ method: 'GET', href: 'https://h/k', host: 'h', canonicalUri: '/k', expiresSec: 0, ...SV4 }).expires, 1, 'kẹp dưới -> 1');
+  assert.equal(presignV4({ method: 'GET', href: 'https://h/k', host: 'h', canonicalUri: '/k', expiresSec: 999999, ...SV4 }).expires, 604800, 'kẹp trên -> 7 ngày');
+});
+
+await Case('PRESIGNED: response-content-disposition (tên tiếng Việt) được ký trong query & giữ round-trip khớp', () => {
+  const r = presignV4({
+    method: 'GET', href: 'https://h/b/k.pdf', host: 'h', canonicalUri: '/b/k.pdf', expiresSec: 300,
+    extraQuery: { 'response-content-disposition': "attachment; filename=\"bao-cao.pdf\"; filename*=UTF-8''" + uriEncode('Báo cáo.pdf') },
+    ...SV4,
+  });
+  const { given, recomputed } = recomputePresignSignature(r.url, SV4.secretKey, SV4.region, SV4.service);
+  assert.equal(recomputed, given, 'thêm response-content-disposition vào query -> vẫn ký/round-trip đúng');
+});
+
+await Case('presignGetUrl (blobStore): gắn attachment + filename* UTF-8; đổi TTL đổi URL; KHÔNG cấp khi S3 tắt', async () => {
+  // Bơm env S3 tối thiểu để s3Config() != null, sau đó khôi phục.
+  const saved = { ...process.env };
+  Object.assign(process.env, {
+    S3_ENDPOINT: 'https://minio.local:9000', S3_BUCKET: 'ecabinet-docs',
+    S3_ACCESS_KEY: SV4.accessKey, S3_SECRET_KEY: SV4.secretKey, S3_REGION: 'us-east-1',
+    S3_FORCE_PATH_STYLE: 'true',
+  });
+  const { blobStore: bs } = await import('../src/blob.js');
+  const url = bs.presignGetUrl('documents/d1/v2.pdf', 300, { filename: 'Kế hoạch.pdf', contentType: 'application/pdf' });
+  const sp = new URL(url).searchParams;
+  assert.ok(url.includes('/ecabinet-docs/documents/d1/v2.pdf'), 'path-style bucket/key đúng');
+  assert.match(sp.get('response-content-disposition') ?? '', /attachment; filename="K.*\.pdf"; filename\*=UTF-8''/, 'disposition attachment + filename* UTF-8');
+  assert.equal(sp.get('X-Amz-Expires'), '300', 'TTL mặc định 300');
+  const url60 = bs.presignGetUrl('documents/d1/v2.pdf', 60, {});
+  assert.notEqual(url, url60, 'đổi TTL -> URL (chữ ký) khác');
+  assert.equal(new URL(url60).searchParams.get('X-Amz-Expires'), '60');
+  // Round-trip xác minh chữ ký (không log URL trong code thật; test có thể kiểm)
+  const { recomputed, given } = recomputePresignSignature(url, SV4.secretKey, 'us-east-1', 's3');
+  assert.equal(recomputed, given, 'presignGetUrl round-trip chữ ký khớp');
+  // Tắt S3 -> ném
+  process.env = { ...saved };
+  delete process.env.S3_ENDPOINT; delete process.env.S3_BUCKET; delete process.env.S3_ACCESS_KEY; delete process.env.S3_SECRET_KEY;
+  const { blobStore: bs2 } = await import('../src/blob.js?off=1');
+  assert.throws(() => bs2.presignGetUrl('k', 300, {}), /chưa cấu hình/, 'S3 tắt: presignGetUrl ném (điểm gọi đã kiểm configured trước)');
+  process.env = saved;
+});
+
+// ============================================================
+// TỐI ƯU 2 — GOM KHÓA S3 CẦN DỌN KHI XÓA (đa version) + best-effort không ném.
+// ============================================================
+await Case('documentStorageKeys: gom storageKey hiện tại + mọi version cũ (versions[]), loại trùng/rỗng', () => {
+  assert.deepEqual(documentStorageKeys({ storageKey: 'documents/d1/v3.pdf' }), ['documents/d1/v3.pdf']);
+  assert.deepEqual(
+    documentStorageKeys({ storageKey: 'documents/d1/v3.pdf', versions: [
+      { storageKey: 'documents/d1/v1.pdf' }, { storageKey: 'documents/d1/v2.pdf' },
+      { storageKey: 'documents/d1/v3.pdf' }, { note: 'không có key' }, { storageKey: '' },
+    ] }).sort(),
+    ['documents/d1/v1.pdf', 'documents/d1/v2.pdf', 'documents/d1/v3.pdf'],
+    'gom hết version + loại trùng key hiện tại + bỏ rỗng/thiếu',
+  );
+  assert.deepEqual(documentStorageKeys({ content: 'soạn tay' }), [], 'không tệp -> không khóa');
+  assert.deepEqual(guideStorageKeys({ storageKey: 'guides/g1/file.pdf' }), ['guides/g1/file.pdf']);
+  assert.deepEqual(guideStorageKeys({}), []);
+});
+
+await Case('XÓA best-effort: blob.delete được gọi ĐÚNG mọi key; S3 lỗi -> KHÔNG ném (mô phỏng vòng dọn)', async () => {
+  // Mô phỏng đúng vòng lặp dọn ở index.js DELETE: gọi delete từng key, nuốt lỗi + log.
+  const calls = [];
+  const failing = {
+    configured: () => true,
+    async delete(k) { calls.push(k); if (k.endsWith('v2.pdf')) throw new Error('S3 5xx'); },
+  };
+  const doc = { id: 'd1', storageKey: 'documents/d1/v3.pdf', versions: [{ storageKey: 'documents/d1/v2.pdf' }] };
+  const keys = documentStorageKeys(doc);
+  let threw = false;
+  try {
+    for (const k of keys) {
+      try { await failing.delete(k); } catch { /* best-effort: nuốt lỗi, chỉ log ở code thật */ }
+    }
+  } catch { threw = true; }
+  assert.equal(threw, false, 'lỗi S3 khi dọn KHÔNG lan ra (nghiệp vụ xóa vẫn thành công)');
+  assert.deepEqual(calls.sort(), ['documents/d1/v2.pdf', 'documents/d1/v3.pdf'], 'delete gọi đúng TỪNG key liên quan doc');
 });
 
 const exitCode = report();

@@ -19,7 +19,7 @@ import crypto from 'node:crypto';
 import { query } from './db.js';
 import { hit } from './ratelimit.js';
 import { buildOpenApiSpec, OPEN_API_VERSION, SERVICE_NAME } from './openapi.js';
-import { blobStore, encodeDataUri } from './blob.js';
+import { blobStore, encodeDataUri, downloadMode, presignTtlSec, mimeFromKey } from './blob.js';
 
 const sha256 = (t) => crypto.createHash('sha256').update(String(t), 'utf8').digest('hex');
 
@@ -426,13 +426,28 @@ export function registerOpenApi(app) {
 
     const accessors = await loadAccessors();
     const out = route.fn(req.params, req.query, accessors);
-    // Tách file (GĐ3): endpoint nội dung tài liệu — nếu đã externalize sang S3
-    // (storageKey) và chưa có dataUrl, dựng lại dataUrl từ S3 cho LGSP; LUÔN xóa
-    // storageKey khỏi phản hồi (khóa S3 là nội bộ, không lộ ra bên thứ 3).
+    // Tách file (GĐ3 + TỐI ƯU 1): endpoint nội dung tài liệu. storageKey NỘI BỘ — LUÔN xóa
+    // khỏi phản hồi (không lộ khóa S3 ra bên thứ 3). Lọc quyền (isPublishableDoc: đã duyệt +
+    // KHÔNG mật) đã chạy trong hàm thuần TRƯỚC bước này -> tài liệu mật vẫn 404, chưa cấp gì.
     if (out.status === 200 && out.body && 'storageKey' in out.body) {
       const key = out.body.storageKey;
       delete out.body.storageKey;
       if (key && !out.body.dataUrl && blobStore.configured()) {
+        // TỐI ƯU 1 — redirect (mặc định): 302 tới presigned URL, LGSP tải THẲNG từ S3
+        // (backend KHÔNG nạp tệp vào RAM). stream: dựng lại dataUrl JSON như cũ (tương thích
+        // môi trường không cho client tới S3 trực tiếp / giữ đúng spec dataUrl đã công bố).
+        if (downloadMode() === 'redirect') {
+          try {
+            const url = blobStore.presignGetUrl(key, presignTtlSec(), {
+              filename: out.body.name, contentType: out.body.mime || mimeFromKey(key),
+            });
+            if (res.writableEnded) return;
+            res.writeHead(302, { Location: url, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
+            return res.end(); // KHÔNG log URL (chứa chữ ký)
+          } catch {
+            return sendOpen(res, 502, { error: 'Không tạo được liên kết tải tệp từ kho lưu trữ' });
+          }
+        }
         try {
           const bytes = await blobStore.get(key);
           out.body.dataUrl = encodeDataUri(bytes, out.body.mime);
