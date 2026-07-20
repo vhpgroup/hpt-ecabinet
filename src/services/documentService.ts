@@ -40,9 +40,12 @@ function defaultReviewStatus(actor: User, kind: DocKind): DocFile['reviewStatus'
   if (kind === 'personal') return 'approved';
   return can.manageMeetings(actor) ? 'approved' : 'draft';
 }
-// Chế độ máy chủ (GĐ2): 15MB; chế độ cục bộ: 1,5MB (hạn mức lưu trữ tại trình duyệt)
-const MAX_UPLOAD = db.remote ? 15 * 1024 * 1024 : 1.5 * 1024 * 1024;
-const MAX_UPLOAD_LABEL = db.remote ? '15MB' : '1,5MB (chế độ cục bộ, chưa kết nối máy chủ)';
+// Chế độ máy chủ: 25MB — THỐNG NHẤT với giới hạn backend (nginx client_max_body_size 25m
+// + readBody 25MB ở Node/util.js và HttpUtil bản .NET). Trước đây FE chặn sớm ở 15MB gây
+// lệch với backend 25MB (báo cáo ra-soát 2026-07-20 mục 2.3) — nay chốt 1 con số 25MB.
+// Chế độ cục bộ: 1,5MB (hạn mức lưu trữ tại trình duyệt, không liên quan backend).
+const MAX_UPLOAD = db.remote ? 25 * 1024 * 1024 : 1.5 * 1024 * 1024;
+const MAX_UPLOAD_LABEL = db.remote ? '25MB' : '1,5MB (chế độ cục bộ, chưa kết nối máy chủ)';
 
 /** VNPT: "Thông báo khi có các tài liệu mới cần xử lý" */
 async function notifyNewMeetingDoc(actor: User, doc: DocFile) {

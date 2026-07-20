@@ -43,8 +43,12 @@ public sealed class TestApp : IAsyncDisposable
         Client = host.GetTestClient();
     }
 
-    /// <summary>Tạo harness mới: store InMemory sạch (đã seed). Rate-limit là static -> reset để không rò giữa nhóm.</summary>
-    public static async Task<TestApp> CreateAsync()
+    /// <summary>Kho blob dùng cho harness (tách file GĐ3); null -> S3BlobStore mặc định (S3 tắt trong test).</summary>
+    public IBlobStore? Blob { get; private set; }
+
+    /// <summary>Tạo harness mới: store InMemory sạch (đã seed). Rate-limit là static -> reset để không rò giữa nhóm.
+    /// blob (OPTIONAL): bơm kho blob giả để test tách/dựng file end-to-end (round-trip) không cần S3 thật.</summary>
+    public static async Task<TestApp> CreateAsync(IBlobStore? blob = null)
     {
         RateLimit.Reset();
         var store = new InMemoryDocStore();
@@ -60,10 +64,10 @@ public sealed class TestApp : IAsyncDisposable
                     s.AddSingleton(store);
                     s.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
                 });
-                web.Configure(app => App.ConfigurePipeline(app, store));
+                web.Configure(app => App.ConfigurePipeline(app, store, blob));
             })
             .StartAsync();
-        return new TestApp(host, store);
+        return new TestApp(host, store) { Blob = blob };
     }
 
     public async ValueTask DisposeAsync()

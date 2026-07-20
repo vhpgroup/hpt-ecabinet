@@ -252,6 +252,55 @@ Rồi:
 - **Bản demo nhúng (sandbox/iframe) vẫn là mô phỏng**: môi trường phát triển nhúng chặn `getUserMedia`; do đó video đa điểm cầu **không** kiểm thử được trong sandbox — chỉ chạy thật khi triển khai có LiveKit + trình duyệt cho phép camera.
 - Backend **không thêm dependency npm**: access token LiveKit được tự ký (JWT HS256) bằng `node:crypto` trong `server/src/rtc.js`.
 
+## 6.1. Lưu trữ tệp — Object storage MinIO/S3 (tách base64 khỏi DB)
+
+Theo mô hình **"Cụm Server-File"** của HSMT (lưu tệp đính kèm/media tách khỏi Cụm Server-Database), nội dung tệp (PDF/Word/Excel/ảnh) có thể được tách khỏi CSDL và lưu vào object storage S3-compatible (MinIO nội bộ hoặc S3). Điều này chống **phình CSDL** do base64 (base64 nặng hơn tệp gốc ~33%) và giữ backup CSDL gọn.
+
+**Cơ chế GATED — tương thích ngược tuyệt đối:**
+
+- **Không đặt biến `S3_*`** (mặc định) → hành vi **Y HỆT** trước: nội dung tệp lưu base64 ngay trong cột JSON của DB (`DocFile.dataUrl`, `GuideDoc.fileData`). Demo trình duyệt, dev, test cũ **không đổi**.
+- **Đặt đủ 4 biến bắt buộc** (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`; tùy chọn `S3_REGION` mặc định `us-east-1`, `S3_FORCE_PATH_STYLE` mặc định `true` cho MinIO) → tệp **MỚI** được PUT lên S3; DB chỉ lưu `storageKey` (vd `documents/<docId>/v1.pdf`), **không** còn base64.
+- **Bản ghi CŨ** đã có base64 vẫn đọc bình thường (không bắt buộc migrate).
+- **API contract KHÔNG đổi**: frontend vẫn gửi/nhận `dataUrl` base64 như cũ. Backend là nơi quyết định: khi ghi → tách base64 lên S3; khi FE đọc lại tài liệu → backend GET từ S3 và **dựng lại** `dataUrl` nên FE hiển thị y như trước. **Khóa S3 (`storageKey`) không lộ ra client**; tài liệu mật/lọc quyền đọc **giữ nguyên** (chỉ ai được đọc bản ghi mới nhận được nội dung).
+- **Không thêm dependency**: chữ ký **AWS Signature V4 tự viết** bằng `node:crypto` (Node — `server/src/blob.js`) và `System.Security.Cryptography` (.NET — `server-dotnet/ECabinet.Api/Store/BlobStore.cs`), gọi S3 REST qua `fetch`/`HttpClient`. Đã kiểm bằng **test-vector chính thức của AWS** (`aws-sig-v4-test-suite`).
+
+**Bật MinIO nội bộ bằng Docker Compose** — tạo file `.env` cạnh `docker-compose.yml`:
+
+```env
+# Bí mật MinIO (đổi khi triển khai thật)
+MINIO_USER=ecabinet
+MINIO_PASSWORD=ecabinet-secret-doi-di
+# Bật luồng tách file cho backend (trỏ tới service `minio` nội bộ)
+S3_ENDPOINT=http://minio:9000
+S3_BUCKET=ecabinet-docs
+S3_ACCESS_KEY=ecabinet          # = MINIO_USER
+S3_SECRET_KEY=ecabinet-secret-doi-di   # = MINIO_PASSWORD
+S3_FORCE_PATH_STYLE=true
+```
+
+```bash
+docker compose up -d --build          # bản Node (PostgreSQL)
+# hoặc bản .NET/SQL Server:
+DB_PASSWORD='MatKhauManh!123' docker compose -f docker-compose.dotnet.yml up -d --build
+```
+
+Compose sẽ khởi động `minio` + `minio-init` (tự tạo bucket **private** một lần). Console quản trị MinIO: `http://localhost:9001` (đăng nhập bằng `MINIO_USER`/`MINIO_PASSWORD`).
+
+**Kiểm chứng tệp nằm ở S3, KHÔNG nằm ở DB** (sau khi tải 1 tài liệu lên qua giao diện):
+
+```bash
+# 1) Bản ghi trong DB CHỈ có storageKey, KHÔNG có dataUrl:
+docker exec ecabinet-db psql -U ecabinet -d ecabinet \
+  -c "SELECT data->>'name' AS ten, data->>'storageKey' AS khoa, (data ? 'dataUrl') AS con_base64 FROM c_documents WHERE data ? 'storageKey';"
+# kỳ vọng: khoa='documents/<id>/v1.pdf', con_base64 = f (false)
+
+# 2) Đối tượng có thật trong bucket MinIO:
+docker exec ecabinet-minio mc ls --recursive local/ecabinet-docs
+# (nếu chưa có alias trong container minio: dùng service mc, hoặc xem trên Console :9001)
+```
+
+> Tối ưu bước sau (ghi trong báo cáo `docs/ra-soat/2026-07-20/tach-file-object-storage.md`): thay "dựng lại dataUrl" bằng **streaming trực tiếp / presigned URL TTL ngắn** để không phải nạp toàn bộ tệp vào RAM backend; thêm **virus scan** trước khi PUT.
+
 ## 7. PWA (cài như ứng dụng)
 
 Truy cập bằng Chrome/Edge → biểu tượng **Cài đặt** trên thanh địa chỉ → app chạy cửa sổ riêng trên máy tính/máy tính bảng. (`manifest.webmanifest` + `sw.js`; service worker chỉ kích hoạt khi chạy HTTPS.)
@@ -263,7 +312,7 @@ Truy cập bằng Chrome/Edge → biểu tượng **Cài đặt** trên thanh đ
 | ~~Realtime đẩy sự kiện~~ | ✅ **ĐÃ CÓ (GĐ3)** — WebSocket RFC 6455 tự viết, poke-then-pull, keepalive, tự kết nối lại |
 | ~~Endpoint nghiệp vụ + rate-limit + refresh token~~ | ✅ **ĐÃ CÓ (GĐ4)** — /api/actions kiểm tra sâu, guard CRUD, chống brute-force, phiên xoay vòng |
 | Chuẩn hóa CSDL | Tách dần bảng JSONB thành bảng quan hệ cho thực thể nóng (ballots, participants) khi quy mô lớn |
-| Lưu trữ tài liệu lớn | MinIO (S3-compatible), virus scan, streaming (thay base64 trong JSONB) |
+| ~~Lưu trữ tài liệu lớn~~ | ✅ **ĐÃ CÓ (GĐ3)** — object storage MinIO/S3 tách tệp base64 khỏi DB (chống phình DB), GATED bằng biến `S3_*`, ký AWS SigV4 tự viết (không thêm dep). Xem mục 6.1. *(Còn lại: virus scan, streaming/presigned thay vì dựng lại dataUrl)* |
 | Đăng nhập nâng cao | Refresh token, SSO/LDAP cơ quan, 2FA |
 | Ký số thật | VNPT SmartCA / USB token (plugin ký hash phía client), chữ ký chuẩn PAdES |
 | ~~Họp trực tuyến~~ | ✅ **ĐÃ CÓ** — WebRTC thật qua LiveKit (SFU): camera/mic/chia sẻ màn hình, gated bằng cấu hình, fallback mô phỏng an toàn (xem mục 6) |
@@ -273,7 +322,7 @@ Truy cập bằng Chrome/Edge → biểu tượng **Cài đặt** trên thanh đ
 ## 9. Giới hạn hiện tại
 
 - **Chế độ demo trình duyệt**: dữ liệu mỗi máy một bộ (localStorage), tệp ≤ 1,5MB, realtime giả lập; họp trực tuyến luôn là mô phỏng
-- **Chế độ máy chủ (GĐ2–GĐ4)**: dữ liệu tập trung PostgreSQL, JWT 1h + refresh token xoay vòng, phân quyền server-side + endpoint nghiệp vụ kiểm tra sâu + guard CRUD + rate-limit; **realtime WebSocket** (polling chỉ là dự phòng); tệp ≤ 15MB (base64 trong JSONB)
+- **Chế độ máy chủ (GĐ2–GĐ4)**: dữ liệu tập trung PostgreSQL, JWT 1h + refresh token xoay vòng, phân quyền server-side + endpoint nghiệp vụ kiểm tra sâu + guard CRUD + rate-limit; **realtime WebSocket** (polling chỉ là dự phòng); tệp ≤ **25MB** (thống nhất FE↔nginx↔backend). **Nội dung tệp**: mặc định base64 trong JSONB; bật object storage (`S3_*`) → tách sang MinIO/S3, DB chỉ lưu `storageKey` (xem mục 6.1)
 - **Họp trực tuyến WebRTC (LiveKit)**: hoạt động thật khi đã cấu hình `LIVEKIT_*` + trình duyệt cho phép camera/micro (xem mục 6). Chưa cấu hình / bị chặn quyền → tự dùng giao diện mô phỏng.
 - Ký số/QR vẫn là mô phỏng ở cả hai chế độ (GĐ3)
 - **API công bố cho bên thứ 3**: hoạt động ở **chế độ máy chủ** (cần `VITE_API_URL`); chế độ demo trình duyệt chỉ minh họa quản lý khóa cục bộ, không phục vụ endpoint mở

@@ -41,6 +41,7 @@ public static class Guard
             ["sharedWith"] = "array", ["secret"] = "boolean", ["content"] = "string", ["dataUrl"] = "string",
             ["version"] = "number", ["mime"] = "string", ["reviewStatus"] = "string", ["reviewNote"] = "string",
             ["reviewedById"] = "string", ["reviewedAt"] = "string", ["issuingBody"] = "string", ["folder"] = "string",
+            ["size"] = "number", ["storageKey"] = "string", // Tách file (GĐ3): OPTIONAL, không phá tương thích
         },
         ["annotations"] = new() { ["docId"] = "string", ["content"] = "string", ["isPublic"] = "boolean" },
         ["tasks"] = new()
@@ -72,7 +73,7 @@ public static class Guard
         ["guides"] = new()
         {
             ["title"] = "string", ["content"] = "string", ["fileName"] = "string", ["fileData"] = "string",
-            ["roleScope"] = "array", ["updatedAt"] = "string",
+            ["roleScope"] = "array", ["updatedAt"] = "string", ["storageKey"] = "string", // Tách file (GĐ3): OPTIONAL
         },
         ["apiKeys"] = new()
         {
@@ -244,7 +245,10 @@ public static class Guard
         if (col == "documents")
         {
             var effDataUrl = J.Has(body, "dataUrl") ? J.Str(body, "dataUrl") : (existing != null ? J.Str(existing, "dataUrl") : null);
-            if (!string.IsNullOrEmpty(effDataUrl))
+            // Tách file (GĐ3): tệp có thể đã externalize sang S3 (storageKey) — dataUrl vắng
+            // trong bản ghi nhưng VẪN là "có tệp" -> vẫn áp whitelist theo tên tệp.
+            var effKey = J.Has(body, "storageKey") ? J.Str(body, "storageKey") : (existing != null ? J.Str(existing, "storageKey") : null);
+            if (!string.IsNullOrEmpty(effDataUrl) || !string.IsNullOrEmpty(effKey))
             {
                 var effName = J.Has(body, "name") ? J.Str(body, "name") : (existing != null ? J.Str(existing, "name") : null);
                 var ext = ExtOf(effName);

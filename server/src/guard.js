@@ -28,7 +28,7 @@ const SCHEMA = {
   // + trackerUserId (P1-5, HSMT dòng 372 "Cán bộ theo dõi") — string, OPTIONAL
   votes: { kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', title: 'string', description: 'string', options: 'array', ballots: 'array', eligibleIds: 'array', documentIds: 'array', secret: 'boolean', status: 'string', deadline: 'string|null', trackerUserId: 'string' },
   // + issuingBody (mục 10), folder (mục 14) — đều string, OPTIONAL
-  documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string', reviewStatus: 'string', reviewNote: 'string', reviewedById: 'string', reviewedAt: 'string', issuingBody: 'string', folder: 'string' },
+  documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string', reviewStatus: 'string', reviewNote: 'string', reviewedById: 'string', reviewedAt: 'string', issuingBody: 'string', folder: 'string', size: 'number', storageKey: 'string' },
   annotations: { docId: 'string', content: 'string', isPublic: 'boolean' },
   tasks: { title: 'string', description: 'string', assigneeId: 'string', deadline: 'string', status: 'string', progress: 'number', meetingId: 'string|null' },
   notifications: { read: 'boolean', title: 'string', body: 'string', type: 'string' },
@@ -42,7 +42,7 @@ const SCHEMA = {
   // ĐỢT 3 — Danh mục chung (E-HSMT mục 6, 7, 10)
   catalogs: { type: 'string', name: 'string', description: 'string', order: 'number', active: 'boolean' },
   // ĐỢT 3 — Tài liệu HDSD (E-HSMT mục 4)
-  guides: { title: 'string', content: 'string', fileName: 'string', fileData: 'string', roleScope: 'array', updatedAt: 'string' },
+  guides: { title: 'string', content: 'string', fileName: 'string', fileData: 'string', roleScope: 'array', updatedAt: 'string', storageKey: 'string' },
   // RỔ B — Khóa API bên thứ 3 (E-HSMT mục 54–59). keyHash/prefix bất biến (guard chặn sửa).
   apiKeys: { name: 'string', prefix: 'string', keyHash: 'string', scopes: 'array', active: 'boolean', createdAt: 'string', createdById: 'string', lastUsedAt: 'string', callCount: 'number', note: 'string' },
   // P1-6 — Phản hồi/góp ý người dùng (E-HSMT mục 5.1–5.4). userId/unitId do SERVER ép lúc
@@ -181,7 +181,12 @@ export function validatePatch(col, body, existing) {
   // — tài liệu chỉ có `content` (soạn trực tiếp, không upload) KHÔNG bị áp whitelist này.
   if (col === 'documents') {
     const effectiveDataUrl = body.dataUrl !== undefined ? body.dataUrl : existing?.dataUrl;
-    if (typeof effectiveDataUrl === 'string' && effectiveDataUrl) {
+    // Tách file (GĐ3): tệp có thể đã externalize sang S3 (storageKey) — lúc đó dataUrl
+    // vắng trong bản ghi nhưng VẪN là "có tệp" -> vẫn áp whitelist theo tên tệp.
+    const effectiveKey = body.storageKey !== undefined ? body.storageKey : existing?.storageKey;
+    const hasFile = (typeof effectiveDataUrl === 'string' && effectiveDataUrl)
+      || (typeof effectiveKey === 'string' && effectiveKey);
+    if (hasFile) {
       const effectiveName = body.name !== undefined ? body.name : existing?.name;
       const ext = extOf(effectiveName);
       if (!ext || !ALLOWED_FILE_EXT.includes(ext)) {

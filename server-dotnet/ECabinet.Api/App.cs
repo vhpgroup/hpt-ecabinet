@@ -45,9 +45,9 @@ public static class App
     /// của shared framework — không kéo thêm gói NuGet vào ECabinet.Api).
     /// Gọi InitAsync + SeedIfEmpty cho store TRƯỚC khi gọi hàm này.
     /// </summary>
-    public static void ConfigurePipeline(IApplicationBuilder app, IDocStore store)
+    public static void ConfigurePipeline(IApplicationBuilder app, IDocStore store, IBlobStore? blob = null)
     {
-        var router = BuildRouter(store);
+        var router = BuildRouter(store, blob ?? new S3BlobStore());
         app.UseWebSockets();
 
         // Pipeline chính (1 middleware terminal) — port http.createServer(...) + app.handle.
@@ -153,15 +153,27 @@ public static class App
         return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(t))).ToLowerInvariant();
     }
 
+    // Tách file (GĐ3): dựng lại dataUrl/fileData cho phản hồi PATCH; lỗi S3 -> trả merged
+    // (parity Node `inlineDocumentRead(merged).catch(() => merged)` — ghi đã thành công).
+    private static async Task<JsonObject> SafeInlineDoc(JsonObject doc, IBlobStore blob)
+    {
+        try { return await Blob.InlineDocumentReadAsync(doc, blob); } catch { return doc; }
+    }
+
+    private static async Task<JsonObject> SafeInlineGuide(JsonObject guide, IBlobStore blob)
+    {
+        try { return await Blob.InlineGuideReadAsync(guide, blob); } catch { return guide; }
+    }
+
     // ---------------- Router (port toàn bộ route index.js theo đúng thứ tự) ----------------
-    private static Router BuildRouter(IDocStore store)
+    private static Router BuildRouter(IDocStore store, IBlobStore blob)
     {
         var app = new Router();
         var sessions = new Sessions(store);
         var access = new Access(store);
         var actions = new Actions(store);
         var rtc = new Rtc(store);
-        var open = new OpenRoutes(store);
+        var open = new OpenRoutes(store, blob);
 
         async Task<bool> EnsureTable(Ctx c)
         {
@@ -361,6 +373,15 @@ public static class App
             var projected = col == "users" ? SanitizeUser(data) : col == "apiKeys" ? SanitizeApiKey(data) : data;
             var readable = await access.ReadOne(col, projected, c.User!);
             if (readable is null) { await HttpUtil.SendError(c.Res, 404, "Không tìm thấy bản ghi"); return; }
+            // Tách file (GĐ3): nếu bản ghi đã externalize sang S3 (storageKey) -> dựng lại
+            // dataUrl/fileData từ S3 để FE hiển thị y như cũ (khóa S3 KHÔNG lộ ra client).
+            // S3 tắt hoặc bản ghi cũ (chỉ có dataUrl) -> trả nguyên (tương thích ngược).
+            try
+            {
+                if (col == "documents") { await HttpUtil.Send(c.Res, 200, await Blob.InlineDocumentReadAsync(readable, blob)); return; }
+                if (col == "guides") { await HttpUtil.Send(c.Res, 200, await Blob.InlineGuideReadAsync(readable, blob)); return; }
+            }
+            catch (Exception e) { await HttpUtil.SendError(c.Res, 502, $"Không đọc được nội dung tệp từ kho lưu trữ: {e.Message}"); return; }
             await HttpUtil.Send(c.Res, 200, readable);
         });
 
@@ -400,6 +421,14 @@ public static class App
                 if (!J.Has(body, "status")) body["status"] = "new";
             }
             Guard.ValidatePatch(col, body); // ném 400 nếu sai kiểu
+            // Tách file (GĐ3): S3 bật + payload có dataUrl/fileData base64 -> PUT S3, set
+            // storageKey, XÓA base64 khỏi bản ghi lưu DB (chống phình DB). S3 tắt -> no-op.
+            try
+            {
+                if (col == "documents") await Blob.ExternalizeDocumentWriteAsync(body, blob);
+                if (col == "guides") await Blob.ExternalizeGuideWriteAsync(body, blob);
+            }
+            catch (Exception e) { await HttpUtil.SendError(c.Res, 502, $"Không lưu được tệp lên kho lưu trữ: {e.Message}"); return; }
             try
             {
                 var id = J.Str(body, "id")!;
@@ -498,8 +527,20 @@ public static class App
             }
 
             var merged2 = J.ShallowMerge(existing, patch);
+            // Tách file (GĐ3): nếu PATCH mang dataUrl/fileData base64 MỚI (tải lại tệp) và S3
+            // bật -> PUT S3, set storageKey, xóa base64. Patch không đụng tệp -> giữ storageKey
+            // đã có (no-op). S3 tắt -> giữ base64 như cũ.
+            try
+            {
+                if (col == "documents") await Blob.ExternalizeDocumentWriteAsync(merged2, blob);
+                if (col == "guides") await Blob.ExternalizeGuideWriteAsync(merged2, blob);
+            }
+            catch (Exception e) { await HttpUtil.SendError(c.Res, 502, $"Không lưu được tệp lên kho lưu trữ: {e.Message}"); return; }
             await store.UpdateAsync(table, c.Params["id"], merged2);
             Realtime.NotifyChange(col, "update", c.Params["id"]);
+            // Trả cho FE: nếu đã externalize thì dựng lại dataUrl/fileData (hiển thị như cũ).
+            if (col == "documents") { await HttpUtil.Send(c.Res, 200, await SafeInlineDoc(merged2, blob)); return; }
+            if (col == "guides") { await HttpUtil.Send(c.Res, 200, await SafeInlineGuide(merged2, blob)); return; }
             await HttpUtil.Send(c.Res, 200, col == "apiKeys" ? SanitizeApiKey(merged2) : merged2);
         });
 

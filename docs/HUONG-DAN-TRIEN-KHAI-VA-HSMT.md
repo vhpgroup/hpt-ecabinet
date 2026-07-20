@@ -59,6 +59,24 @@ LIVEKIT_API_SECRET=<api-secret>
 - Self-host tại TTDL TP (khuyến nghị vận hành chính thức để không gửi media qua bên thứ 3 — xem `docs/livekit-va-du-lieu.md`): mở cổng `7880/tcp`, `7881/tcp`, dải `50000-60000/udp`.
 - ⚠️ Nếu đã từng dán API secret ở đâu (chat/email) → **xoay key mới** trên LiveKit Cloud trước khi vận hành.
 
+### A3.1. Bật object storage MinIO/S3 — tách tệp đính kèm khỏi CSDL (mô hình "Cụm Server-File" của HSMT)
+Mặc định nội dung tệp lưu base64 ngay trong CSDL (tương thích ngược). Để **tách tệp sang object storage** (chống phình DB, đúng mô hình Cụm Server-File tách khỏi Cụm Server-Database), tạo file `.env` cạnh `docker-compose*.yml`:
+```env
+MINIO_USER=ecabinet
+MINIO_PASSWORD=<mật-khẩu-mạnh>
+S3_ENDPOINT=http://minio:9000
+S3_BUCKET=ecabinet-docs
+S3_ACCESS_KEY=ecabinet            # = MINIO_USER
+S3_SECRET_KEY=<mật-khẩu-mạnh>     # = MINIO_PASSWORD
+S3_FORCE_PATH_STYLE=true
+```
+- Compose (Node hoặc .NET) sẽ khởi động thêm `minio` + `minio-init` (tạo bucket **private** một lần). Console MinIO: `http://<máy-chủ>:9001`.
+- **GATED**: bỏ trống các biến `S3_*` → giữ hành vi base64-trong-DB như cũ (KHÔNG vỡ demo/dev). Điền đủ → tệp MỚI tách sang S3, DB chỉ lưu `storageKey`; bản ghi cũ vẫn đọc được.
+- **API/FE không đổi**: backend tự tách khi ghi và dựng lại `dataUrl` khi đọc; khóa S3 không lộ ra client; tài liệu mật/lọc quyền giữ nguyên.
+- **Kiểm chứng nhanh** (sau khi tải 1 tài liệu): bản ghi trong DB có `storageKey` và KHÔNG có `dataUrl`; đối tượng có thật trong bucket. Lệnh cụ thể: `README.md` mục **6.1** + báo cáo `docs/ra-soat/2026-07-20/tach-file-object-storage.md`.
+- Không thêm dependency: chữ ký AWS SigV4 tự viết (`server/src/blob.js`, `server-dotnet/.../Store/BlobStore.cs`) — kiểm bằng test-vector chính thức của AWS.
+- **Sao lưu**: khi bật S3, thêm lịch backup riêng cho bucket (MinIO `mc mirror`/snapshot volume `ecabinet_minio`) **độc lập** với backup DB — đúng mô hình 4 cụm.
+
 ### A4. Sao lưu / phục hồi + diễn tập DR (chứng minh RTO ≤24h theo HSMT)
 ```bash
 # Sao lưu SQL Server (giữ 14 bản gần nhất, đổi qua env KEEP):
@@ -110,6 +128,7 @@ Dùng `docker-compose.coolify.yml`: Coolify → New → Docker Compose → repo 
 | 1 | Chạy thật trên **SQL Server 2022** instance thật (biến MSSQL 🟡→✅) | A1 |
 | 2 | Bật **HTTPS TLS 1.2+** | A2 |
 | 3 | Bật **họp trực tuyến LiveKit** (nếu cần video thật) | A3 |
+| 3b | Bật **object storage MinIO/S3** tách tệp khỏi DB (Cụm Server-File) — chống phình DB | A3.1 |
 | 4 | Cấu hình **sao lưu tự động + diễn tập DR** (RTO 24h) | A4 |
 | 5 | **Load test 90 CCU** lấy số liệu SLA | A5 |
 | 6 | Đổi mật khẩu mặc định, đặt `JWT_SECRET` mạnh, thu hồi khóa API demo | A1 |

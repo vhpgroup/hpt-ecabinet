@@ -113,6 +113,8 @@ export interface GuideDoc {
   fileName?: string;
   /** dữ liệu tệp dạng data URL (base64) — lưu giống DocFile.dataUrl */
   fileData?: string;
+  /** Khóa object storage khi tệp HDSD đã tách khỏi CSDL (GĐ3). OPTIONAL, backend quản lý. */
+  storageKey?: string;
   /** áp dụng cho vai trò nào; trống = tất cả */
   roleScope?: Role[];
   updatedAt: string;
@@ -227,7 +229,15 @@ export interface DocFile {
   size: number;
   mime: string;
   content?: string; // nội dung văn bản (tài liệu mẫu)
-  dataUrl?: string; // file tải lên (base64)
+  dataUrl?: string; // file tải lên (base64). Khi bật object storage (S3/MinIO), backend
+                    // TÁCH base64 này sang S3 lúc ghi và DỰNG LẠI lúc đọc — FE không đổi.
+  /**
+   * Khóa đối tượng trên object storage khi nội dung tệp đã được tách khỏi CSDL
+   * (GĐ3 — mô hình "Cụm Server-File" của HSMT). OPTIONAL, do BACKEND quản lý:
+   * chỉ xuất hiện khi bật S3; FE thường không cần đọc trực tiếp (nhận lại dataUrl
+   * đã dựng). Giữ ở type để round-trip JSON không mất trường + không phá tương thích.
+   */
+  storageKey?: string;
   uploadedAt: string;
   secret: boolean; // tài liệu mật
   version: number;

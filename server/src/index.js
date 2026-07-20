@@ -29,6 +29,10 @@ import { clientIp, hit } from './ratelimit.js';
 import { issueRefreshToken, revokeRefreshToken, rotateRefreshToken } from './sessions.js';
 import { mintLiveKitToken, rtcConfigured, rtcUrl } from './rtc.js';
 import { registerOpenApi } from './open.js';
+import {
+  blobConfigured, externalizeDocumentWrite, externalizeGuideWrite,
+  inlineDocumentRead, inlineGuideRead,
+} from './blob.js';
 
 // GĐ4: rate-limit
 const RATE_MAX = Number(process.env.RATE_LIMIT_MAX ?? 300);            // yêu cầu / IP / cửa sổ
@@ -446,6 +450,15 @@ app.add('GET', '/api/:collection/:id', requireAuth, async (req, res) => {
   const projected = col === 'users' ? sanitizeUser(data) : col === 'apiKeys' ? sanitizeApiKey(data) : data;
   const readable = await readOne(col, projected, req.user);
   if (!readable) return send(res, 404, { error: 'Không tìm thấy bản ghi' });
+  // Tách file (GĐ3): nếu bản ghi đã externalize sang S3 (có storageKey) -> dựng lại
+  // dataUrl/fileData từ S3 để FE hiển thị y như cũ (S3 key KHÔNG lộ ra client).
+  // S3 tắt hoặc bản ghi cũ (chỉ có dataUrl) -> trả nguyên (tương thích ngược).
+  try {
+    if (col === 'documents') return send(res, 200, await inlineDocumentRead(readable));
+    if (col === 'guides') return send(res, 200, await inlineGuideRead(readable));
+  } catch (e) {
+    return send(res, 502, { error: `Không đọc được nội dung tệp từ kho lưu trữ: ${e?.message ?? 'lỗi S3'}` });
+  }
   send(res, 200, readable);
 });
 
@@ -482,6 +495,14 @@ app.add('POST', '/api/:collection', requireAuth, async (req, res) => {
     if (body.status === undefined) body.status = 'new';
   }
   validatePatch(col, body); // GĐ6 (P0-2): chặn kiểu sai ngay khi tạo
+  // Tách file (GĐ3): nếu S3 bật và payload có dataUrl/fileData base64 -> PUT lên S3,
+  // set storageKey, XÓA base64 khỏi bản ghi lưu DB (chống phình DB). S3 tắt -> no-op.
+  try {
+    if (col === 'documents') await externalizeDocumentWrite(body);
+    if (col === 'guides') await externalizeGuideWrite(body);
+  } catch (e) {
+    return send(res, 502, { error: `Không lưu được tệp lên kho lưu trữ: ${e?.message ?? 'lỗi S3'}` });
+  }
   try {
     if (col === 'users') {
       const { password, ...rest } = body;
@@ -579,8 +600,20 @@ app.add('PATCH', '/api/:collection/:id', requireAuth, async (req, res) => {
   }
 
   const merged = { ...existing, ...patch };
+  // Tách file (GĐ3): nếu PATCH mang dataUrl/fileData base64 MỚI (tải lại tệp) và S3 bật
+  // -> PUT lên S3, set storageKey, xóa base64 khỏi bản ghi. Nếu patch KHÔNG đụng tệp thì
+  // merged giữ nguyên storageKey (đã externalize trước đó) — no-op. S3 tắt -> giữ base64.
+  try {
+    if (col === 'documents') await externalizeDocumentWrite(merged);
+    if (col === 'guides') await externalizeGuideWrite(merged);
+  } catch (e) {
+    return send(res, 502, { error: `Không lưu được tệp lên kho lưu trữ: ${e?.message ?? 'lỗi S3'}` });
+  }
   await query(`UPDATE ${table} SET data = $2::jsonb, updated_at = now() WHERE id = $1`, [req.params.id, JSON.stringify(merged)]);
   notifyChange(col, 'update', req.params.id);
+  // Trả bản ghi cho FE: nếu đã externalize thì dựng lại dataUrl/fileData (FE hiển thị như cũ).
+  if (col === 'documents') return send(res, 200, await inlineDocumentRead(merged).catch(() => merged));
+  if (col === 'guides') return send(res, 200, await inlineGuideRead(merged).catch(() => merged));
   send(res, 200, col === 'apiKeys' ? sanitizeApiKey(merged) : merged); // RỔ B: ẩn keyHash
 });
 

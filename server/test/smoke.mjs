@@ -35,6 +35,11 @@ import {
 } from '../src/access.js';
 import { SIGN_PIN_RE, buildBallotSignature } from '../src/actions.js';
 import { meetingInvolvesUnit } from '../src/open.js';
+import {
+  signRequestV4, uriEncode, isDataUri, decodeDataUri, encodeDataUri,
+  documentKey, guideKey, externalizeDocumentWrite, inlineDocumentRead,
+  externalizeGuideWrite, inlineGuideRead,
+} from '../src/blob.js';
 import { COLLECTIONS } from '../src/db.js';
 
 // ---------------- Runner tối giản ----------------
@@ -681,6 +686,172 @@ await Case('guardPatch(meetings): unit_admin CÙNG đơn vị phiên -> particip
   );
   assert.equal(out.participants[0].attendStatus, 'accepted', 'unit_admin cùng đơn vị sửa được attendStatus của MỌI dòng (như MANAGE)');
   assert.equal(out.participants[0].checkedInAt, 't-server', 'checkedInAt vẫn giữ từ server (keepServerCheckins), không tin client');
+});
+
+// ============================================================
+// NHÓM 11 — TÁCH FILE OBJECT STORAGE (S3/MinIO): SigV4 + round-trip + tương thích ngược
+// (GĐ3 — tách nội dung tệp base64 khỏi CSDL). KHÔNG cần S3 thật: SigV4 kiểm bằng
+// TEST VECTOR CHÍNH THỨC của AWS; tách/dựng kiểm bằng blobStore in-memory giả.
+// ============================================================
+Group('11-BLOB-S3');
+
+// ---- Store in-memory giả: parity hợp đồng blobStore (configured/put/get/delete) ----
+function makeMemStore(on = true) {
+  const map = new Map();
+  return {
+    _map: map,
+    configured: () => on,
+    async put(key, bytes, _ct) { map.set(key, Buffer.from(bytes)); },
+    async get(key) { if (!map.has(key)) throw new Error('404'); return map.get(key); },
+    async delete(key) { map.delete(key); },
+  };
+}
+
+// creds/region/service/date cố định của aws-sig-v4-test-suite (get-vanilla)
+const SV4 = {
+  accessKey: 'AKIDEXAMPLE',
+  secretKey: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY',
+  region: 'us-east-1', service: 'service',
+  date: new Date(Date.UTC(2015, 7, 30, 12, 36, 0)),
+};
+const EMPTY_HASH = crypto.createHash('sha256').update(Buffer.alloc(0)).digest('hex');
+
+await Case('SigV4 test-vector AWS get-vanilla: canonicalRequest + stringToSign + Authorization khớp BYTE', () => {
+  const r = signRequestV4({
+    method: 'GET', canonicalUri: '/', query: {},
+    headers: { host: 'example.amazonaws.com', 'x-amz-date': '20150830T123600Z' },
+    payloadHash: EMPTY_HASH, ...SV4,
+  });
+  assert.equal(r.canonicalRequest,
+    'GET\n/\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\n'
+    + 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    'canonicalRequest phải khớp vector');
+  assert.equal(r.stringToSign,
+    'AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\n'
+    + 'bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63',
+    'stringToSign phải khớp vector');
+  assert.equal(r.signature, '5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31', 'signature khớp vector');
+  assert.equal(r.authorization,
+    'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, '
+    + 'SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31',
+    'Authorization header khớp vector');
+});
+
+await Case('SigV4 test-vector AWS get-vanilla-query-order-key-case: sort query theo key đã encode', () => {
+  const r = signRequestV4({
+    method: 'GET', canonicalUri: '/', query: { Param2: 'value2', Param1: 'value1' },
+    headers: { host: 'example.amazonaws.com', 'x-amz-date': '20150830T123600Z' },
+    payloadHash: EMPTY_HASH, ...SV4,
+  });
+  assert.equal(r.signature, 'b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500', 'signature vector query khớp');
+});
+
+await Case('uriEncode RFC3986: space=%20, ~ giữ nguyên, / tùy chọn, UTF-8 đúng byte', () => {
+  assert.equal(uriEncode(' '), '%20');
+  assert.equal(uriEncode('~'), '~');
+  assert.equal(uriEncode('a/b', false), 'a/b', 'giữ / khi encodeSlash=false');
+  assert.equal(uriEncode('a/b', true), 'a%2Fb', 'encode / khi encodeSlash=true');
+  assert.equal(uriEncode('ü'), '%C3%BC', 'UTF-8 2 byte');
+  assert.equal(uriEncode('Tài liệu'), 'T%C3%A0i%20li%E1%BB%87u', 'tiếng Việt đúng byte');
+});
+
+await Case('isDataUri: nhận diện data URI base64; loại trừ chuỗi thường / data:text không base64', () => {
+  assert.equal(isDataUri('data:application/pdf;base64,JVBERi0='), true);
+  assert.equal(isDataUri('data:text/plain,hello'), false, 'không base64 -> bỏ qua (đây là content thuần)');
+  assert.equal(isDataUri('nội dung văn bản'), false);
+  assert.equal(isDataUri(undefined), false);
+});
+
+await Case('decode/encode data URI: round-trip BYTES khớp + mime giữ đúng', () => {
+  const bytes = crypto.randomBytes(321);
+  const url = encodeDataUri(bytes, 'application/pdf');
+  const dec = decodeDataUri(url);
+  assert.equal(dec.mime, 'application/pdf');
+  assert.ok(Buffer.compare(dec.bytes, bytes) === 0, 'bytes round-trip khớp');
+});
+
+await Case('documentKey / guideKey: khóa theo docId/version/ext gợi ý đúng', () => {
+  assert.equal(documentKey('d1', 3, 'bao-cao.pdf', 'application/pdf'), 'documents/d1/v3.pdf');
+  assert.equal(documentKey('d2', undefined, 'x.docx'), 'documents/d2/v1.docx', 'thiếu version -> v1');
+  assert.equal(guideKey('g1', 'huong-dan.pdf', 'application/pdf'), 'guides/g1/file.pdf');
+});
+
+await Case('TÁCH khi S3 BẬT: bản ghi lưu có storageKey + size, KHÔNG còn dataUrl (chống phình DB)', async () => {
+  const store = makeMemStore(true);
+  const pdf = crypto.randomBytes(2048);
+  const doc = {
+    id: 'doc-a', name: 'ke-hoach.pdf', kind: 'main', mime: 'application/pdf', version: 1,
+    dataUrl: encodeDataUri(pdf, 'application/pdf'), size: 0,
+  };
+  await externalizeDocumentWrite(doc, store);
+  assert.equal(doc.dataUrl, undefined, 'base64 đã bị xóa khỏi bản ghi lưu DB');
+  assert.equal(doc.storageKey, 'documents/doc-a/v1.pdf', 'có storageKey');
+  assert.equal(doc.size, 2048, 'size = độ dài bytes thật');
+  assert.ok(store._map.has('documents/doc-a/v1.pdf'), 'bytes đã PUT lên store');
+});
+
+await Case('DỰNG khi ĐỌC (S3 bật): dựng lại dataUrl từ S3, BYTES round-trip khớp gốc; bản ghi DB không đổi', async () => {
+  const store = makeMemStore(true);
+  const pdf = crypto.randomBytes(4096);
+  const original = encodeDataUri(pdf, 'application/pdf');
+  const doc = { id: 'doc-b', name: 'x.pdf', mime: 'application/pdf', version: 1, dataUrl: original };
+  await externalizeDocumentWrite(doc, store); // -> storageKey, mất dataUrl
+  assert.equal(doc.dataUrl, undefined);
+  const readBack = await inlineDocumentRead(doc, store);
+  assert.equal(readBack.dataUrl, original, 'dataUrl dựng lại KHỚP gốc byte-for-byte');
+  assert.equal(doc.dataUrl, undefined, 'inline trả BẢN SAO — bản ghi gốc vẫn không có dataUrl');
+  assert.equal(readBack.storageKey, 'documents/doc-b/v1.pdf', 'storageKey vẫn còn trên bản đọc (router/open sẽ ẩn khi cần)');
+});
+
+await Case('TƯƠNG THÍCH NGƯỢC — S3 TẮT: externalize là NO-OP, bản ghi giữ dataUrl base64 y như cũ', async () => {
+  const store = makeMemStore(false);
+  const url = encodeDataUri(crypto.randomBytes(64), 'application/pdf');
+  const doc = { id: 'doc-c', name: 'x.pdf', mime: 'application/pdf', version: 1, dataUrl: url };
+  await externalizeDocumentWrite(doc, store);
+  assert.equal(doc.dataUrl, url, 'S3 tắt: dataUrl giữ nguyên trong bản ghi (hành vi cũ)');
+  assert.equal(doc.storageKey, undefined, 'không set storageKey khi S3 tắt');
+});
+
+await Case('TƯƠNG THÍCH NGƯỢC — bản ghi CŨ chỉ có dataUrl (không storageKey): đọc trả nguyên, không gọi S3', async () => {
+  const store = makeMemStore(true);
+  const url = encodeDataUri(crypto.randomBytes(64), 'application/pdf');
+  const legacy = { id: 'old', name: 'x.pdf', mime: 'application/pdf', dataUrl: url };
+  const out = await inlineDocumentRead(legacy, store);
+  assert.equal(out.dataUrl, url, 'bản ghi cũ đọc bình thường (dataUrl giữ nguyên)');
+  assert.equal(out.storageKey, undefined);
+});
+
+await Case('Tài liệu SOẠN TRỰC TIẾP (content, không dataUrl): externalize bỏ qua, không tạo khóa S3', async () => {
+  const store = makeMemStore(true);
+  const doc = { id: 'doc-txt', name: 'ket-luan.pdf', content: 'Nội dung soạn tay', mime: 'application/pdf' };
+  await externalizeDocumentWrite(doc, store);
+  assert.equal(doc.storageKey, undefined, 'không có dataUrl -> không externalize');
+  assert.equal(doc.content, 'Nội dung soạn tay', 'content giữ nguyên trong DB');
+  assert.equal(store._map.size, 0, 'không PUT gì lên store');
+});
+
+await Case('GUIDES (HDSD): tách fileData->storageKey (S3 bật) rồi dựng lại fileData round-trip khớp', async () => {
+  const store = makeMemStore(true);
+  const bin = crypto.randomBytes(1500);
+  const original = encodeDataUri(bin, 'application/pdf');
+  const g = { id: 'g-1', title: 'HDSD', fileName: 'huong-dan.pdf', fileData: original };
+  await externalizeGuideWrite(g, store);
+  assert.equal(g.fileData, undefined, 'fileData base64 bị xóa khỏi bản ghi');
+  assert.equal(g.storageKey, 'guides/g-1/file.pdf', 'có storageKey');
+  const back = await inlineGuideRead(g, store);
+  assert.ok(Buffer.compare(decodeDataUri(back.fileData).bytes, bin) === 0, 'fileData dựng lại khớp bytes gốc');
+});
+
+await Case('Ký PUT không rỗng: payloadHash = sha256(body) (không UNSIGNED) — chuỗi ký ổn định, hợp lệ', () => {
+  const body = Buffer.from('tài liệu nhị phân');
+  const payloadHash = crypto.createHash('sha256').update(body).digest('hex');
+  const r = signRequestV4({
+    method: 'PUT', canonicalUri: '/ecabinet/documents/d1/v1.pdf', query: {},
+    headers: { host: 'minio:9000', 'x-amz-content-sha256': payloadHash, 'x-amz-date': '20150830T123600Z', 'content-type': 'application/pdf' },
+    payloadHash, ...SV4,
+  });
+  assert.ok(/^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/20150830\/us-east-1\/service\/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date, Signature=[0-9a-f]{64}$/.test(r.authorization),
+    'Authorization PUT có đủ signed headers sắp xếp + chữ ký 64 hex');
 });
 
 const exitCode = report();

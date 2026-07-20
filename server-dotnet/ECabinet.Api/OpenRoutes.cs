@@ -50,7 +50,8 @@ public sealed class OpenAccessors
 public sealed class OpenRoutes
 {
     private readonly IDocStore _store;
-    public OpenRoutes(IDocStore store) => _store = store;
+    private readonly IBlobStore _blob;
+    public OpenRoutes(IDocStore store, IBlobStore blob) { _store = store; _blob = blob; }
 
     private const string BASE = "/api/open/v1";
     private static int OpenRateMax => Env.GetInt("OPEN_RATE_MAX", 120);
@@ -367,6 +368,9 @@ public sealed class OpenRoutes
             ["mime"] = J.Str(d, "mime"),
             ["content"] = J.Str(d, "content"),
             ["dataUrl"] = J.Str(d, "dataUrl"),
+            // Tách file (GĐ3): storageKey NỘI BỘ — router dựng lại dataUrl từ S3 rồi XÓA
+            // field này trước khi trả cho bên thứ 3 (KHÔNG lộ khóa S3 ra ngoài).
+            ["storageKey"] = J.Str(d, "storageKey"),
         });
     }
 
@@ -469,6 +473,23 @@ public sealed class OpenRoutes
 
                 var accessors = await LoadAccessors();
                 var outp = r.Fn(c, accessors);
+                // Tách file (GĐ3): endpoint nội dung tài liệu — nếu đã externalize sang S3
+                // (storageKey) và chưa có dataUrl, dựng lại dataUrl từ S3 cho LGSP; LUÔN xóa
+                // storageKey khỏi phản hồi (khóa S3 nội bộ, không lộ ra bên thứ 3).
+                if (outp.Status == 200 && outp.Body is JsonObject ob && ob.ContainsKey("storageKey"))
+                {
+                    var key = J.Str(ob, "storageKey");
+                    ob.Remove("storageKey");
+                    if (!string.IsNullOrEmpty(key) && J.Str(ob, "dataUrl") is null && _blob.Configured())
+                    {
+                        try
+                        {
+                            var bytes = await _blob.GetAsync(key!);
+                            ob["dataUrl"] = Blob.EncodeDataUri(bytes, J.Str(ob, "mime"));
+                        }
+                        catch { await SendOpen(c.Res, 502, new JsonObject { ["error"] = "Không đọc được nội dung tệp từ kho lưu trữ" }); return; }
+                    }
+                }
                 await SendOpen(c.Res, outp.Status, outp.Body);
             });
         }

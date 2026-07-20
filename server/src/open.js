@@ -19,6 +19,7 @@ import crypto from 'node:crypto';
 import { query } from './db.js';
 import { hit } from './ratelimit.js';
 import { buildOpenApiSpec, OPEN_API_VERSION, SERVICE_NAME } from './openapi.js';
+import { blobStore, encodeDataUri } from './blob.js';
 
 const sha256 = (t) => crypto.createHash('sha256').update(String(t), 'utf8').digest('hex');
 
@@ -309,6 +310,9 @@ export function handleDocumentContent(params, query, accessors) {
       mime: d.mime ?? null,
       content: d.content ?? null,
       dataUrl: d.dataUrl ?? null,
+      // Tách file (GĐ3): storageKey NỘI BỘ — router sẽ dựng lại dataUrl từ S3 rồi
+      // XÓA field này trước khi trả cho bên thứ 3 (KHÔNG lộ khóa S3 ra ngoài).
+      storageKey: d.storageKey ?? null,
     },
   };
 }
@@ -422,6 +426,21 @@ export function registerOpenApi(app) {
 
     const accessors = await loadAccessors();
     const out = route.fn(req.params, req.query, accessors);
+    // Tách file (GĐ3): endpoint nội dung tài liệu — nếu đã externalize sang S3
+    // (storageKey) và chưa có dataUrl, dựng lại dataUrl từ S3 cho LGSP; LUÔN xóa
+    // storageKey khỏi phản hồi (khóa S3 là nội bộ, không lộ ra bên thứ 3).
+    if (out.status === 200 && out.body && 'storageKey' in out.body) {
+      const key = out.body.storageKey;
+      delete out.body.storageKey;
+      if (key && !out.body.dataUrl && blobStore.configured()) {
+        try {
+          const bytes = await blobStore.get(key);
+          out.body.dataUrl = encodeDataUri(bytes, out.body.mime);
+        } catch {
+          return sendOpen(res, 502, { error: 'Không đọc được nội dung tệp từ kho lưu trữ' });
+        }
+      }
+    }
     sendOpen(res, out.status, out.body);
   };
 
