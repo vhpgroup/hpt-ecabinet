@@ -167,7 +167,7 @@ Phủ đợt 2: (a) **presigned SigV4 round-trip** tự tính lại chữ ký kh
 
 ## 7. RỦI RO / GIỚI HẠN CÒN LẠI
 
-1. ~~**Dựng lại dataUrl (không streaming)**~~ — **ĐÃ XỬ LÝ (đợt 2, mục 6bis)**: thêm endpoint tải mới `/api/{documents,guides}/:id/download` + LGSP `/content` → **302 redirect presigned URL** (client tải thẳng từ S3, backend 0 byte RAM); TTL ngắn 300s; chỉ cấp sau kiểm quyền đọc. GET document GIỮ dựng-lại-`dataUrl` (FE 0 sửa). **Còn lại:** GET document (đường FE hiển thị) vẫn nạp base64 vào RAM khi mở tài liệu để xem — chưa chuyển FE sang dùng endpoint `/download`/`contentUrl` (rủi ro phá FE cao hơn lợi ích trước mắt); tệp lớn xem đồng thời nhiều vẫn tốn RAM ở đường XEM. Chuyển FE sang `contentUrl` presigned cho khung xem là bước sau (cần sửa `shared.tsx` + kiểm kỹ preview `<iframe>`/`<img>` với URL S3 + CORS bucket).
+1. ~~**Dựng lại dataUrl (không streaming) / đường XEM vẫn nạp base64 vào RAM**~~ — **ĐÃ XỬ LÝ HẾT (đợt 2 + đợt 3)**: đợt 2 thêm `/api/{documents,guides}/:id/download` + LGSP `/content` → **302 presigned** (tải thẳng từ S3, backend 0 byte RAM). **Đợt 3** (mục 7bis) chuyển ĐƯỜNG XEM sang **`contentUrl`**: GET document/guide/list/PATCH KHÔNG còn dựng base64 — FE fetch nội dung qua `/download` (helper `src/services/fileContent.ts`) rồi objectURL cho iframe/img/tải; có fallback `?mode=stream` khi MinIO chưa mở CORS. Đã chuyển `shared.tsx` (DocViewerModal + GuideViewBody), GuidesAdminPage, HelpPage. **Còn lại:** hop trình duyệt→MinIO chỉ kiểm chứng được với MinIO thật (sandbox không có) — bù bằng unit-test fallback + hướng dẫn mục 7bis.8.
 2. **Không kiểm chứng S3 thật trong sandbox** (không Docker/MinIO, không mở socket) — đã bù bằng test-vector SigV4 chính thức + mock round-trip + E2E HTTP. Chủ dự án chạy mục 6 để xác nhận cuối.
 3. **PUT bulk `/api/:collection` (admin) và seed KHÔNG externalize** — giữ nguyên dữ liệu import/seed (thường nhỏ, chạy trước khi bật S3). Nếu cần import khối lượng lớn khi S3 đã bật → viết migration riêng.
 4. **Tắt S3 sau khi đã bật**: bản ghi đã externalize (chỉ storageKey) khi S3 tắt sẽ không dựng được dataUrl (GET trả metadata, thiếu nội dung). Không nên tắt S3 sau khi đã dùng; nếu cần → chạy migration kéo tệp về base64 trước.
@@ -175,4 +175,84 @@ Phủ đợt 2: (a) **presigned SigV4 round-trip** tự tính lại chữ ký kh
 6. **Chưa có virus scan / mã hóa at-rest** — ngoài phạm vi đợt này (đã ghi ở báo cáo hiện trạng #4, #5). MinIO/S3 hỗ trợ SSE server-side; virus scan cần dịch vụ ngoài (ClamAV).
 7. ~~**Xóa tài liệu chưa xóa object trên S3**~~ — **ĐÃ XỬ LÝ (đợt 2, mục 6bis.5)**: DELETE document/guide có `storageKey` + S3 bật → dọn `blob.delete` best-effort (lỗi S3 chỉ log, không chặn xóa DB); gom hết key kể cả version cũ (`versions[]`). **Còn lại:** dữ liệu import/PUT-bulk/seed hoặc key mồ côi do lỗi cũ vẫn nên có **rà quét rác định kỳ** (liệt kê object S3 không còn bản ghi DB tham chiếu) — chưa làm, là công cụ vận hành riêng.
 
-8. **LGSP `/content` ở chế độ redirect ≠ spec `application/json`**: mặc định `S3_DOWNLOAD_MODE=redirect` khiến `/content` trả **302** thay vì JSON `dataUrl` mà `openapi.js` mô tả (spec KHÔNG được sửa — ngoài phạm vi đợt này). Consumer LGSP theo HTTP chuẩn sẽ **follow redirect** lấy bytes bình thường, nhưng nếu client parse cứng JSON thì cần đặt `S3_DOWNLOAD_MODE=stream` (giữ đúng spec dataUrl). **Khuyến nghị bước sau:** hoặc cập nhật spec mô tả 302, hoặc để `/content` mặc định `stream` và thêm endpoint `/content/download` riêng cho redirect. Chủ dự án chọn theo cách LGSP thực tế tích hợp.
+8. ~~**LGSP `/content` ở chế độ redirect ≠ spec `application/json`**~~ — **ĐÃ XỬ LÝ (đợt 3, mục 7bis.3)**: cập nhật OpenAPI (`openapi.js` + `OpenApiCatalog.cs`) mô tả rõ `/content` mặc định **302→presigned**, `?mode=stream` trả bytes/JSON dataUrl; thêm param `mode` + response 302. Sửa lệch spec đã ghi nhận đợt 2.
+
+---
+
+## 7bis. ĐỢT 3 — contentUrl CHO ĐƯỜNG XEM (backend NGỪNG dựng base64 khi GET) + query mode + CORS MinIO (20/07/2026)
+
+**Mục tiêu:** đường **XEM** tài liệu trên FE dùng `contentUrl` thay vì `dataUrl` base64 → backend KHÔNG còn dựng lại base64 vào RAM mỗi lần GET document/guide (đường ghi/tải đợt 1–2 giữ nguyên). **Cùng ràng buộc:** KHÔNG dep, KHÔNG S3 thật trong sandbox (mock + test-vector; hop trình duyệt→MinIO ghi hướng dẫn kiểm chứng thật), tương thích ngược tuyệt đối, parity 2 backend, KHÔNG commit.
+
+### 7bis.1. CẠM BẪY TRUNG TÂM (auth/CORS) + GIẢI PHÁP FALLBACK
+- `<iframe src>` / `<img src>` / `<a href download>` **KHÔNG gửi được header `Authorization`** → FE KHÔNG thể trỏ thẳng iframe vào `/api/documents/:id/download` (endpoint cần Bearer JWT).
+- **Giải pháp:** FE `fetch('/api/documents/:id/download', {headers: Authorization})` → fetch **TỰ THEO 302** sang presigned URL của MinIO (hop này không cần auth vì đã ký) → nhận **Blob** → `URL.createObjectURL(blob)` → dùng làm `src` cho iframe/img/link tải. Hop **trình duyệt→MinIO là cross-origin** → cần **CORS trên MinIO**.
+- **FALLBACK BẮT BUỘC:** nếu fetch-theo-302→MinIO lỗi (MinIO chưa mở CORS / mạng chặn endpoint S3) → FE **tự gọi lại** `/api/documents/:id/download?mode=stream` (same-origin, backend stream bytes) → **luôn xem/tải được**. Để làm được, backend hỗ trợ **override chế độ theo QUERY** `?mode=stream|redirect` (ưu tiên query > env `S3_DOWNLOAD_MODE`) ở CẢ 2 backend.
+
+### 7bis.2. Query mode override (`?mode=`) — parity 2 backend
+- Hàm THUẦN `downloadModeFrom(query)` (Node `blob.js`) / `Blob.DownloadModeFrom(IQueryCollection)` (.NET `BlobStore.cs`): chỉ nhận `stream`/`redirect`; giá trị lạ/thiếu → rơi về `downloadMode()` (env, mặc định `redirect`). **Ưu tiên query > env.**
+- Wire vào: `handleFileDownload` (`index.js`) / `HandleFileDownload` (`App.cs`) cho **cả** `/api/documents/:id/download` + `/api/guides/:id/download`; và LGSP `/content` router (`open.js` / `OpenRoutes.cs`). **Kiểm quyền đọc GIỮ NGUYÊN** — chạy TRƯỚC khi cấp presigned/stream (không nới lỏng).
+
+### 7bis.3. GET document/guide NGỪNG dựng base64 → trả `contentUrl`
+- Hàm THUẦN `projectDocumentRead(doc)` / `projectGuideRead(guide)` (Node) + `Blob.ProjectDocumentRead/ProjectGuideRead` (.NET). Chiếu bản ghi cho client (trả BẢN SAO):
+  - Có `storageKey` (đã externalize) → **XÓA storageKey** (không lộ khóa S3), **THÊM `contentUrl: "/api/documents/<id>/download"`** (guides: `/api/guides/<id>/download`), **KHÔNG dựng dataUrl**.
+  - Bản ghi CŨ còn `dataUrl`/`fileData` trong DB → **giữ nguyên** (tương thích ngược).
+  - Tài liệu soạn tay (chỉ `content`) → trả nguyên.
+- Điểm móc: `GET /api/:collection/:id` (index.js / App.cs), **PATCH response**, và **danh sách `GET /api/:collection`** — tất cả nhất quán project cho documents/guides. **Danh sách** vốn không dựng dataUrl (giữ nhẹ) — nay project thêm để **ẩn `storageKey`** (đóng lỗ rò khóa S3 ở danh sách — trước đây data thô lộ storageKey) + gắn `contentUrl`.
+- **Escape khẩn `S3_INLINE_READ=on`** (`inlineReadEnabled()` / `Blob.InlineReadEnabled()`): khôi phục hành vi cũ trước đợt 3 — GET/PATCH dựng lại `dataUrl` từ S3 (dùng `inlineDocumentRead`, KHÔNG project). Mặc định TẮT.
+- **OpenAPI `/content`** (`openapi.js` + `OpenApiCatalog.cs`): mô tả rõ 302→presigned mặc định + `?mode=stream` trả bytes; thêm param `mode` + response 302. (Sửa lệch spec ghi nhận đợt 2 — mục #8.)
+
+### 7bis.4. FRONTEND — helper dùng chung + rà tất cả nơi đọc dataUrl/fileData
+- **File mới `src/services/fileContent.ts`**: `getDocContentUrl(doc)` / `getGuideContentUrl(guide)` → `FileContent{url,isObjectUrl,mime}`:
+  - (a) `doc.dataUrl` / `guide.fileData` sẵn (demo / bản ghi cũ / `S3_INLINE_READ`) → trả THẲNG (KHÔNG fetch).
+  - (b) `contentUrl` có → `fetch` kèm `Authorization` (token lấy qua `db.getToken()` — tái dùng cơ chế của `restAdapter`) → fetch tự theo 302 sang MinIO → Blob → `objectURL`; lỗi → **tự thử lại `?mode=stream`**.
+  - URL tuyệt đối dựng qua `getServerOrigin()` (đúng cả web same-origin lẫn app native khác origin).
+  - **Cache theo `id+version` (doc) / `id+updatedAt` (guide)** tránh fetch/objectURL trùng; `revokeDocContent/revokeGuideContent/revokeAllContent` dọn objectURL (chống rò).
+- **Đã rà & chuyển (grep `dataUrl`/`fileData` trong `src/ui/`):**
+  - `src/ui/pages/shared.tsx` — **`DocViewerModal`** (modal xem tài liệu dùng ở DocumentsPage, MeetingDetailPage, LiveMeetingPage, OnlineMeetingPage, PollsPage — tab tài liệu phiên họp, thư mục cá nhân, đính kèm kết luận đều đi qua modal này): iframe PDF/img + nút tải xuống nay dùng helper; có **trạng thái loading** ("Đang tải nội dung tệp…") + **lỗi → nút "Thử tải trực tiếp"** (retry) + toast tiếng Việt; dọn objectURL khi đóng/đổi tài liệu.
+  - `src/ui/pages/shared.tsx` — thêm `GuideViewBody` + `guideHasFile` **dùng chung** cho HDSD.
+  - `src/ui/pages/admin/GuidesAdminPage.tsx` — `GuideViewModal` dùng `GuideViewBody`; danh sách + form sửa dùng `guideHasFile` (guide đã externalize chỉ còn `contentUrl` vẫn nhận là "có tệp"; **sửa tiêu đề KHÔNG bắt tải lại tệp** — giữ tệp cũ).
+  - `src/ui/pages/HelpPage.tsx` (HDSD người dùng) — `HelpViewModal` dùng `GuideViewBody`.
+  - Đã kiểm: MeetingDetailPage/LiveMeetingPage/OnlineMeetingPage/PollsPage chỉ hiển thị **metadata** tài liệu + mở `DocViewerModal` (không đọc nội dung tệp trực tiếp); SupportPage/SupportAdminPage (phản hồi) không có tệp; **không có màn hình TV** đọc nội dung tệp.
+- **Type**: `DocFile.contentUrl?` + `GuideDoc.contentUrl?` (OPTIONAL) — `src/domain/types.ts`.
+- **Demo mode (localStorage): 0 thay đổi** — `db` demo không có `getToken`; documents luôn có `dataUrl` → helper trả thẳng, KHÔNG fetch.
+
+### 7bis.5. HẠ TẦNG — CORS MinIO
+- CẢ 2 compose (`docker-compose.yml` + `docker-compose.dotnet.yml`): service `minio` thêm `MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_CORS_ORIGIN:-*}` (mặc định `*` cho dễ dựng; **vận hành nên đặt = origin THẬT** của web). YAML đã validate.
+- Docs: `docs/HUONG-DAN-TRIEN-KHAI-VA-HSMT.md` mục **A3.1** (thêm dòng `.env` CORS + giải thích 2 chế độ redirect/stream + contentUrl + escape) và README mục **6.1** tương ứng.
+
+### 7bis.6. File / dòng (đợt 3)
+| Việc | Node | .NET |
+|---|---|---|
+| query mode override (thuần) | `blob.js` `downloadModeFrom` | `BlobStore.cs` `Blob.DownloadModeFrom` |
+| escape inline read (thuần) | `blob.js` `inlineReadEnabled` | `BlobStore.cs` `Blob.InlineReadEnabled` |
+| chiếu contentUrl (thuần) | `blob.js` `projectDocumentRead/projectGuideRead` | `BlobStore.cs` `Blob.ProjectDocumentRead/ProjectGuideRead` |
+| GET/PATCH/list dùng project + escape | `index.js` (GET :id, PATCH, GET list) | `App.cs` (GET :id, PATCH, GET list) |
+| `/download` + LGSP `/content` dùng `downloadModeFrom` | `index.js` `handleFileDownload`, `open.js` router | `App.cs` `HandleFileDownload`, `OpenRoutes.cs` router |
+| OpenAPI `/content` 302/mode | `openapi.js` | `OpenApiCatalog.cs` |
+| helper FE + type | `src/services/fileContent.ts`, `src/domain/types.ts` | — |
+| UI chuyển sang helper | `shared.tsx` (DocViewerModal, GuideViewBody), `admin/GuidesAdminPage.tsx`, `HelpPage.tsx` | — |
+| CORS MinIO | `docker-compose.yml`, `docs`, `README` | `docker-compose.dotnet.yml` |
+
+### 7bis.7. KẾT QUẢ TEST (đợt 3 — không cần S3 thật)
+| Suite | Trước đợt 3 | Sau đợt 3 | Ca mới | FAIL |
+|---|---|---|---|---|
+| `node scripts/build-cdn.mjs` (×2) | PASS | **PASS** | — | 0 |
+| `node server/test/smoke.mjs` | 111 | **119** | +8 | 0 |
+| `dotnet run --project server-dotnet/ECabinet.Tests` | 166 | **173** | +9 (net; **2 ca cũ SỬA có chủ đích**) | 0 |
+
+**Ca .NET SỬA có chủ đích (vì đường XEM đổi từ dataUrl → contentUrl):**
+- *"E2E S3 BẬT: GET document dựng lại dataUrl…"* → đổi thành *"GET document trả contentUrl (KHÔNG dataUrl/storageKey)"* — vì backend nay không nhồi base64 khi GET. Việc khôi phục dataUrl chuyển sang ca **`S3_INLINE_READ=on`** riêng.
+- *"E2E GUIDES: … GET dựng lại fileData khớp"* → đổi thành *"GET trả contentUrl (KHÔNG fileData)"* + kiểm khôi phục qua `S3_INLINE_READ=on` ngay trong ca. DB vẫn lưu `storageKey` (không đổi).
+
+**Ca MỚI (2 backend):** query `?mode=` ưu tiên > env (+ giá trị lạ → env); `inlineReadEnabled` toggle; `projectDocumentRead/ProjectGuideRead` (contentUrl + ẩn storageKey + không base64; bản ghi cũ/soạn tay giữ nguyên; id encode an toàn URL); GET doc S3-on trả contentUrl không dataUrl/storageKey; bản ghi cũ trả dataUrl; **`S3_INLINE_READ=on` khôi phục dataUrl** (round-trip khớp); guides parity. **.NET E2E thêm:** `?mode=stream` GHI ĐÈ env redirect → 200 bytes (fallback); danh sách documents ẩn storageKey + gắn contentUrl không base64.
+
+### 7bis.8. HƯỚNG DẪN KIỂM CHỨNG THẬT (MinIO + trình duyệt — sandbox không chạy được)
+Sandbox KHÔNG có MinIO và không mở socket → **hop trình duyệt→MinIO không test được ở đây** (đã bù: logic fallback unit-test bằng mock fetch lỗi → gọi lại `mode=stream`; SigV4/presigned test-vector; E2E TestHost). Chủ dự án kiểm chứng thật:
+1. Dựng `.env` như mục A3.1 (điền `S3_*` + `MINIO_CORS_ORIGIN=<origin web thật>`), `docker compose up -d --build`.
+2. Đăng nhập app, tải 1 PDF vào phiên họp, **mở xem**:
+   - Kỳ vọng: xem trước PDF/ảnh inline bình thường; nút "Tải xuống" hoạt động.
+   - DevTools → Network: request `GET /api/documents/<id>/download` trả **302** → request tiếp tới **MinIO :9000** (presigned, có `X-Amz-Signature`) trả **200** + header `Access-Control-Allow-Origin`.
+   - `GET /api/documents/<id>` (khi mở danh sách) trả JSON có **`contentUrl`**, KHÔNG có `dataUrl`/`storageKey`.
+3. **Thử fallback:** tạm đặt `MINIO_CORS_ORIGIN` sai (vd `https://khac.example`) + `docker compose up -d` lại service minio → mở xem tài liệu: hop→MinIO bị CORS chặn, FE **tự** gọi lại `GET /api/documents/<id>/download?mode=stream` (200, same-origin) → **vẫn xem được**. Khôi phục `MINIO_CORS_ORIGIN` đúng sau khi kiểm.
+4. **Escape khẩn:** đặt `S3_INLINE_READ=on` + khởi động lại `api` → `GET /api/documents/<id>` trả lại **`dataUrl`** base64 như hành vi cũ (dùng khi cần gấp, chấp nhận tốn RAM).
+5. LGSP: `curl -H "X-API-Key: <key>" -i https://<host>/api/open/v1/documents/<id>/content` → **302** tới presigned; thêm `?mode=stream` → **200** bytes / JSON dataUrl.

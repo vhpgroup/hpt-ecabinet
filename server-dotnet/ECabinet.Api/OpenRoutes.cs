@@ -485,7 +485,8 @@ public sealed class OpenRoutes
                         // redirect (mặc định): 302 tới presigned URL, LGSP tải THẲNG từ S3 (backend 0
                         // byte RAM). stream: dựng lại dataUrl JSON như cũ (giữ spec dataUrl / môi
                         // trường không cho client tới S3 trực tiếp).
-                        if (Blob.DownloadMode() == "redirect")
+                        // ĐỢT 3 — chế độ theo QUERY ?mode=stream|redirect (ưu tiên query > env) — parity.
+                        if (Blob.DownloadModeFrom(c.Query) == "redirect")
                         {
                             try
                             {

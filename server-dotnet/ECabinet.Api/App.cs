@@ -184,7 +184,9 @@ public static class App
         if (!string.IsNullOrEmpty(key) && blob.Configured())
         {
             var mime = col == "documents" ? (J.Str(readable, "mime") ?? Blob.MimeFromKey(key!)) : Blob.MimeFromKey(key!);
-            if (Blob.DownloadMode() == "redirect")
+            // ĐỢT 3 — chế độ theo QUERY ?mode=stream|redirect (ưu tiên query > env). Cho phép
+            // FALLBACK của FE: fetch-theo-302→MinIO lỗi (CORS/mạng) -> gọi lại ?mode=stream.
+            if (Blob.DownloadModeFrom(c.Req.Query) == "redirect")
             {
                 string url;
                 try { url = blob.PresignGetUrl(key!, Blob.PresignTtlSec(), name, mime); }
@@ -445,8 +447,17 @@ public static class App
             if (col == "users") rows = rows.Select(SanitizeUser).ToList();
             if (col == "apiKeys") rows = rows.Select(SanitizeApiKey).ToList();
             var filtered = await access.FilterList(col, rows, c.User!);
+            // ĐỢT 3 — danh sách documents/guides: KHÔNG kèm base64 (như trước). Bản ghi đã
+            // externalize có storageKey trong data thô -> projectXxxRead xóa storageKey (KHÔNG lộ
+            // khóa S3) + gắn contentUrl để FE mở xem qua /download. Bản ghi cũ (còn dataUrl) / S3
+            // tắt: trả nguyên.
             var arr = new JsonArray();
-            foreach (var r in filtered) arr.Add(r);
+            foreach (var r in filtered)
+            {
+                var proj = col == "documents" ? Blob.ProjectDocumentRead(r)
+                    : col == "guides" ? Blob.ProjectGuideRead(r) : r;
+                arr.Add(proj);
+            }
             await HttpUtil.Send(c.Res, 200, arr);
         });
 
@@ -461,13 +472,23 @@ public static class App
             var projected = col == "users" ? SanitizeUser(data) : col == "apiKeys" ? SanitizeApiKey(data) : data;
             var readable = await access.ReadOne(col, projected, c.User!);
             if (readable is null) { await HttpUtil.SendError(c.Res, 404, "Không tìm thấy bản ghi"); return; }
-            // Tách file (GĐ3): nếu bản ghi đã externalize sang S3 (storageKey) -> dựng lại
-            // dataUrl/fileData từ S3 để FE hiển thị y như cũ (khóa S3 KHÔNG lộ ra client).
-            // S3 tắt hoặc bản ghi cũ (chỉ có dataUrl) -> trả nguyên (tương thích ngược).
+            // ĐỢT 3 — ĐƯỜNG XEM dùng contentUrl thay base64:
+            //   Bản ghi đã externalize (storageKey) + S3 bật -> KHÔNG dựng base64 nữa. Trả contentUrl
+            //   trỏ endpoint /download (302 presigned / stream), KHÔNG lộ storageKey. FE tự fetch nội
+            //   dung qua contentUrl. Bản ghi CŨ còn dataUrl -> trả nguyên. Escape S3_INLINE_READ=on
+            //   -> KHÔI PHỤC hành vi cũ (dựng lại dataUrl từ S3).
             try
             {
-                if (col == "documents") { await HttpUtil.Send(c.Res, 200, await Blob.InlineDocumentReadAsync(readable, blob)); return; }
-                if (col == "guides") { await HttpUtil.Send(c.Res, 200, await Blob.InlineGuideReadAsync(readable, blob)); return; }
+                if (col == "documents")
+                {
+                    if (Blob.InlineReadEnabled()) { await HttpUtil.Send(c.Res, 200, await Blob.InlineDocumentReadAsync(readable, blob)); return; }
+                    await HttpUtil.Send(c.Res, 200, Blob.ProjectDocumentRead(readable)); return;
+                }
+                if (col == "guides")
+                {
+                    if (Blob.InlineReadEnabled()) { await HttpUtil.Send(c.Res, 200, await Blob.InlineGuideReadAsync(readable, blob)); return; }
+                    await HttpUtil.Send(c.Res, 200, Blob.ProjectGuideRead(readable)); return;
+                }
             }
             catch (Exception e) { await HttpUtil.SendError(c.Res, 502, $"Không đọc được nội dung tệp từ kho lưu trữ: {e.Message}"); return; }
             await HttpUtil.Send(c.Res, 200, readable);
@@ -626,9 +647,18 @@ public static class App
             catch (Exception e) { await HttpUtil.SendError(c.Res, 502, $"Không lưu được tệp lên kho lưu trữ: {e.Message}"); return; }
             await store.UpdateAsync(table, c.Params["id"], merged2);
             Realtime.NotifyChange(col, "update", c.Params["id"]);
-            // Trả cho FE: nếu đã externalize thì dựng lại dataUrl/fileData (hiển thị như cũ).
-            if (col == "documents") { await HttpUtil.Send(c.Res, 200, await SafeInlineDoc(merged2, blob)); return; }
-            if (col == "guides") { await HttpUtil.Send(c.Res, 200, await SafeInlineGuide(merged2, blob)); return; }
+            // Trả cho FE — NHẤT QUÁN với GET :id (đợt 3): mặc định trả contentUrl (không base64);
+            // escape S3_INLINE_READ=on -> dựng lại dataUrl/fileData như cũ (best-effort).
+            if (col == "documents")
+            {
+                if (Blob.InlineReadEnabled()) { await HttpUtil.Send(c.Res, 200, await SafeInlineDoc(merged2, blob)); return; }
+                await HttpUtil.Send(c.Res, 200, Blob.ProjectDocumentRead(merged2)); return;
+            }
+            if (col == "guides")
+            {
+                if (Blob.InlineReadEnabled()) { await HttpUtil.Send(c.Res, 200, await SafeInlineGuide(merged2, blob)); return; }
+                await HttpUtil.Send(c.Res, 200, Blob.ProjectGuideRead(merged2)); return;
+            }
             await HttpUtil.Send(c.Res, 200, col == "apiKeys" ? SanitizeApiKey(merged2) : merged2);
         });
 

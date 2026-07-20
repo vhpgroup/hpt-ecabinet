@@ -8,6 +8,7 @@ import { ROLE_LABEL } from '../../../domain/labels';
 import { useApp } from '../../../store/AppContext';
 import { Badge, EmptyState, Field, Icon, Modal, PageHeader } from '../../components';
 import * as catalogService from '../../../services/catalogService';
+import { GuideViewBody, guideHasFile } from '../shared';
 import { fmtDT } from '../../format';
 
 const ROLE_KEYS = Object.keys(ROLE_LABEL) as Role[];
@@ -35,7 +36,7 @@ export default function GuidesAdminPage() {
         {list.length === 0 && <EmptyState icon="file" text="Chưa có tài liệu hướng dẫn nào" />}
         {list.map((g) => (
           <div key={g.id} className="doc-item">
-            <div className="doc-ic"><Icon name={g.fileData ? 'file' : 'info'} size={17} /></div>
+            <div className="doc-ic"><Icon name={guideHasFile(g) ? 'file' : 'info'} size={17} /></div>
             <div style={{ minWidth: 0, flex: 1 }}>
               <div className="doc-name" onClick={() => setViewing(g)}>{g.title}</div>
               <div className="doc-sub">
@@ -43,7 +44,7 @@ export default function GuidesAdminPage() {
                 {g.roleScope && g.roleScope.length > 0
                   ? `Cho: ${g.roleScope.map((r) => ROLE_LABEL[r]).join(', ')}`
                   : 'Áp dụng cho tất cả'}
-                {g.fileData ? ` · Tệp: ${g.fileName ?? 'đính kèm'}` : ''}
+                {guideHasFile(g) ? ` · Tệp: ${g.fileName ?? 'đính kèm'}` : ''}
               </div>
             </div>
             <div className="doc-acts">
@@ -67,7 +68,10 @@ export default function GuidesAdminPage() {
 function GuideFormModal({ initial, onClose, onDone }: { initial: Partial<GuideDoc>; onClose: () => void; onDone: () => void }) {
   const { user } = useApp();
   const [title, setTitle] = useState(initial.title ?? '');
-  const [mode, setMode] = useState<'text' | 'file'>(initial.fileData ? 'file' : 'text');
+  // ĐỢT 3: guide đã externalize (S3) chỉ còn contentUrl (không fileData) -> vẫn coi là 'file' mode
+  // để sửa tiêu đề/phạm vi mà KHÔNG bắt tải lại tệp (guideHasFile: fileData HOẶC contentUrl).
+  const hadFile = !!initial.fileData || !!initial.contentUrl;
+  const [mode, setMode] = useState<'text' | 'file'>(hadFile ? 'file' : 'text');
   const [content, setContent] = useState(initial.content ?? '');
   const [fileName, setFileName] = useState(initial.fileName ?? '');
   const [fileData, setFileData] = useState(initial.fileData ?? '');
@@ -92,14 +96,18 @@ function GuideFormModal({ initial, onClose, onDone }: { initial: Partial<GuideDo
     setErr('');
     if (!title.trim()) return setErr('Nhập tiêu đề tài liệu hướng dẫn');
     if (mode === 'text' && !content.trim()) return setErr('Nhập nội dung hoặc chuyển sang tải tệp');
-    if (mode === 'file' && !fileData) return setErr('Chọn tệp để tải lên');
+    // ĐỢT 3: SỬA guide đã có tệp (externalize S3, chỉ contentUrl) mà KHÔNG tải tệp mới -> cho phép
+    // (giữ tệp cũ). Chỉ bắt "chọn tệp" khi TẠO mới hoặc chưa từng có tệp.
+    const keepExistingFile = mode === 'file' && !fileData && !!initial.contentUrl;
+    if (mode === 'file' && !fileData && !keepExistingFile) return setErr('Chọn tệp để tải lên');
     try {
       await catalogService.saveGuide(user!, {
         id: initial.id, title: title.trim(),
-        // giữ đúng 1 dạng nội dung theo lựa chọn (xóa dạng còn lại)
+        // giữ đúng 1 dạng nội dung theo lựa chọn (xóa dạng còn lại).
+        // fileData=undefined khi giữ tệp cũ -> PATCH KHÔNG gửi field này -> backend giữ storageKey.
         content: mode === 'text' ? content : undefined,
-        fileName: mode === 'file' ? fileName : undefined,
-        fileData: mode === 'file' ? fileData : undefined,
+        fileName: mode === 'file' ? (fileData ? fileName : undefined) : undefined,
+        fileData: mode === 'file' && fileData ? fileData : undefined,
         roleScope,
       });
       onDone();
@@ -123,7 +131,9 @@ function GuideFormModal({ initial, onClose, onDone }: { initial: Partial<GuideDo
       ) : (
         <Field label="Tệp hướng dẫn (PDF, ảnh… ≤ 3MB)">
           <input type="file" className="inp" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
-          {fileData && <span style={{ fontSize: 12, color: 'var(--green)' }}>Đã chọn: {fileName}</span>}
+          {fileData
+            ? <span style={{ fontSize: 12, color: 'var(--green)' }}>Đã chọn: {fileName}</span>
+            : initial.contentUrl && <span style={{ fontSize: 12, color: 'var(--muted)' }}>Đang dùng tệp hiện tại{initial.fileName ? `: ${initial.fileName}` : ''} — chọn tệp mới nếu muốn thay.</span>}
         </Field>
       )}
       <Field label="Phạm vi vai trò (bỏ trống = áp dụng cho tất cả)">
@@ -141,26 +151,10 @@ function GuideFormModal({ initial, onClose, onDone }: { initial: Partial<GuideDo
 }
 
 function GuideViewModal({ guide, onClose }: { guide: GuideDoc; onClose: () => void }) {
-  const download = () => {
-    const a = document.createElement('a');
-    a.href = guide.fileData!;
-    a.download = guide.fileName ?? guide.title;
-    a.click();
-  };
+  const { toast } = useApp();
   return (
     <Modal title={guide.title} onClose={onClose} width={800}>
-      {guide.fileData ? (
-        guide.fileData.startsWith('data:application/pdf') ? (
-          <iframe className="doc-frame" src={guide.fileData} title={guide.title} />
-        ) : guide.fileData.startsWith('data:image/') ? (
-          <img src={guide.fileData} alt={guide.title} style={{ maxWidth: '100%', borderRadius: 6 }} />
-        ) : (
-          <div className="empty"><Icon name="file" size={28} /><p>Không xem trước được định dạng này.</p>
-            <button className="btn outline sm" onClick={download}><Icon name="download" size={14} />Tải xuống</button></div>
-        )
-      ) : (
-        <div className="doc-viewer"><div className="doc-page">{guide.content}</div></div>
-      )}
+      <GuideViewBody guide={guide} toast={toast} />
     </Modal>
   );
 }

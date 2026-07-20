@@ -66,8 +66,18 @@ public static class OpenApiCatalog
             new[] { new CatalogParam("id", "path", true, "string", "Mã cuộc họp") }, "documents", 59),
         new("document-content", "GET", "/api/open/v1/documents/{id}/content",
             "Tải nội dung tài liệu",
-            "Trả nội dung/dữ liệu (text hoặc dataUrl base64) của 1 tài liệu ĐÃ DUYỆT và KHÔNG MẬT. Yêu cầu quyền (scope) \"documents\".",
-            new[] { new CatalogParam("id", "path", true, "string", "Mã tài liệu") }, "documents", 59),
+            "Trả nội dung 1 tài liệu ĐÃ DUYỆT và KHÔNG MẬT (scope \"documents\"). "
+            + "Tài liệu SOẠN TRỰC TIẾP: trả JSON {content}. Tệp đính kèm khi bật object storage (S3/MinIO): "
+            + "MẶC ĐỊNH trả 302 REDIRECT tới presigned URL tải THẲNG từ S3 (backend không nạp tệp vào RAM). "
+            + "Thêm ?mode=stream để backend TRẢ THẲNG BYTES tệp (Content-Type/Content-Disposition; dùng khi "
+            + "consumer không tới được endpoint S3 trực tiếp hoặc cần parse JSON dataUrl như cũ). "
+            + "Bản ghi cũ (base64 trong CSDL) / chưa bật S3: trả JSON {dataUrl} như trước. "
+            + "Có thể ép chế độ toàn cục bằng biến môi trường S3_DOWNLOAD_MODE (query ?mode= ưu tiên hơn).",
+            new[]
+            {
+                new CatalogParam("id", "path", true, "string", "Mã tài liệu"),
+                new CatalogParam("mode", "query", false, "string", "stream = trả bytes tệp; redirect (mặc định) = 302 tới presigned URL S3"),
+            }, "documents", 59),
         new("health", "GET", "/api/open/v1/health",
             "Kiểm tra tình trạng dịch vụ",
             "Trả {ok, service, version}. Dùng để LGSP thăm dò tình trạng dịch vụ. Vẫn yêu cầu khóa API hợp lệ.",
@@ -150,6 +160,13 @@ public static class OpenApiCatalog
             };
             if (e.Scope == "documents")
                 responses["403"] = new JsonObject { ["description"] = "Khóa API không có quyền tài liệu", ["content"] = new JsonObject { ["application/json"] = new JsonObject { ["schema"] = Ref("Error") } } };
+            // /content khi bật object storage (mặc định): 302 tới presigned URL của S3/MinIO.
+            if (e.Id == "document-content")
+                responses["302"] = new JsonObject
+                {
+                    ["description"] = "Chuyển hướng tới presigned URL của S3/MinIO để tải tệp trực tiếp (khi bật object storage, chế độ redirect). Header Location chứa URL đã ký, TTL ngắn.",
+                    ["headers"] = new JsonObject { ["Location"] = new JsonObject { ["description"] = "Presigned URL tải tệp trực tiếp từ object storage", ["schema"] = new JsonObject { ["type"] = "string" } } },
+                };
 
             var op = new JsonObject
             {

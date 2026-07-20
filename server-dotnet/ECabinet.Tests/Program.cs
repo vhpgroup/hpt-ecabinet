@@ -1856,7 +1856,11 @@ static async Task Group11_BlobS3(TestRunner t)
         Assert.True(blob.Has("documents/doc-e2e-1/v1.pdf"), "bytes đã PUT lên S3 (blob giả)");
     });
 
-    await t.Case("E2E S3 BẬT: GET document dựng lại dataUrl từ S3, KHỚP base64 gốc; khóa S3 KHÔNG lộ", async () =>
+    // ĐỢT 3 (SỬA CÓ CHỦ ĐÍCH): trước đây ca này assert GET document DỰNG LẠI dataUrl từ S3.
+    // Nay đường XEM dùng contentUrl (backend KHÔNG nhồi base64) -> ca đổi thành: GET trả
+    // contentUrl trỏ /download, KHÔNG dataUrl, KHÔNG storageKey. (Khôi phục dataUrl kiểm ở ca
+    // S3_INLINE_READ=on bên dưới.)
+    await t.Case("E2E S3 BẬT (đợt 3): GET document trả contentUrl (KHÔNG dataUrl/storageKey) — đường XEM không base64", async () =>
     {
         var blob = new MemBlob(on: true);
         await using var app = await TestApp.CreateAsync(blob);
@@ -1872,7 +1876,53 @@ static async Task Group11_BlobS3(TestRunner t)
         Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-e2e-2");
         var r = await app.Get("/api/documents/doc-e2e-2", admin);
         Assert.Status(200, r.Status, "GET document");
-        Assert.Eq(url, r.Obj["dataUrl"]?.GetValue<string>(), "dataUrl dựng lại từ S3 KHỚP base64 gốc");
+        Assert.Eq("/api/documents/doc-e2e-2/download", r.Obj["contentUrl"]?.GetValue<string>(), "trả contentUrl trỏ endpoint /download");
+        Assert.True(!r.Obj.ContainsKey("dataUrl"), "KHÔNG nhồi base64 vào phản hồi GET (đường XEM tối ưu)");
+        Assert.True(!r.Obj.ContainsKey("storageKey"), "KHÔNG lộ khóa S3 ra client");
+    });
+
+    await t.Case("E2E S3_INLINE_READ=on (escape khẩn): GET document KHÔI PHỤC dựng lại dataUrl từ S3 khớp gốc", async () =>
+    {
+        Environment.SetEnvironmentVariable("S3_INLINE_READ", "on");
+        try
+        {
+            var blob = new MemBlob(on: true);
+            await using var app = await TestApp.CreateAsync(blob);
+            var admin = await app.Login("quantri");
+            var pdfB64 = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(2048));
+            var url = $"data:application/pdf;base64,{pdfB64}";
+            var doc = new JsonObject
+            {
+                ["id"] = "doc-inl", ["name"] = "x.pdf", ["kind"] = "reference", ["ownerId"] = "u-admin",
+                ["sharedWith"] = new JsonArray(), ["size"] = 0, ["mime"] = "application/pdf", ["secret"] = false, ["version"] = 1,
+                ["uploadedAt"] = NowIsoT(), ["dataUrl"] = url,
+            };
+            Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-inl");
+            var r = await app.Get("/api/documents/doc-inl", admin);
+            Assert.Status(200, r.Status, "GET document (escape on)");
+            Assert.Eq(url, r.Obj["dataUrl"]?.GetValue<string>(), "S3_INLINE_READ=on: dataUrl dựng lại KHỚP base64 gốc (hành vi cũ)");
+            Assert.True(!r.Obj.ContainsKey("contentUrl"), "escape on: KHÔNG kèm contentUrl (đường cũ)");
+        }
+        finally { Environment.SetEnvironmentVariable("S3_INLINE_READ", null); }
+    });
+
+    await t.Case("E2E S3 BẬT (đợt 3): GET document CŨ (còn dataUrl trong DB khi S3 tắt lúc tạo) -> trả dataUrl (tương thích)", async () =>
+    {
+        // Tạo bản ghi khi S3 TẮT (giữ dataUrl trong DB), rồi GET khi S3 BẬT -> vẫn trả dataUrl cũ.
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(256))}";
+        var offBlob = new MemBlob(on: false);
+        await using var app = await TestApp.CreateAsync(offBlob);
+        var admin = await app.Login("quantri");
+        var doc = new JsonObject
+        {
+            ["id"] = "doc-legacy", ["name"] = "x.pdf", ["kind"] = "reference", ["ownerId"] = "u-admin",
+            ["sharedWith"] = new JsonArray(), ["size"] = 0, ["mime"] = "application/pdf", ["secret"] = false, ["version"] = 1,
+            ["uploadedAt"] = NowIsoT(), ["dataUrl"] = url,
+        };
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-legacy (S3 tắt -> giữ dataUrl DB)");
+        var r = await app.Get("/api/documents/doc-legacy", admin);
+        Assert.Eq(url, r.Obj["dataUrl"]?.GetValue<string>(), "bản ghi cũ còn dataUrl -> GET trả nguyên dataUrl (tương thích ngược)");
+        Assert.True(!r.Obj.ContainsKey("contentUrl"), "bản ghi cũ không thêm contentUrl");
     });
 
     await t.Case("E2E TƯƠNG THÍCH NGƯỢC — S3 TẮT: POST document giữ dataUrl base64 trong DB (hành vi cũ)", async () =>
@@ -1944,7 +1994,9 @@ static async Task Group11_BlobS3(TestRunner t)
         Assert.Status(404, r.Status, "tài liệu mật: Open API KHÔNG trả nội dung (lọc quyền giữ nguyên, không nới lỏng)");
     });
 
-    await t.Case("E2E GUIDES: POST guide có fileData -> DB lưu storageKey; GET dựng lại fileData khớp", async () =>
+    // ĐỢT 3 (SỬA CÓ CHỦ ĐÍCH): trước đây GET guide dựng lại fileData. Nay GET trả contentUrl
+    // (đường XEM không base64). DB vẫn lưu storageKey (không đổi). Khôi phục fileData qua escape.
+    await t.Case("E2E GUIDES (đợt 3): POST guide có fileData -> DB lưu storageKey; GET trả contentUrl (KHÔNG fileData)", async () =>
     {
         var blob = new MemBlob(on: true);
         await using var app = await TestApp.CreateAsync(blob);
@@ -1961,7 +2013,17 @@ static async Task Group11_BlobS3(TestRunner t)
         Assert.True(!stored!.ContainsKey("fileData"), "DB KHÔNG lưu fileData base64");
         Assert.Eq("guides/g-e2e/file.pdf", J.Str(stored, "storageKey"), "DB lưu storageKey");
         var r = await app.Get("/api/guides/g-e2e", admin);
-        Assert.Eq(url, r.Obj["fileData"]?.GetValue<string>(), "fileData dựng lại khớp gốc");
+        Assert.Eq("/api/guides/g-e2e/download", r.Obj["contentUrl"]?.GetValue<string>(), "guide trả contentUrl trỏ /download");
+        Assert.True(!r.Obj.ContainsKey("fileData"), "KHÔNG nhồi base64 vào GET guide");
+        Assert.True(!r.Obj.ContainsKey("storageKey"), "KHÔNG lộ khóa S3");
+        // escape khẩn: khôi phục dựng lại fileData
+        Environment.SetEnvironmentVariable("S3_INLINE_READ", "on");
+        try
+        {
+            var r2 = await app.Get("/api/guides/g-e2e", admin);
+            Assert.Eq(url, r2.Obj["fileData"]?.GetValue<string>(), "S3_INLINE_READ=on: fileData dựng lại khớp gốc");
+        }
+        finally { Environment.SetEnvironmentVariable("S3_INLINE_READ", null); }
     });
 
     // ============================================================
@@ -2105,6 +2167,101 @@ static async Task Group11_BlobS3(TestRunner t)
     });
 
     // ============================================================
+    // ĐỢT 3 — ĐƯỜNG XEM contentUrl + query mode override + escape (hàm THUẦN + E2E).
+    // ============================================================
+    await t.Case("DownloadModeFrom: query ?mode= ƯU TIÊN hơn env; giá trị lạ -> theo env; mặc định redirect", () =>
+    {
+        var saved = Environment.GetEnvironmentVariable("S3_DOWNLOAD_MODE");
+        Environment.SetEnvironmentVariable("S3_DOWNLOAD_MODE", null);
+        Assert.Eq("redirect", Blob.DownloadModeFrom(QC("")), "mặc định redirect");
+        Assert.Eq("stream", Blob.DownloadModeFrom(QC("mode=stream")), "query=stream -> stream");
+        Assert.Eq("redirect", Blob.DownloadModeFrom(QC("mode=redirect")), "query=redirect -> redirect");
+        Assert.Eq("redirect", Blob.DownloadModeFrom(QC("mode=xyz")), "query lạ -> theo env (redirect)");
+        Environment.SetEnvironmentVariable("S3_DOWNLOAD_MODE", "stream");
+        Assert.Eq("stream", Blob.DownloadMode(), "env stream");
+        Assert.Eq("stream", Blob.DownloadModeFrom(QC("")), "không query -> theo env stream");
+        Assert.Eq("redirect", Blob.DownloadModeFrom(QC("mode=redirect")), "query=redirect GHI ĐÈ env=stream");
+        Environment.SetEnvironmentVariable("S3_DOWNLOAD_MODE", saved);
+        return Task.CompletedTask;
+    });
+
+    await t.Case("InlineReadEnabled: mặc định TẮT; chỉ bật khi S3_INLINE_READ=on (case-insensitive)", () =>
+    {
+        var saved = Environment.GetEnvironmentVariable("S3_INLINE_READ");
+        Environment.SetEnvironmentVariable("S3_INLINE_READ", null);
+        Assert.True(!Blob.InlineReadEnabled(), "mặc định TẮT (đợt 3 trả contentUrl)");
+        Environment.SetEnvironmentVariable("S3_INLINE_READ", "on");
+        Assert.True(Blob.InlineReadEnabled(), "on -> bật");
+        Environment.SetEnvironmentVariable("S3_INLINE_READ", "ON");
+        Assert.True(Blob.InlineReadEnabled(), "ON -> bật (case-insensitive)");
+        Environment.SetEnvironmentVariable("S3_INLINE_READ", "true");
+        Assert.True(!Blob.InlineReadEnabled(), "chỉ 'on' mới bật");
+        Environment.SetEnvironmentVariable("S3_INLINE_READ", saved);
+        return Task.CompletedTask;
+    });
+
+    await t.Case("ProjectDocumentRead/ProjectGuideRead: đã externalize -> contentUrl, ẩn storageKey, không base64; cũ/soạn tay giữ nguyên", () =>
+    {
+        var doc = new JsonObject { ["id"] = "doc-x", ["name"] = "x.pdf", ["mime"] = "application/pdf", ["size"] = 1234, ["storageKey"] = "documents/doc-x/v2.pdf" };
+        var outp = Blob.ProjectDocumentRead(doc);
+        Assert.Eq("/api/documents/doc-x/download", J.Str(outp, "contentUrl"), "contentUrl trỏ /download");
+        Assert.True(!outp.ContainsKey("dataUrl"), "KHÔNG base64");
+        Assert.True(!outp.ContainsKey("storageKey"), "ẩn khóa S3");
+        Assert.Eq("documents/doc-x/v2.pdf", J.Str(doc, "storageKey"), "trả BẢN SAO — bản gốc còn storageKey");
+        // bản ghi cũ còn dataUrl -> giữ nguyên
+        var legacy = new JsonObject { ["id"] = "old", ["dataUrl"] = "data:application/pdf;base64,AAAA" };
+        var outL = Blob.ProjectDocumentRead(legacy);
+        Assert.Eq("data:application/pdf;base64,AAAA", J.Str(outL, "dataUrl"), "bản ghi cũ giữ dataUrl");
+        Assert.True(!outL.ContainsKey("contentUrl"), "không thêm contentUrl khi đã có dataUrl");
+        // soạn tay -> nguyên
+        var txt = new JsonObject { ["id"] = "t", ["content"] = "Nội dung" };
+        Assert.True(!Blob.ProjectDocumentRead(txt).ContainsKey("contentUrl"), "soạn tay không contentUrl");
+        // guides parity
+        var g = new JsonObject { ["id"] = "g-x", ["title"] = "H", ["storageKey"] = "guides/g-x/file.pdf" };
+        Assert.Eq("/api/guides/g-x/download", J.Str(Blob.ProjectGuideRead(g), "contentUrl"), "guide contentUrl đúng");
+        var gL = new JsonObject { ["id"] = "g-old", ["fileData"] = "data:application/pdf;base64,BBBB" };
+        Assert.True(!Blob.ProjectGuideRead(gL).ContainsKey("contentUrl"), "guide cũ giữ fileData, không contentUrl");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("E2E TẢI query override: env redirect + ?mode=stream -> 200 bytes (FALLBACK khi MinIO chưa mở CORS)", async () =>
+    {
+        // env mặc định redirect (không set S3_DOWNLOAD_MODE); query ?mode=stream GHI ĐÈ -> stream bytes.
+        var blob = new MemBlob(on: true);
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var raw = System.Security.Cryptography.RandomNumberGenerator.GetBytes(555);
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(raw)}";
+        var doc = MakeDoc("doc-q-stream", secret: false, reviewStatus: "approved", dataUrl: url);
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-q-stream");
+        // không query -> redirect (mặc định)
+        var rRedir = await app.SendNoRedirect("GET", "/api/documents/doc-q-stream/download", admin);
+        Assert.Status(302, rRedir.Status, "không ?mode= -> redirect mặc định (302)");
+        // ?mode=stream -> backend trả bytes
+        var rStream = await app.SendNoRedirect("GET", "/api/documents/doc-q-stream/download?mode=stream", admin);
+        Assert.Status(200, rStream.Status, "?mode=stream GHI ĐÈ -> 200 bytes (same-origin fallback)");
+        var bytes = await rStream.Message.Content.ReadAsByteArrayAsync();
+        Assert.True(bytes.SequenceEqual(raw), "bytes stream KHỚP nội dung gốc");
+    });
+
+    await t.Case("E2E danh sách documents (đợt 3): GET /api/documents ẩn storageKey + gắn contentUrl, KHÔNG base64", async () =>
+    {
+        var blob = new MemBlob(on: true);
+        await using var app = await TestApp.CreateAsync(blob);
+        var admin = await app.Login("quantri");
+        var url = $"data:application/pdf;base64,{Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(400))}";
+        var doc = MakeDoc("doc-list-1", secret: false, reviewStatus: "approved", dataUrl: url);
+        Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-list-1");
+        var r = await app.Get("/api/documents", admin);
+        Assert.Status(200, r.Status, "GET danh sách documents");
+        var item = r.Arr.OfType<JsonObject>().FirstOrDefault(d => J.Str(d, "id") == "doc-list-1");
+        Assert.True(item is not null, "có bản ghi trong danh sách");
+        Assert.Eq("/api/documents/doc-list-1/download", J.Str(item!, "contentUrl"), "danh sách gắn contentUrl");
+        Assert.True(!item!.ContainsKey("storageKey"), "danh sách KHÔNG lộ storageKey");
+        Assert.True(!item!.ContainsKey("dataUrl"), "danh sách KHÔNG nhồi base64 (như trước)");
+    });
+
+    // ============================================================
     // TỐI ƯU 2 — XÓA DỌN OBJECT S3 (best-effort, đa version).
     // ============================================================
     await t.Case("DocumentStorageKeys/GuideStorageKeys: gom key hiện tại + version cũ, loại trùng/rỗng", () =>
@@ -2169,6 +2326,18 @@ static async Task Group11_BlobS3(TestRunner t)
         Assert.Status(200, (await app.Delete("/api/documents/doc-del-off", admin)).Status, "xóa 200");
         Assert.Eq(0, blob.Deleted.Count, "S3 tắt -> KHÔNG gọi blob.Delete (giữ hành vi cũ)");
     });
+}
+
+/// <summary>Dựng IQueryCollection từ query string (vd "mode=stream") cho test DownloadModeFrom (ĐỢT 3).</summary>
+static Microsoft.AspNetCore.Http.IQueryCollection QC(string qs)
+{
+    var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>();
+    foreach (var pair in qs.Split('&', StringSplitOptions.RemoveEmptyEntries))
+    {
+        var kv = pair.Split('=', 2);
+        dict[kv[0]] = kv.Length > 1 ? kv[1] : "";
+    }
+    return new Microsoft.AspNetCore.Http.QueryCollection(dict);
 }
 
 /// <summary>Dựng document tối thiểu cho test tải/xóa (TỐI ƯU 1/2).</summary>

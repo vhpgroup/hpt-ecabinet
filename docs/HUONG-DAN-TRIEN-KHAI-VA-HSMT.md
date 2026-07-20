@@ -69,12 +69,20 @@ S3_BUCKET=ecabinet-docs
 S3_ACCESS_KEY=ecabinet            # = MINIO_USER
 S3_SECRET_KEY=<mật-khẩu-mạnh>     # = MINIO_PASSWORD
 S3_FORCE_PATH_STYLE=true
+# CORS cho hop TRÌNH DUYỆT→MinIO (đường XEM tài liệu — xem giải thích 2 chế độ bên dưới).
+# Mặc định '*' (dễ dựng); VẬN HÀNH nên đặt = origin THẬT của web:
+MINIO_CORS_ORIGIN=https://ecabinet.<tỉnh>.gov.vn
 ```
-- Compose (Node hoặc .NET) sẽ khởi động thêm `minio` + `minio-init` (tạo bucket **private** một lần). Console MinIO: `http://<máy-chủ>:9001`.
+- Compose (Node hoặc .NET) sẽ khởi động thêm `minio` + `minio-init` (tạo bucket **private** một lần). Console MinIO: `http://<máy-chủ>:9001`. Service `minio` nhận `MINIO_API_CORS_ALLOW_ORIGIN=${MINIO_CORS_ORIGIN:-*}`.
 - **GATED**: bỏ trống các biến `S3_*` → giữ hành vi base64-trong-DB như cũ (KHÔNG vỡ demo/dev). Điền đủ → tệp MỚI tách sang S3, DB chỉ lưu `storageKey`; bản ghi cũ vẫn đọc được.
-- **API/FE không đổi**: backend tự tách khi ghi và dựng lại `dataUrl` khi đọc; khóa S3 không lộ ra client; tài liệu mật/lọc quyền giữ nguyên.
-- **Kiểm chứng nhanh** (sau khi tải 1 tài liệu): bản ghi trong DB có `storageKey` và KHÔNG có `dataUrl`; đối tượng có thật trong bucket. Lệnh cụ thể: `README.md` mục **6.1** + báo cáo `docs/ra-soat/2026-07-20/tach-file-object-storage.md`.
-- Không thêm dependency: chữ ký AWS SigV4 tự viết (`server/src/blob.js`, `server-dotnet/.../Store/BlobStore.cs`) — kiểm bằng test-vector chính thức của AWS.
+- **Đường TẢI/XEM tệp — 2 chế độ (điểm chốt đợt 3):**
+  - **`redirect` (mặc định):** endpoint `GET /api/documents/:id/download` (và `/api/guides/:id/download`, LGSP `/content`) trả **302 → presigned URL** để trình duyệt/consumer tải **THẲNG từ MinIO** — backend **0 byte** tệp vào RAM (tối ưu băng thông). Hop trình duyệt→MinIO là **cross-origin** nên MinIO PHẢI mở **CORS** (`MINIO_CORS_ORIGIN`) thì `fetch` của FE mới đọc được Blob.
+  - **`stream`:** backend tự kéo bytes từ MinIO rồi trả (same-origin, KHÔNG cần CORS MinIO). Dùng khi MinIO chỉ nằm trong mạng nội bộ/sau proxy (client không tới được S3 trực tiếp), hoặc khi chưa kịp mở CORS. Bật toàn cục bằng `S3_DOWNLOAD_MODE=stream`, hoặc theo từng yêu cầu bằng query `?mode=stream` (query **ưu tiên hơn** env).
+  - **FE tự chống lỗi:** đường XEM (`src/services/fileContent.ts`) fetch `/download` kèm `Authorization`, tự theo 302 sang MinIO; nếu hop→MinIO lỗi (chưa mở CORS/mạng chặn) → **tự fallback** gọi lại `?mode=stream` (same-origin) nên **luôn xem được**, kể cả khi CORS chưa cấu hình.
+- **Đường XEM dùng `contentUrl` (không base64):** khi bật S3, `GET /api/documents/:id` và danh sách trả field **`contentUrl`** (vd `/api/documents/<id>/download`) thay cho `dataUrl` base64 → backend KHÔNG dựng lại base64 lúc mở tài liệu (đỡ RAM). Khóa S3 (`storageKey`) không lộ ra client. **Escape khẩn** `S3_INLINE_READ=on` → khôi phục hành vi cũ (GET dựng lại `dataUrl`) cho tình huống cần. Bản ghi cũ còn `dataUrl` trong DB vẫn trả `dataUrl` (tương thích).
+- **Bảo mật giữ nguyên:** endpoint tải kiểm quyền đọc Y HỆT `GET :id` (tài liệu mật/lọc quyền → 404) **trước** khi cấp presigned; TTL presigned ngắn (mặc định 300s, `S3_PRESIGN_TTL`); KHÔNG log URL đã ký.
+- **Kiểm chứng nhanh** (sau khi tải 1 tài liệu): bản ghi trong DB có `storageKey` và KHÔNG có `dataUrl`; `GET :id` trả `contentUrl`; đối tượng có thật trong bucket; mở tài liệu trong app hiển thị/tải bình thường. Lệnh cụ thể: `README.md` mục **6.1** + báo cáo `docs/ra-soat/2026-07-20/tach-file-object-storage.md`.
+- Không thêm dependency: chữ ký AWS SigV4 (header + presigned query) tự viết (`server/src/blob.js`, `server-dotnet/.../Store/BlobStore.cs`) — kiểm bằng test-vector chính thức của AWS.
 - **Sao lưu**: khi bật S3, thêm lịch backup riêng cho bucket (MinIO `mc mirror`/snapshot volume `ecabinet_minio`) **độc lập** với backup DB — đúng mô hình 4 cụm.
 
 ### A4. Sao lưu / phục hồi + diễn tập DR (chứng minh RTO ≤24h theo HSMT)

@@ -115,6 +115,13 @@ export interface GuideDoc {
   fileData?: string;
   /** Khóa object storage khi tệp HDSD đã tách khỏi CSDL (GĐ3). OPTIONAL, backend quản lý. */
   storageKey?: string;
+  /**
+   * ĐỢT 3 — đường tương đối same-origin để LẤY nội dung tệp HDSD (vd
+   * "/api/guides/<id>/download"). Backend trả field này thay cho fileData base64 khi bản ghi
+   * đã externalize sang S3. FE dùng services/fileContent.ts (fetch có auth -> Blob -> objectURL)
+   * để xem/tải. OPTIONAL, chỉ có khi bật object storage; demo/bản ghi cũ vẫn dùng fileData.
+   */
+  contentUrl?: string;
   /** áp dụng cho vai trò nào; trống = tất cả */
   roleScope?: Role[];
   updatedAt: string;
@@ -238,6 +245,14 @@ export interface DocFile {
    * đã dựng). Giữ ở type để round-trip JSON không mất trường + không phá tương thích.
    */
   storageKey?: string;
+  /**
+   * ĐỢT 3 — đường tương đối same-origin để LẤY nội dung tệp (vd "/api/documents/<id>/download").
+   * Backend trả field này THAY cho dataUrl base64 khi bản ghi đã externalize sang S3 (đường XEM
+   * không nhồi base64). FE dùng services/fileContent.ts (fetch có Authorization -> fetch tự theo
+   * 302 sang presigned MinIO -> Blob -> objectURL; fallback ?mode=stream). OPTIONAL: chỉ có khi
+   * bật object storage; demo/bản ghi cũ/S3_INLINE_READ=on vẫn dùng dataUrl như trước.
+   */
+  contentUrl?: string;
   uploadedAt: string;
   secret: boolean; // tài liệu mật
   version: number;

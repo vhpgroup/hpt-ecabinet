@@ -261,8 +261,14 @@ Theo mô hình **"Cụm Server-File"** của HSMT (lưu tệp đính kèm/media 
 - **Không đặt biến `S3_*`** (mặc định) → hành vi **Y HỆT** trước: nội dung tệp lưu base64 ngay trong cột JSON của DB (`DocFile.dataUrl`, `GuideDoc.fileData`). Demo trình duyệt, dev, test cũ **không đổi**.
 - **Đặt đủ 4 biến bắt buộc** (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`; tùy chọn `S3_REGION` mặc định `us-east-1`, `S3_FORCE_PATH_STYLE` mặc định `true` cho MinIO) → tệp **MỚI** được PUT lên S3; DB chỉ lưu `storageKey` (vd `documents/<docId>/v1.pdf`), **không** còn base64.
 - **Bản ghi CŨ** đã có base64 vẫn đọc bình thường (không bắt buộc migrate).
-- **API contract KHÔNG đổi**: frontend vẫn gửi/nhận `dataUrl` base64 như cũ. Backend là nơi quyết định: khi ghi → tách base64 lên S3; khi FE đọc lại tài liệu → backend GET từ S3 và **dựng lại** `dataUrl` nên FE hiển thị y như trước. **Khóa S3 (`storageKey`) không lộ ra client**; tài liệu mật/lọc quyền đọc **giữ nguyên** (chỉ ai được đọc bản ghi mới nhận được nội dung).
-- **Không thêm dependency**: chữ ký **AWS Signature V4 tự viết** bằng `node:crypto` (Node — `server/src/blob.js`) và `System.Security.Cryptography` (.NET — `server-dotnet/ECabinet.Api/Store/BlobStore.cs`), gọi S3 REST qua `fetch`/`HttpClient`. Đã kiểm bằng **test-vector chính thức của AWS** (`aws-sig-v4-test-suite`).
+- **Ghi**: frontend vẫn gửi `dataUrl` base64 như cũ; backend tách sang S3 lúc ghi (DB chỉ giữ `storageKey`). **Khóa S3 (`storageKey`) không lộ ra client**; tài liệu mật/lọc quyền đọc **giữ nguyên**.
+- **Đọc/XEM (đợt 3) — dùng `contentUrl`, KHÔNG dựng base64**: `GET /api/documents/:id` (và danh sách, PATCH) trả field **`contentUrl`** (vd `/api/documents/<id>/download`) thay cho `dataUrl` → backend không nạp base64 vào RAM khi mở tài liệu. FE lấy nội dung qua endpoint đó (`src/services/fileContent.ts`). Bản ghi cũ còn `dataUrl` trong DB → vẫn trả `dataUrl`. **Escape khẩn** `S3_INLINE_READ=on` → khôi phục hành vi cũ (GET dựng lại `dataUrl`).
+- **Tải tệp — 2 chế độ** (endpoint `GET /api/documents/:id/download`, `/api/guides/:id/download`, LGSP `/content`):
+  - `redirect` (mặc định): **302 → presigned URL**, tải **thẳng từ MinIO** (backend 0 byte RAM). Hop trình duyệt→MinIO cross-origin → cần **CORS trên MinIO** (`MINIO_CORS_ORIGIN`).
+  - `stream`: backend kéo bytes rồi trả (same-origin, không cần CORS MinIO). Bật toàn cục `S3_DOWNLOAD_MODE=stream` hoặc theo yêu cầu `?mode=stream` (**query ưu tiên hơn env**).
+  - FE **tự fallback**: nếu fetch-theo-302→MinIO lỗi (CORS/mạng) → gọi lại `?mode=stream` (same-origin) nên luôn xem/tải được.
+- **Bảo mật**: endpoint tải kiểm quyền đọc Y HỆT `GET :id` (mật/lọc quyền → 404) **trước** khi cấp presigned; TTL ngắn (300s, `S3_PRESIGN_TTL`); không log URL đã ký.
+- **Không thêm dependency**: chữ ký **AWS Signature V4 tự viết** (header + presigned query) bằng `node:crypto` (Node — `server/src/blob.js`) và `System.Security.Cryptography` (.NET — `server-dotnet/ECabinet.Api/Store/BlobStore.cs`), gọi S3 REST qua `fetch`/`HttpClient`. Đã kiểm bằng **test-vector chính thức của AWS** (`aws-sig-v4-test-suite`).
 
 **Bật MinIO nội bộ bằng Docker Compose** — tạo file `.env` cạnh `docker-compose.yml`:
 
@@ -276,6 +282,9 @@ S3_BUCKET=ecabinet-docs
 S3_ACCESS_KEY=ecabinet          # = MINIO_USER
 S3_SECRET_KEY=ecabinet-secret-doi-di   # = MINIO_PASSWORD
 S3_FORCE_PATH_STYLE=true
+# CORS cho hop trình duyệt→MinIO (đường XEM chế độ redirect). Mặc định '*';
+# vận hành nên đặt = origin THẬT của web:
+MINIO_CORS_ORIGIN=https://ecabinet.<tinh>.gov.vn
 ```
 
 ```bash
@@ -297,9 +306,13 @@ docker exec ecabinet-db psql -U ecabinet -d ecabinet \
 # 2) Đối tượng có thật trong bucket MinIO:
 docker exec ecabinet-minio mc ls --recursive local/ecabinet-docs
 # (nếu chưa có alias trong container minio: dùng service mc, hoặc xem trên Console :9001)
+
+# 3) GET tài liệu trả contentUrl (KHÔNG base64) — đường XEM đợt 3:
+#    Mở tài liệu trong app → FE fetch contentUrl (có Authorization) → tự theo 302 sang MinIO
+#    (cần CORS) hoặc fallback ?mode=stream. Xem/tải phải hoạt động bình thường.
 ```
 
-> Tối ưu bước sau (ghi trong báo cáo `docs/ra-soat/2026-07-20/tach-file-object-storage.md`): thay "dựng lại dataUrl" bằng **streaming trực tiếp / presigned URL TTL ngắn** để không phải nạp toàn bộ tệp vào RAM backend; thêm **virus scan** trước khi PUT.
+> **Đã tối ưu (đợt 2–3):** tải tệp bằng **302 → presigned URL** (redirect) / **stream** thay vì dựng lại base64 vào RAM; đường XEM trả **`contentUrl`** để backend không nhồi base64 khi mở tài liệu; dọn object S3 khi xóa. Chi tiết + hướng dẫn kiểm chứng: `docs/ra-soat/2026-07-20/tach-file-object-storage.md`. *(Còn lại: virus scan trước khi PUT; mã hóa at-rest.)*
 
 ## 7. PWA (cài như ứng dụng)
 
@@ -312,7 +325,7 @@ Truy cập bằng Chrome/Edge → biểu tượng **Cài đặt** trên thanh đ
 | ~~Realtime đẩy sự kiện~~ | ✅ **ĐÃ CÓ (GĐ3)** — WebSocket RFC 6455 tự viết, poke-then-pull, keepalive, tự kết nối lại |
 | ~~Endpoint nghiệp vụ + rate-limit + refresh token~~ | ✅ **ĐÃ CÓ (GĐ4)** — /api/actions kiểm tra sâu, guard CRUD, chống brute-force, phiên xoay vòng |
 | Chuẩn hóa CSDL | Tách dần bảng JSONB thành bảng quan hệ cho thực thể nóng (ballots, participants) khi quy mô lớn |
-| ~~Lưu trữ tài liệu lớn~~ | ✅ **ĐÃ CÓ (GĐ3)** — object storage MinIO/S3 tách tệp base64 khỏi DB (chống phình DB), GATED bằng biến `S3_*`, ký AWS SigV4 tự viết (không thêm dep). Xem mục 6.1. *(Còn lại: virus scan, streaming/presigned thay vì dựng lại dataUrl)* |
+| ~~Lưu trữ tài liệu lớn~~ | ✅ **ĐÃ CÓ (GĐ3, tối ưu đợt 2–3)** — object storage MinIO/S3 tách tệp base64 khỏi DB (chống phình DB), GATED bằng biến `S3_*`, ký AWS SigV4 tự viết (không thêm dep); tải qua **302 presigned / stream**; đường XEM dùng **`contentUrl`** (không dựng base64); dọn S3 khi xóa. Xem mục 6.1. *(Còn lại: virus scan, mã hóa at-rest)* |
 | Đăng nhập nâng cao | Refresh token, SSO/LDAP cơ quan, 2FA |
 | Ký số thật | VNPT SmartCA / USB token (plugin ký hash phía client), chữ ký chuẩn PAdES |
 | ~~Họp trực tuyến~~ | ✅ **ĐÃ CÓ** — WebRTC thật qua LiveKit (SFU): camera/mic/chia sẻ màn hình, gated bằng cấu hình, fallback mô phỏng an toàn (xem mục 6) |

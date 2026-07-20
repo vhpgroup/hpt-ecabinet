@@ -90,6 +90,10 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_USER:-ecabinet}
       MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-ecabinet-secret}
+      # ĐỢT 3 — CORS cho hop TRÌNH DUYỆT→MinIO (đường XEM FE fetch /download rồi theo 302 sang
+      # presigned URL của MinIO, cross-origin). Mặc định '*'; VẬN HÀNH nên đặt = origin THẬT của
+      # web qua MINIO_CORS_ORIGIN. KHÔNG mở CORS -> FE fallback /download?mode=stream (same-origin).
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_CORS_ORIGIN:-*}
     volumes:
       - ecabinet_dotnet_minio:/data
     ports:

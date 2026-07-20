@@ -19,7 +19,7 @@ import crypto from 'node:crypto';
 import { query } from './db.js';
 import { hit } from './ratelimit.js';
 import { buildOpenApiSpec, OPEN_API_VERSION, SERVICE_NAME } from './openapi.js';
-import { blobStore, encodeDataUri, downloadMode, presignTtlSec, mimeFromKey } from './blob.js';
+import { blobStore, encodeDataUri, downloadModeFrom, presignTtlSec, mimeFromKey } from './blob.js';
 
 const sha256 = (t) => crypto.createHash('sha256').update(String(t), 'utf8').digest('hex');
 
@@ -436,7 +436,8 @@ export function registerOpenApi(app) {
         // TỐI ƯU 1 — redirect (mặc định): 302 tới presigned URL, LGSP tải THẲNG từ S3
         // (backend KHÔNG nạp tệp vào RAM). stream: dựng lại dataUrl JSON như cũ (tương thích
         // môi trường không cho client tới S3 trực tiếp / giữ đúng spec dataUrl đã công bố).
-        if (downloadMode() === 'redirect') {
+        // ĐỢT 3 — chế độ theo QUERY ?mode=stream|redirect (ưu tiên query > env) cho parity đường tải.
+        if (downloadModeFrom(req.query) === 'redirect') {
           try {
             const url = blobStore.presignGetUrl(key, presignTtlSec(), {
               filename: out.body.name, contentType: out.body.mime || mimeFromKey(key),

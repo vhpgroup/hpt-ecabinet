@@ -32,7 +32,8 @@ import { registerOpenApi } from './open.js';
 import {
   blobConfigured, externalizeDocumentWrite, externalizeGuideWrite,
   inlineDocumentRead, inlineGuideRead, blobStore,
-  downloadMode, presignTtlSec, mimeFromKey, documentStorageKeys, guideStorageKeys,
+  downloadModeFrom, inlineReadEnabled, presignTtlSec, mimeFromKey,
+  documentStorageKeys, guideStorageKeys, projectDocumentRead, projectGuideRead,
 } from './blob.js';
 
 // GĐ4: rate-limit
@@ -446,7 +447,9 @@ async function handleFileDownload(req, res, col) {
   // Nhánh 1: đã externalize (storageKey) + S3 bật.
   if (key && blobStore.configured()) {
     const mime = col === 'documents' ? (readable.mime || mimeFromKey(key)) : mimeFromKey(key);
-    if (downloadMode() === 'redirect') {
+    // ĐỢT 3 — chế độ theo QUERY ?mode=stream|redirect (ưu tiên query > env). Cho phép FALLBACK
+    // của FE: nếu fetch-theo-302→MinIO lỗi (CORS/mạng) -> gọi lại ?mode=stream (same-origin).
+    if (downloadModeFrom(req.query) === 'redirect') {
       // 302 -> presigned URL (client tải thẳng từ S3). KHÔNG log URL (chứa chữ ký).
       let url;
       try {
@@ -521,6 +524,12 @@ app.add('GET', '/api/:collection', requireAuth, async (req, res) => {
   if (col === 'apiKeys') rows = rows.map(sanitizeApiKey); // RỔ B: ẩn keyHash
   // GĐ6 (P0-1): lọc quyền đọc theo bản ghi phía server
   rows = await filterList(col, rows, req.user);
+  // ĐỢT 3 — danh sách documents/guides: KHÔNG kèm base64 (như trước, danh sách vốn không
+  // dựng dataUrl). Nhưng bản ghi đã externalize có storageKey trong data thô -> projectXxxRead
+  // xóa storageKey (KHÔNG lộ khóa S3) + gắn contentUrl để FE mở xem qua endpoint /download.
+  // Bản ghi cũ (còn dataUrl) hoặc S3 tắt (chưa externalize): projectXxxRead trả nguyên.
+  if (col === 'documents') rows = rows.map(projectDocumentRead);
+  if (col === 'guides') rows = rows.map(projectGuideRead);
   send(res, 200, rows);
 });
 
@@ -535,12 +544,21 @@ app.add('GET', '/api/:collection/:id', requireAuth, async (req, res) => {
   const projected = col === 'users' ? sanitizeUser(data) : col === 'apiKeys' ? sanitizeApiKey(data) : data;
   const readable = await readOne(col, projected, req.user);
   if (!readable) return send(res, 404, { error: 'Không tìm thấy bản ghi' });
-  // Tách file (GĐ3): nếu bản ghi đã externalize sang S3 (có storageKey) -> dựng lại
-  // dataUrl/fileData từ S3 để FE hiển thị y như cũ (S3 key KHÔNG lộ ra client).
-  // S3 tắt hoặc bản ghi cũ (chỉ có dataUrl) -> trả nguyên (tương thích ngược).
+  // ĐỢT 3 — ĐƯỜNG XEM dùng contentUrl thay base64:
+  //   Bản ghi đã externalize (storageKey) + S3 bật -> KHÔNG dựng base64 nữa. Thay vào đó
+  //   trả `contentUrl` trỏ endpoint /download (302 presigned / stream), KHÔNG lộ storageKey.
+  //   FE tự fetch nội dung qua contentUrl (xem src/services/fileContent.ts).
+  //   - Bản ghi CŨ còn dataUrl trong DB -> trả nguyên (tương thích ngược).
+  //   - Escape khẩn S3_INLINE_READ=on -> KHÔI PHỤC hành vi cũ (dựng lại dataUrl từ S3).
   try {
-    if (col === 'documents') return send(res, 200, await inlineDocumentRead(readable));
-    if (col === 'guides') return send(res, 200, await inlineGuideRead(readable));
+    if (col === 'documents') {
+      if (inlineReadEnabled()) return send(res, 200, await inlineDocumentRead(readable));
+      return send(res, 200, projectDocumentRead(readable));
+    }
+    if (col === 'guides') {
+      if (inlineReadEnabled()) return send(res, 200, await inlineGuideRead(readable));
+      return send(res, 200, projectGuideRead(readable));
+    }
   } catch (e) {
     return send(res, 502, { error: `Không đọc được nội dung tệp từ kho lưu trữ: ${e?.message ?? 'lỗi S3'}` });
   }
@@ -696,9 +714,16 @@ app.add('PATCH', '/api/:collection/:id', requireAuth, async (req, res) => {
   }
   await query(`UPDATE ${table} SET data = $2::jsonb, updated_at = now() WHERE id = $1`, [req.params.id, JSON.stringify(merged)]);
   notifyChange(col, 'update', req.params.id);
-  // Trả bản ghi cho FE: nếu đã externalize thì dựng lại dataUrl/fileData (FE hiển thị như cũ).
-  if (col === 'documents') return send(res, 200, await inlineDocumentRead(merged).catch(() => merged));
-  if (col === 'guides') return send(res, 200, await inlineGuideRead(merged).catch(() => merged));
+  // Trả bản ghi cho FE — NHẤT QUÁN với GET :id (đợt 3): mặc định trả contentUrl (không base64);
+  // escape S3_INLINE_READ=on -> dựng lại dataUrl/fileData như cũ (best-effort, lỗi S3 -> trả merged).
+  if (col === 'documents') {
+    if (inlineReadEnabled()) return send(res, 200, await inlineDocumentRead(merged).catch(() => merged));
+    return send(res, 200, projectDocumentRead(merged));
+  }
+  if (col === 'guides') {
+    if (inlineReadEnabled()) return send(res, 200, await inlineGuideRead(merged).catch(() => merged));
+    return send(res, 200, projectGuideRead(merged));
+  }
   send(res, 200, col === 'apiKeys' ? sanitizeApiKey(merged) : merged); // RỔ B: ẩn keyHash
 });
 

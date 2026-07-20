@@ -432,6 +432,50 @@ export function mimeFromKey(key) {
   return map[ext] ?? 'application/octet-stream';
 }
 
+// ============================================================
+// ĐỢT 3 — CHIẾU BẢN GHI CHO ĐƯỜNG XEM (GET document/guide): trả `contentUrl` thay base64.
+//
+// VÌ SAO: đường FE XEM tài liệu trước đây nhận `dataUrl` base64 do backend DỰNG LẠI từ S3 mỗi
+// lần GET -> tốn RAM/băng thông backend, nhất là xem nhiều tệp lớn đồng thời. Đợt 3 chuyển FE
+// sang lấy nội dung qua endpoint `/download` (302 presigned / stream) -> backend KHÔNG còn nhồi
+// base64 vào JSON. Các hàm dưới là THUẦN (không I/O) -> test được không cần S3.
+//
+// QUY TẮC (document):
+//   - Bản ghi CŨ còn `dataUrl` trong DB (chưa externalize) -> GIỮ NGUYÊN (trả dataUrl, tương thích).
+//   - Có `storageKey` (đã externalize): XÓA storageKey (KHÔNG lộ khóa S3 ra client), THÊM
+//     `contentUrl` "/api/documents/<id>/download", KHÔNG dựng dataUrl. (Đúng cho cả S3 bật lẫn
+//     — hiếm — S3 tắt sau khi đã externalize: endpoint /download tự xử lý đúng nhánh.)
+//   - Tài liệu soạn tay (chỉ `content`, không tệp) -> trả nguyên (không storageKey/dataUrl).
+// LƯU Ý: escape khẩn S3_INLINE_READ=on KHÔNG đi qua hàm này — điểm gọi (index.js/App.cs) tự
+//   chọn dựng lại dataUrl bằng inlineDocumentRead (giữ hành vi cũ trước đợt 3).
+// ============================================================
+
+/**
+ * Chiếu 1 document cho client (đường XEM). Trả BẢN SAO (không đột biến bản ghi DB/cache).
+ * HÀM THUẦN — không đọc env, không I/O (điểm gọi quyết định inlineRead qua nhánh riêng).
+ * @param {object} doc bản ghi đã qua kiểm quyền đọc (readOne)
+ */
+export function projectDocumentRead(doc) {
+  if (!doc || typeof doc !== 'object') return doc;
+  if (doc.dataUrl) return doc;      // bản ghi cũ còn base64 -> giữ nguyên (tương thích ngược)
+  if (!doc.storageKey) return doc;  // tài liệu soạn tay / không tệp
+  const out = { ...doc };
+  delete out.storageKey;            // KHÔNG lộ khóa S3 ra client
+  out.contentUrl = `/api/documents/${encodeURIComponent(doc.id)}/download`;
+  return out;
+}
+
+/** Guides — song song document nhưng dùng field fileData + endpoint /api/guides/<id>/download. */
+export function projectGuideRead(guide) {
+  if (!guide || typeof guide !== 'object') return guide;
+  if (guide.fileData) return guide;   // bản ghi cũ giữ nguyên
+  if (!guide.storageKey) return guide; // HDSD soạn tay (content) / không tệp
+  const out = { ...guide };
+  delete out.storageKey;
+  out.contentUrl = `/api/guides/${encodeURIComponent(guide.id)}/download`;
+  return out;
+}
+
 /**
  * TỐI ƯU 1 — chế độ tải tệp có storageKey khi S3 bật:
  *   'redirect' (mặc định): 302 tới presigned URL — client tải THẲNG từ S3, backend 0 byte RAM.
@@ -441,6 +485,31 @@ export function mimeFromKey(key) {
  */
 export function downloadMode() {
   return String(process.env.S3_DOWNLOAD_MODE ?? 'redirect').toLowerCase() === 'stream' ? 'stream' : 'redirect';
+}
+
+/**
+ * ĐỢT 3 — chế độ tải với QUYỀN GHI ĐÈ theo QUERY (?mode=stream|redirect). HÀM THUẦN (test được).
+ * Ưu tiên: query > env S3_DOWNLOAD_MODE. Chỉ nhận đúng 'stream'/'redirect'; giá trị lạ -> bỏ qua
+ * (rơi về env). Cần cho FALLBACK bắt buộc phía FE: khi fetch-theo-302→MinIO lỗi (chưa mở CORS
+ * MinIO / mạng chặn), FE gọi lại `/download?mode=stream` (same-origin, backend stream bytes).
+ * @param {URLSearchParams | Record<string,string> | undefined} query
+ */
+export function downloadModeFrom(query) {
+  const raw = query?.get ? query.get('mode') : query?.mode;
+  const m = String(raw ?? '').toLowerCase();
+  if (m === 'stream') return 'stream';
+  if (m === 'redirect') return 'redirect';
+  return downloadMode(); // không có/không hợp lệ -> theo env (mặc định 'redirect')
+}
+
+/**
+ * ĐỢT 3 — công tắc KHẨN CẤP dựng lại dataUrl base64 khi GET document/guide (khôi phục hành vi
+ * cũ trước đợt 3). Mặc định TẮT: GET trả `contentUrl` trỏ endpoint /download thay vì nhồi base64.
+ * Bật `S3_INLINE_READ=on` -> GET dựng lại dataUrl như đợt 1/2 (dùng khi FE chưa kịp chuyển sang
+ * contentUrl / tình huống khẩn). HÀM THUẦN. Parity 2 backend.
+ */
+export function inlineReadEnabled() {
+  return String(process.env.S3_INLINE_READ ?? '').toLowerCase() === 'on';
 }
 
 /** TTL (giây) cho presigned URL tải tệp — env S3_PRESIGN_TTL, mặc định 300, kẹp 1..604800. */

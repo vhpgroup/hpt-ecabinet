@@ -88,6 +88,13 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_USER:-ecabinet}
       MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-ecabinet-secret}
+      # ĐỢT 3 — CORS cho hop TRÌNH DUYỆT→MinIO: đường XEM tài liệu trên FE fetch endpoint
+      # /api/documents/:id/download (có Authorization) rồi TỰ THEO 302 sang presigned URL của
+      # MinIO. Hop trình duyệt→MinIO là cross-origin -> MinIO PHẢI trả CORS (Access-Control-Allow-Origin)
+      # thì fetch mới đọc được Blob. Mặc định '*' cho dễ dựng; VẬN HÀNH nên đặt = origin THẬT của
+      # web (vd https://ecabinet.gov.vn) qua biến MINIO_CORS_ORIGIN. Nếu KHÔNG mở CORS, FE tự
+      # fallback gọi lại /download?mode=stream (same-origin, backend stream bytes) — vẫn xem được.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_CORS_ORIGIN:-*}
     volumes:
       - ecabinet_minio:/data
     # Console quản trị 9001 (tùy chọn xem tệp trong bucket); API S3 nội bộ 9000.

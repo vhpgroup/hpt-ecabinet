@@ -271,6 +271,56 @@ public static class Blob
     public static string DownloadMode()
         => (Environment.GetEnvironmentVariable("S3_DOWNLOAD_MODE") ?? "redirect").ToLowerInvariant() == "stream" ? "stream" : "redirect";
 
+    /// <summary>
+    /// ĐỢT 3 — chế độ tải với QUYỀN GHI ĐÈ theo QUERY (?mode=stream|redirect). THUẦN (test được).
+    /// Ưu tiên: query > env S3_DOWNLOAD_MODE. Chỉ nhận 'stream'/'redirect'; giá trị lạ -> theo env.
+    /// Cần cho FALLBACK phía FE: fetch-theo-302→MinIO lỗi (CORS/mạng) -> gọi lại ?mode=stream.
+    /// Port downloadModeFrom (blob.js).
+    /// </summary>
+    public static string DownloadModeFrom(Microsoft.AspNetCore.Http.IQueryCollection? query)
+    {
+        var raw = (query?["mode"].FirstOrDefault() ?? "").ToLowerInvariant();
+        if (raw == "stream") return "stream";
+        if (raw == "redirect") return "redirect";
+        return DownloadMode();
+    }
+
+    /// <summary>
+    /// ĐỢT 3 — công tắc KHẨN CẤP dựng lại dataUrl base64 khi GET document/guide (khôi phục hành vi
+    /// cũ trước đợt 3). Mặc định TẮT: GET trả contentUrl trỏ /download thay vì nhồi base64. Bật
+    /// S3_INLINE_READ=on -> GET dựng lại dataUrl như đợt 1/2. Port inlineReadEnabled (blob.js).
+    /// </summary>
+    public static bool InlineReadEnabled()
+        => (Environment.GetEnvironmentVariable("S3_INLINE_READ") ?? "").ToLowerInvariant() == "on";
+
+    // ============================================================
+    // ĐỢT 3 — CHIẾU BẢN GHI CHO ĐƯỜNG XEM (GET document/guide): trả contentUrl thay base64.
+    // Port projectDocumentRead/projectGuideRead (blob.js). THUẦN — không I/O, không đọc env
+    // (điểm gọi tự chọn nhánh S3_INLINE_READ). Trả BẢN SAO (không đột biến bản ghi DB/cache).
+    //   - Bản ghi CŨ còn dataUrl/fileData -> GIỮ NGUYÊN (tương thích ngược).
+    //   - Có storageKey -> XÓA storageKey (KHÔNG lộ khóa S3), THÊM contentUrl /download, KHÔNG base64.
+    //   - Tài liệu soạn tay (chỉ content) -> trả nguyên.
+    // ============================================================
+    public static JsonObject ProjectDocumentRead(JsonObject doc)
+    {
+        if (J.Str(doc, "dataUrl") is not null) return doc;      // bản ghi cũ còn base64
+        if (string.IsNullOrEmpty(J.Str(doc, "storageKey"))) return doc; // soạn tay / không tệp
+        var outp = J.CloneObj(doc);
+        outp.Remove("storageKey");                              // KHÔNG lộ khóa S3
+        outp["contentUrl"] = $"/api/documents/{Uri.EscapeDataString(J.Str(doc, "id")!)}/download";
+        return outp;
+    }
+
+    public static JsonObject ProjectGuideRead(JsonObject guide)
+    {
+        if (J.Str(guide, "fileData") is not null) return guide;
+        if (string.IsNullOrEmpty(J.Str(guide, "storageKey"))) return guide;
+        var outp = J.CloneObj(guide);
+        outp.Remove("storageKey");
+        outp["contentUrl"] = $"/api/guides/{Uri.EscapeDataString(J.Str(guide, "id")!)}/download";
+        return outp;
+    }
+
     /// <summary>TTL (giây) presigned URL — env S3_PRESIGN_TTL, mặc định 300, kẹp 1..604800.</summary>
     public static int PresignTtlSec()
     {

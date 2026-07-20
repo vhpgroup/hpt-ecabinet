@@ -110,9 +110,16 @@ export const CATALOG = [
     method: 'GET',
     path: '/api/open/v1/documents/{id}/content',
     summary: 'Tải nội dung tài liệu',
-    description: 'Trả nội dung/dữ liệu (text hoặc dataUrl base64) của 1 tài liệu ĐÃ DUYỆT và KHÔNG MẬT. Yêu cầu quyền (scope) "documents".',
+    description: 'Trả nội dung 1 tài liệu ĐÃ DUYỆT và KHÔNG MẬT (scope "documents"). '
+      + 'Tài liệu SOẠN TRỰC TIẾP: trả JSON {content}. Tệp đính kèm khi bật object storage (S3/MinIO): '
+      + 'MẶC ĐỊNH trả 302 REDIRECT tới presigned URL tải THẲNG từ S3 (backend không nạp tệp vào RAM). '
+      + 'Thêm ?mode=stream để backend TRẢ THẲNG BYTES tệp (Content-Type/Content-Disposition; dùng khi '
+      + 'consumer không tới được endpoint S3 trực tiếp hoặc cần parse JSON dataUrl như cũ). '
+      + 'Bản ghi cũ (base64 trong CSDL) / chưa bật S3: trả JSON {dataUrl} như trước. '
+      + 'Có thể ép chế độ toàn cục bằng biến môi trường S3_DOWNLOAD_MODE (query ?mode= ưu tiên hơn).',
     params: [
       { name: 'id', in: 'path', required: true, type: 'string', description: 'Mã tài liệu' },
+      { name: 'mode', in: 'query', required: false, type: 'string', description: 'stream = trả bytes tệp; redirect (mặc định) = 302 tới presigned URL S3' },
     ],
     scope: 'documents',
     hsmtItem: 59,
@@ -193,6 +200,13 @@ export function buildOpenApiSpec(serverUrl = '/') {
     };
     if (e.scope === 'documents') {
       responses[403] = { description: 'Khóa API không có quyền tài liệu', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } };
+    }
+    // /content khi bật object storage (mặc định): 302 tới presigned URL của S3/MinIO.
+    if (e.id === 'document-content') {
+      responses[302] = {
+        description: 'Chuyển hướng tới presigned URL của S3/MinIO để tải tệp trực tiếp (khi bật object storage, chế độ redirect). Header Location chứa URL đã ký, TTL ngắn.',
+        headers: { Location: { description: 'Presigned URL tải tệp trực tiếp từ object storage', schema: { type: 'string' } } },
+      };
     }
 
     paths[e.path] = {

@@ -1,13 +1,14 @@
 // ============================================================
 // DÙNG CHUNG GIỮA CÁC TRANG — trình xem tài liệu + dòng tài liệu
 // ============================================================
-import React, { useMemo, useState } from 'react';
-import type { DocFile, Meeting } from '../../domain/types';
+import React, { useEffect, useMemo, useState } from 'react';
+import type { DocFile, GuideDoc, Meeting } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
 import { Badge, Field, Icon, Modal } from '../components';
 import { DOC_REVIEW } from '../../domain/labels';
 import { can } from '../../services/authService';
 import * as documentService from '../../services/documentService';
+import { getDocContentUrl, getGuideContentUrl, revokeDocContent, revokeGuideContent, type FileContent } from '../../services/fileContent';
 import { downloadTextFile, fmtDT, fmtSize, indexBy, timeAgo, toCsv } from '../format';
 
 /** Nhãn loại tài liệu (E-HSMT mục 8) — tra theo docTypeId trên danh mục catalogs. */
@@ -23,6 +24,33 @@ export function DocViewerModal({ doc, onClose }: { doc: DocFile; onClose: () => 
   const [noteMode, setNoteMode] = useState<'private' | 'public'>('private');
   const users = indexBy(s.users);
   const docTypeLabel = useDocTypeLabel(doc.docTypeId);
+
+  // ĐỢT 3 — nội dung tệp lấy qua helper (dataUrl sẵn -> dùng thẳng; contentUrl -> fetch có auth
+  // -> Blob -> objectURL; fallback ?mode=stream). Tài liệu soạn tay (content) -> content = null.
+  const [content, setContent] = useState<FileContent | null>(null);
+  const [loadingFile, setLoadingFile] = useState<boolean>(!!doc.contentUrl && !doc.dataUrl);
+  const [fileErr, setFileErr] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    // Chỉ cần tải khi có contentUrl (đã externalize) và chưa có dataUrl sẵn.
+    if (!doc.contentUrl || doc.dataUrl) {
+      setContent(doc.dataUrl ? { url: doc.dataUrl, isObjectUrl: false, mime: doc.mime } : null);
+      setLoadingFile(false);
+      setFileErr(false);
+      return;
+    }
+    setLoadingFile(true);
+    setFileErr(false);
+    getDocContentUrl(doc)
+      .then((fc) => { if (alive) { setContent(fc); setLoadingFile(false); } })
+      .catch(() => { if (alive) { setFileErr(true); setLoadingFile(false); } });
+    return () => {
+      alive = false;
+      revokeDocContent(doc); // dọn objectURL khi đóng/đổi tài liệu (tránh rò bộ nhớ)
+    };
+  }, [doc.id, doc.version, doc.contentUrl, doc.dataUrl, doc.mime]);
+
   const myAnnos = useMemo(
     () => s.annotations.filter((a) => a.docId === doc.id && a.userId === user?.id && !a.isPublic)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -42,15 +70,37 @@ export function DocViewerModal({ doc, onClose }: { doc: DocFile; onClose: () => 
     toast(noteMode === 'public' ? 'Đã gửi góp ý công khai' : 'Đã lưu ghi chú cá nhân');
   };
 
-  const download = () => {
+  const download = async () => {
     const a = document.createElement('a');
-    if (doc.dataUrl) {
-      a.href = doc.dataUrl;
+    if (content?.url) {
+      // dataUrl base64 (cũ/demo) hoặc objectURL (đã fetch từ S3) — cùng dùng làm href tải.
+      a.href = content.url;
+    } else if (doc.contentUrl) {
+      // Chưa tải xong / lỗi trước đó: thử lấy nội dung ngay lúc bấm tải.
+      try {
+        const fc = await getDocContentUrl(doc);
+        if (fc?.url) a.href = fc.url;
+        else return;
+      } catch {
+        toast('Không tải được tệp từ kho lưu trữ — vui lòng thử lại', 'error');
+        return;
+      }
     } else {
+      // Tài liệu soạn tay: tải nội dung văn bản.
       a.href = URL.createObjectURL(new Blob([doc.content ?? ''], { type: 'text/plain;charset=utf-8' }));
     }
     a.download = doc.name;
     a.click();
+  };
+
+  // Thử tải lại nội dung tệp (nút "Thử tải trực tiếp" khi fetch lỗi — vd MinIO chưa mở CORS).
+  const retryLoad = () => {
+    if (!doc.contentUrl) return;
+    setFileErr(false);
+    setLoadingFile(true);
+    getDocContentUrl(doc)
+      .then((fc) => { setContent(fc); setLoadingFile(false); if (!fc) setFileErr(true); })
+      .catch(() => { setFileErr(true); setLoadingFile(false); toast('Vẫn không tải được tệp — kiểm tra kết nối kho lưu trữ (MinIO/CORS)', 'error'); });
   };
 
   // E-HSMT mục 31: "Xuất ý kiến tài liệu" — xuất góp ý công khai ra CSV (client-side)
@@ -78,11 +128,24 @@ export function DocViewerModal({ doc, onClose }: { doc: DocFile; onClose: () => 
         <button className="btn outline sm" onClick={download}><Icon name="download" size={14} />Tải xuống</button>
       </div>
 
-      {doc.dataUrl ? (
-        doc.mime.startsWith('image/') ? (
-          <div className="doc-viewer"><img src={doc.dataUrl} alt={doc.name} style={{ maxWidth: '100%', borderRadius: 6, display: 'block', margin: '0 auto' }} /></div>
-        ) : doc.mime === 'application/pdf' ? (
-          <iframe className="doc-frame" src={doc.dataUrl} title={doc.name} />
+      {(doc.contentUrl || doc.dataUrl) ? (
+        // Tài liệu là TỆP: nội dung lấy qua helper (content.url = dataUrl hoặc objectURL của Blob).
+        loadingFile ? (
+          <div className="empty"><Icon name="clock" size={28} /><p>Đang tải nội dung tệp…</p></div>
+        ) : fileErr ? (
+          <div className="empty">
+            <Icon name="file" size={28} />
+            <p>Không tải được nội dung tệp từ kho lưu trữ.</p>
+            <button className="btn outline sm" onClick={retryLoad}><Icon name="download" size={14} />Thử tải trực tiếp</button>
+          </div>
+        ) : content?.url ? (
+          doc.mime.startsWith('image/') ? (
+            <div className="doc-viewer"><img src={content.url} alt={doc.name} style={{ maxWidth: '100%', borderRadius: 6, display: 'block', margin: '0 auto' }} /></div>
+          ) : doc.mime === 'application/pdf' ? (
+            <iframe className="doc-frame" src={content.url} title={doc.name} />
+          ) : (
+            <div className="empty"><Icon name="file" size={28} /><p>Không xem trước được định dạng này — hãy tải xuống.</p></div>
+          )
         ) : (
           <div className="empty"><Icon name="file" size={28} /><p>Không xem trước được định dạng này — hãy tải xuống.</p></div>
         )
@@ -248,5 +311,89 @@ function RejectModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (no
           placeholder="VD: Thiếu phụ lục số liệu; đề nghị bổ sung căn cứ pháp lý…" />
       </Field>
     </Modal>
+  );
+}
+
+// ============================================================
+// XEM TÀI LIỆU HƯỚNG DẪN (HDSD) — dùng chung GuidesAdminPage + HelpPage (ĐỢT 3).
+// Cùng cơ chế đường XEM như DocViewerModal: fileData sẵn (demo/cũ) -> dùng thẳng; contentUrl
+// (đã externalize S3) -> fetch có auth -> Blob -> objectURL; fallback ?mode=stream; dọn objectURL.
+// ============================================================
+
+/** Guide có TỆP đính kèm không (fileData base64 cũ HOẶC contentUrl đã externalize). */
+export function guideHasFile(g: GuideDoc): boolean {
+  return !!g.fileData || !!g.contentUrl;
+}
+
+/** Suy loại xem trước cho guide: ưu tiên mime của Blob, fallback theo đuôi fileName/dataUrl. */
+function guidePreviewKind(g: GuideDoc, mime?: string): 'pdf' | 'image' | 'other' {
+  const m = (mime || '').toLowerCase();
+  if (m === 'application/pdf' || (g.fileData?.startsWith('data:application/pdf'))) return 'pdf';
+  if (m.startsWith('image/') || (g.fileData?.startsWith('data:image/'))) return 'image';
+  const name = (g.fileName || '').toLowerCase();
+  if (name.endsWith('.pdf')) return 'pdf';
+  if (/\.(png|jpe?g|gif|webp|bmp)$/.test(name)) return 'image';
+  return 'other';
+}
+
+/** Thân xem 1 guide (tệp qua helper hoặc nội dung văn bản). toast: hàm hiện thông báo lỗi. */
+export function GuideViewBody({ guide, toast }: { guide: GuideDoc; toast?: (m: string, t?: 'info' | 'error') => void }) {
+  const [content, setContent] = useState<FileContent | null>(null);
+  const [loading, setLoading] = useState<boolean>(!!guide.contentUrl && !guide.fileData);
+  const [err, setErr] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    if (!guide.contentUrl || guide.fileData) {
+      setContent(guide.fileData ? { url: guide.fileData, isObjectUrl: false } : null);
+      setLoading(false); setErr(false);
+      return;
+    }
+    setLoading(true); setErr(false);
+    getGuideContentUrl(guide)
+      .then((fc) => { if (alive) { setContent(fc); setLoading(false); } })
+      .catch(() => { if (alive) { setErr(true); setLoading(false); } });
+    return () => { alive = false; revokeGuideContent(guide); };
+  }, [guide.id, guide.updatedAt, guide.contentUrl, guide.fileData]);
+
+  const download = async () => {
+    const a = document.createElement('a');
+    let href = content?.url;
+    if (!href && guide.contentUrl) {
+      try { href = (await getGuideContentUrl(guide))?.url; }
+      catch { toast?.('Không tải được tệp hướng dẫn — vui lòng thử lại', 'error'); return; }
+    }
+    if (!href) return;
+    a.href = href;
+    a.download = guide.fileName ?? guide.title;
+    a.click();
+  };
+
+  const retry = () => {
+    if (!guide.contentUrl) return;
+    setErr(false); setLoading(true);
+    getGuideContentUrl(guide)
+      .then((fc) => { setContent(fc); setLoading(false); if (!fc) setErr(true); })
+      .catch(() => { setErr(true); setLoading(false); toast?.('Vẫn không tải được tệp (kiểm tra kết nối kho lưu trữ / CORS)', 'error'); });
+  };
+
+  if (!guideHasFile(guide)) {
+    return <div className="doc-viewer"><div className="doc-page">{guide.content}</div></div>;
+  }
+  if (loading) return <div className="empty"><Icon name="clock" size={28} /><p>Đang tải nội dung tệp…</p></div>;
+  if (err) {
+    return (
+      <div className="empty">
+        <Icon name="file" size={28} /><p>Không tải được nội dung tệp từ kho lưu trữ.</p>
+        <button className="btn outline sm" onClick={retry}><Icon name="download" size={14} />Thử tải trực tiếp</button>
+      </div>
+    );
+  }
+  const kind = guidePreviewKind(guide, content?.mime);
+  if (content?.url && kind === 'pdf') return <iframe className="doc-frame" src={content.url} title={guide.title} />;
+  if (content?.url && kind === 'image') return <img src={content.url} alt={guide.title} style={{ maxWidth: '100%', borderRadius: 6 }} />;
+  return (
+    <div className="empty"><Icon name="file" size={28} /><p>Không xem trước được định dạng này.</p>
+      <button className="btn outline sm" onClick={download}><Icon name="download" size={14} />Tải xuống</button></div>
   );
 }
