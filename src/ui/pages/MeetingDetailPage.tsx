@@ -4,7 +4,7 @@
 // ============================================================
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import type { Conclusion, DocFile, Meeting, User, Vote } from '../../domain/types';
+import type { Conclusion, DocFile, Meeting, Participant, User, Vote } from '../../domain/types';
 import { useApp } from '../../store/AppContext';
 import { Avatar, Badge, EmptyState, Field, Icon, Modal, PageHeader, ProgressBar, QRSvg, SeatGrid, VoteOutcomePanel, VoteResultBars, defaultLayout, seatKey } from '../components';
 import { ATTEND_STATUS, DOC_REVIEW, MEETING_ROLE, MEETING_STATUS, TASK_STATUS } from '../../domain/labels';
@@ -152,7 +152,7 @@ export default function MeetingDetailPage() {
       </div>
 
       {tab === 'info' && <InfoTab m={m} onViewDoc={setViewDoc} />}
-      {tab === 'people' && <PeopleTab m={m} onQr={() => setQrOpen(true)} />}
+      {tab === 'people' && <PeopleTab m={m} onQr={() => setQrOpen(true)} canManage={canEditThis} />}
       {tab === 'seating' && <SeatingTab m={m} />}
       {tab === 'docs' && <DocsTab m={m} onViewDoc={setViewDoc} />}
       {tab === 'votes' && <VotesTab m={m} votes={meetingVotes} onViewDoc={setViewDoc} />}
@@ -248,10 +248,19 @@ function InfoTab({ m, onViewDoc }: { m: Meeting; onViewDoc: (d: DocFile) => void
 }
 
 // ---------------- Tab: Đại biểu ----------------
-function PeopleTab({ m, onQr }: { m: Meeting; onQr: () => void }) {
-  const { s, toast } = useApp();
+/**
+ * E-HSMT mục 20 "Xem DS người tham gia họp / Thêm mới, cập nhật, xóa thông tin người tham gia
+ * họp" — `canManage` (= `can.editMeeting` tính ở component cha: chủ trì/thư ký/admin toàn cục
+ * HOẶC unit_admin CÙNG đơn vị phiên, ĐÚNG nhóm đang gate nút "Chỉnh sửa phiên họp") mở thêm 3
+ * action Thêm/Sửa/Xóa NGAY trên tab này — không còn phải đi vòng qua MeetingFormModal (đường
+ * cũ vẫn giữ nguyên, không đụng).
+ */
+function PeopleTab({ m, onQr, canManage }: { m: Meeting; onQr: () => void; canManage: boolean }) {
+  const { user, s, refresh, toast } = useApp();
   const users = indexBy(s.users);
   const units = indexBy(s.units);
+  const [addOpen, setAddOpen] = useState(false);
+  const [editRow, setEditRow] = useState<Participant | null>(null);
 
   // E-HSMT mục 36: xuất danh sách điểm danh ra CSV (client-side)
   const exportAttendance = () => {
@@ -259,6 +268,20 @@ function PeopleTab({ m, onQr }: { m: Meeting; onQr: () => void }) {
     const csv = toCsv(headers, rows);
     downloadTextFile(`diemdanh_${m.code.replace(/[^\p{L}\p{N}._-]+/gu, '_')}.csv`, csv);
     toast('Đã xuất danh sách điểm danh (CSV)');
+  };
+
+  const act = async (fn: () => Promise<unknown>, msg?: string) => {
+    try { await fn(); await refresh(); if (msg) toast(msg); }
+    catch (ex) { toast((ex as Error).message, 'error'); }
+  };
+
+  const removeRow = (p: Participant) => {
+    const u = users.get(p.userId);
+    const warn = p.checkedInAt
+      ? `${u?.fullName ?? p.userId} ĐÃ điểm danh trong phiên này. Vẫn xóa khỏi danh sách tham gia?`
+      : `Xóa ${u?.fullName ?? p.userId} khỏi danh sách tham gia phiên họp này?`;
+    if (!window.confirm(warn)) return;
+    act(() => meetingService.removeParticipant(user!, m.id, p.userId), 'Đã xóa người tham gia');
   };
 
   const stats = {
@@ -277,18 +300,28 @@ function PeopleTab({ m, onQr }: { m: Meeting; onQr: () => void }) {
         <Badge color="amber">Chờ xác nhận: {stats.pending}</Badge>
         <Badge color="navy">Đã điểm danh: {stats.present}/{m.participants.length}</Badge>
         <span style={{ flex: 1 }} />
+        {canManage && (
+          <button className="btn sm" onClick={() => setAddOpen(true)}><Icon name="plus" size={14} />Thêm người tham gia</button>
+        )}
         <button className="btn outline sm" onClick={exportAttendance}><Icon name="download" size={14} />Xuất DS điểm danh</button>
         <button className="btn outline sm" onClick={onQr}><Icon name="qr" size={14} />Mã QR điểm danh</button>
       </div>
       <div className="tbl-wrap">
         <table className="tbl">
           <thead>
-            <tr><th>Đại biểu</th><th>Đơn vị</th><th>Vai trò</th><th>Xác nhận</th><th>Điểm danh</th><th>Chỗ ngồi</th></tr>
+            <tr>
+              <th>Đại biểu</th><th>Đơn vị</th><th>Vai trò</th><th>Xác nhận</th><th>Điểm danh</th><th>Chỗ ngồi</th>
+              {canManage && <th>Thao tác</th>}
+            </tr>
           </thead>
           <tbody>
             {m.participants.map((p) => {
               const u = users.get(p.userId);
               const a = ATTEND_STATUS[p.attendStatus];
+              // Chủ trì/thư ký của CHÍNH phiên này: quản lý qua "Chỉnh sửa phiên họp" (đổi
+              // chairId/secretaryId), KHÔNG sửa/xóa được ở tab này (mirror
+              // assertNotChairOrSecretary phía service).
+              const isChairOrSecretary = p.meetingRole === 'chair' || p.meetingRole === 'secretary';
               return (
                 <tr key={p.userId}>
                   <td>
@@ -311,13 +344,92 @@ function PeopleTab({ m, onQr }: { m: Meeting; onQr: () => void }) {
                   </td>
                   <td>{p.checkedInAt ? <span style={{ color: 'var(--green)', fontWeight: 600, fontSize: 12.5 }}>✓ {fmtTime(p.checkedInAt)}</span> : <span className="t-sub">—</span>}</td>
                   <td>{p.seat ?? '—'}</td>
+                  {canManage && (
+                    <td>
+                      {isChairOrSecretary ? (
+                        <span className="t-sub" title="Sửa qua &quot;Chỉnh sửa phiên họp&quot;">—</span>
+                      ) : (
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button className="icon-btn" title="Sửa vai trò tham dự" onClick={() => setEditRow(p)}><Icon name="edit" size={15} /></button>
+                          <button className="icon-btn" title="Xóa khỏi danh sách" onClick={() => removeRow(p)}><Icon name="trash" size={15} /></button>
+                        </div>
+                      )}
+                    </td>
+                  )}
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+      {addOpen && (
+        <AddParticipantModal m={m} onClose={() => setAddOpen(false)}
+          onSubmit={(userId, role) => { setAddOpen(false); act(() => meetingService.addParticipant(user!, m.id, userId, role), 'Đã thêm người tham gia'); }} />
+      )}
+      {editRow && (
+        <EditParticipantModal m={m} p={editRow} onClose={() => setEditRow(null)}
+          onSubmit={(role) => { setEditRow(null); act(() => meetingService.updateParticipant(user!, m.id, editRow.userId, role), 'Đã cập nhật vai trò tham dự'); }} />
+      )}
     </div>
+  );
+}
+
+/** Thêm người tham gia (E-HSMT mục 20) — chọn từ user hệ thống CHƯA có trong participants. */
+function AddParticipantModal({ m, onClose, onSubmit }: {
+  m: Meeting; onClose: () => void; onSubmit: (userId: string, role: 'member' | 'guest') => void;
+}) {
+  const { s } = useApp();
+  const existingIds = new Set(m.participants.map((p) => p.userId));
+  const candidates = s.users.filter((u) => u.status === 'active' && !existingIds.has(u.id));
+  const [userId, setUserId] = useState('');
+  const [role, setRole] = useState<'member' | 'guest'>('member');
+
+  return (
+    <Modal title="Thêm người tham gia họp" onClose={onClose} width={440}
+      footer={<>
+        <button className="btn outline" onClick={onClose}>Hủy</button>
+        <button className="btn" disabled={!userId} onClick={() => onSubmit(userId, role)}>
+          <Icon name="plus" size={15} />Thêm
+        </button>
+      </>}>
+      <Field label="Người dùng" required>
+        <select className="sel" value={userId} onChange={(e) => setUserId(e.target.value)}>
+          <option value="">— Chọn người dùng —</option>
+          {candidates.map((u) => <option key={u.id} value={u.id}>{u.fullName} — {u.title}</option>)}
+        </select>
+        {candidates.length === 0 && <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6 }}>Mọi người dùng đang hoạt động đã có trong danh sách tham gia.</p>}
+      </Field>
+      <Field label="Vai trò tham dự" required>
+        <div style={{ display: 'flex', gap: 14 }}>
+          <label className="checkline"><input type="radio" checked={role === 'member'} onChange={() => setRole('member')} />Thành viên (biểu quyết)</label>
+          <label className="checkline"><input type="radio" checked={role === 'guest'} onChange={() => setRole('guest')} />Khách mời (không biểu quyết)</label>
+        </div>
+      </Field>
+    </Modal>
+  );
+}
+
+/** Sửa vai trò tham dự (biểu quyết <-> khách mời) của 1 người đã có (E-HSMT mục 20). */
+function EditParticipantModal({ m, p, onClose, onSubmit }: {
+  m: Meeting; p: Participant; onClose: () => void; onSubmit: (role: 'member' | 'guest') => void;
+}) {
+  const { s } = useApp();
+  const u = s.users.find((x) => x.id === p.userId);
+  const [role, setRole] = useState<'member' | 'guest'>(p.meetingRole === 'guest' ? 'guest' : 'member');
+  return (
+    <Modal title={`Sửa vai trò tham dự — ${u?.fullName ?? p.userId}`} onClose={onClose} width={440}
+      footer={<>
+        <button className="btn outline" onClick={onClose}>Hủy</button>
+        <button className="btn" onClick={() => onSubmit(role)}><Icon name="check" size={15} />Lưu</button>
+      </>}>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 10 }}>Phiên họp: {m.title}</p>
+      <Field label="Vai trò tham dự" required>
+        <div style={{ display: 'flex', gap: 14 }}>
+          <label className="checkline"><input type="radio" checked={role === 'member'} onChange={() => setRole('member')} />Thành viên (biểu quyết)</label>
+          <label className="checkline"><input type="radio" checked={role === 'guest'} onChange={() => setRole('guest')} />Khách mời (không biểu quyết)</label>
+        </div>
+      </Field>
+    </Modal>
   );
 }
 

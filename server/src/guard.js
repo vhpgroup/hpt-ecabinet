@@ -27,8 +27,10 @@ const SCHEMA = {
   meetings: { code: 'string', title: 'string', description: 'string', startTime: 'string', endTime: 'string', roomId: 'string', isOnline: 'boolean', status: 'string', chairId: 'string', secretaryId: 'string', participants: 'array', agenda: 'array', currentAgendaItemId: 'string|null', conclusions: 'array', minutes: 'object|null', invitedAt: 'string', questionSession: 'string', seatAssignments: 'object', meetingType: 'string', currentItemStartedAt: 'string' },
   // + trackerUserId (P1-5, HSMT dòng 372 "Cán bộ theo dõi") — string, OPTIONAL
   votes: { kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', title: 'string', description: 'string', options: 'array', ballots: 'array', eligibleIds: 'array', documentIds: 'array', secret: 'boolean', status: 'string', deadline: 'string|null', trackerUserId: 'string' },
-  // + issuingBody (mục 10), folder (mục 14) — đều string, OPTIONAL
-  documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string', reviewStatus: 'string', reviewNote: 'string', reviewedById: 'string', reviewedAt: 'string', issuingBody: 'string', folder: 'string', size: 'number', storageKey: 'string' },
+  // + issuingBody (mục 10) — string, OPTIONAL. folder (mục 14): 'string|null' — vá
+  // 2026-07-20 (mục 14 "Xóa thư mục"): PATCH { folder: null } là cách round-trip đúng qua
+  // JSON để "gỡ nhãn" (client gửi `undefined` sẽ bị JSON.stringify loại field khỏi body).
+  documents: { name: 'string', kind: 'string', meetingId: 'string|null', agendaItemId: 'string|null', sharedWith: 'array', secret: 'boolean', content: 'string', dataUrl: 'string', version: 'number', mime: 'string', reviewStatus: 'string', reviewNote: 'string', reviewedById: 'string', reviewedAt: 'string', issuingBody: 'string', folder: 'string|null', size: 'number', storageKey: 'string' },
   annotations: { docId: 'string', content: 'string', isPublic: 'boolean' },
   tasks: { title: 'string', description: 'string', assigneeId: 'string', deadline: 'string', status: 'string', progress: 'number', meetingId: 'string|null' },
   notifications: { read: 'boolean', title: 'string', body: 'string', type: 'string' },

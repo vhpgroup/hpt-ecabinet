@@ -462,6 +462,30 @@ await Case('validatePatch(documents): PATCH đổi dataUrl (kèm hoặc không k
 });
 
 // ============================================================
+// NHÓM 7B — vá 2026-07-20 (rà soát mục 14 "Xóa thư mục"): documents.folder chấp nhận
+// 'string|null' — PATCH { folder: null } là cách round-trip đúng qua JSON để "gỡ nhãn thư
+// mục" ở chế độ máy chủ (client gửi { folder: undefined } sẽ bị JSON.stringify LOẠI khỏi
+// body trước khi tới server — server không thấy field, giữ nguyên giá trị cũ, "xóa thư mục"
+// KHÔNG có tác dụng thật). Xem removeFolder/setDocFolder (documentService.ts) +
+// DocFile.folder (types.ts) — cùng đợt vá.
+// ============================================================
+await Case('validatePatch(documents): folder=null (gỡ nhãn thư mục, mục 14) -> không throw', () => {
+  assert.doesNotThrow(() => validatePatch('documents', { folder: null }));
+});
+await Case('validatePatch(documents): folder chuỗi hợp lệ -> không throw', () => {
+  assert.doesNotThrow(() => validatePatch('documents', { folder: 'Chuẩn bị họp tháng 8' }));
+});
+await Case('validatePatch(documents): folder sai kiểu (số) -> throw 400', () => {
+  assert.throws(
+    () => validatePatch('documents', { folder: 123 }),
+    (e) => e.status === 400 && /folder/.test(e.message),
+  );
+});
+await Case('validatePatch(documents): folder=[] (mảng, không phải null/string) -> throw 400', () => {
+  assert.throws(() => validatePatch('documents', { folder: [] }), (e) => e.status === 400);
+});
+
+// ============================================================
 // NHÓM 8 — P1-8: UNICODE ROUND-TRIP (tiếng Việt NFC/NFD + emoji)
 // ============================================================
 Group('8-UNICODE');
@@ -689,6 +713,80 @@ await Case('guardPatch(meetings): unit_admin CÙNG đơn vị phiên -> particip
   );
   assert.equal(out.participants[0].attendStatus, 'accepted', 'unit_admin cùng đơn vị sửa được attendStatus của MỌI dòng (như MANAGE)');
   assert.equal(out.participants[0].checkedInAt, 't-server', 'checkedInAt vẫn giữ từ server (keepServerCheckins), không tin client');
+});
+
+// ------------------------------------------------------------
+// Vá 2026-07-20 (rà soát mục 20 "Thêm mới, cập nhật, xóa thông tin người tham gia họp") —
+// meetingService.addParticipant/removeParticipant/updateParticipant (FE, demo+REST) ghi
+// atomic qua PATCH { participants: [...] }, đi qua guardMeetings CHUNG với đường
+// "Chỉnh sửa phiên họp" cũ (buildParticipants). Không nới guard nào thêm — 3 ca dưới XÁC
+// NHẬN guard hiện có đã đủ rộng cho vai quản lý THÊM/XÓA (không chỉ SỬA) 1 dòng participant,
+// tránh hồi quy nếu guardMeetings đổi sau này.
+// ------------------------------------------------------------
+await Case('guardPatch(meetings): MANAGE THÊM 1 participant mới (mảng dài hơn existing) -> qua được, không bị chặn nhầm (mục 20)', () => {
+  const meeting = {
+    ...meetingQtdvOwn,
+    chairId: 'u-chair', secretaryId: 'u-sec',
+    participants: [{ userId: 'u-a', meetingRole: 'member', attendStatus: 'pending', checkedInAt: null }],
+  };
+  const out = guardPatch(
+    'meetings', meeting,
+    {
+      participants: [
+        { userId: 'u-a', meetingRole: 'member', attendStatus: 'pending', checkedInAt: null },
+        { userId: 'u-new', meetingRole: 'guest', attendStatus: 'pending', checkedInAt: null },
+      ],
+    },
+    U('u-chair', 'chairman'),
+  );
+  assert.equal(out.participants.length, 2, 'chủ trì (MANAGE) THÊM được người mới vào participants');
+  assert.equal(out.participants[1].userId, 'u-new');
+  assert.equal(out.participants[1].meetingRole, 'guest');
+  assert.equal(out.participants[1].checkedInAt, null, 'người MỚI không có checkedInAt cũ để giữ -> null (keepServerCheckins), không lấy giá trị giả từ client');
+});
+await Case('guardPatch(meetings): MANAGE XÓA 1 participant (mảng ngắn hơn existing) -> qua được, không bị chặn nhầm (mục 20)', () => {
+  const meeting = {
+    ...meetingQtdvOwn,
+    chairId: 'u-chair', secretaryId: 'u-sec',
+    participants: [
+      { userId: 'u-a', meetingRole: 'member', attendStatus: 'accepted', checkedInAt: null },
+      { userId: 'u-b', meetingRole: 'guest', attendStatus: 'pending', checkedInAt: null },
+    ],
+  };
+  const out = guardPatch(
+    'meetings', meeting,
+    { participants: [{ userId: 'u-a', meetingRole: 'member', attendStatus: 'accepted', checkedInAt: null }] },
+    U('u-chair', 'chairman'),
+  );
+  assert.equal(out.participants.length, 1, 'chủ trì (MANAGE) XÓA được 1 người khỏi participants (mảng ngắn hơn vẫn qua)');
+  assert.equal(out.participants[0].userId, 'u-a');
+});
+await Case('guardPatch(meetings): unit_admin CÙNG đơn vị phiên THÊM/XÓA participant -> qua được như MANAGE (mục 20, không bị bó hẹp delegateOwnRowOnly)', () => {
+  const meeting = { ...meetingQtdvOwn, participants: [{ userId: 'u-a', meetingRole: 'member', attendStatus: 'pending', checkedInAt: null }] };
+  const outAdd = guardPatch(
+    'meetings', meeting,
+    { participants: [{ userId: 'u-a', meetingRole: 'member', attendStatus: 'pending', checkedInAt: null }, { userId: 'u-new', meetingRole: 'member', attendStatus: 'pending', checkedInAt: null }] },
+    U('u-qtdv', 'unit_admin'), { actorUnitId: 'un-khdt', meetingUnitId: 'un-khdt' },
+  );
+  assert.equal(outAdd.participants.length, 2, 'unit_admin cùng đơn vị THÊM được người tham gia');
+  const outRemove = guardPatch(
+    'meetings', meeting, { participants: [] },
+    U('u-qtdv', 'unit_admin'), { actorUnitId: 'un-khdt', meetingUnitId: 'un-khdt' },
+  );
+  assert.equal(outRemove.participants.length, 0, 'unit_admin cùng đơn vị XÓA được người tham gia (mảng rỗng vẫn qua)');
+});
+await Case('guardPatch(meetings): unit_admin KHÁC đơn vị phiên cố THÊM participant lạ -> KHÔNG lọt qua (delegateOwnRowOnly chỉ giữ dòng CŨ + dòng ủy quyền hợp lệ, không phải "thêm tự do" như MANAGE/unit_admin-cùng-đơn-vị)', () => {
+  const meeting = { ...meetingQtdvOwn, participants: [{ userId: 'u-a', meetingRole: 'member', attendStatus: 'pending', checkedInAt: null }] };
+  const out = guardPatch(
+    'meetings', meeting,
+    { participants: [{ userId: 'u-a', meetingRole: 'member', attendStatus: 'pending', checkedInAt: null }, { userId: 'u-hack', meetingRole: 'member', attendStatus: 'pending', checkedInAt: null }] },
+    U('u-qtdv', 'unit_admin'), { actorUnitId: 'un-khac', meetingUnitId: 'un-khdt' },
+  );
+  // u-qtdv KHÔNG có dòng trong existing.participants -> delegateOwnRowOnly không coi đây là
+  // "ủy quyền hợp lệ" nào -> u-hack KHÔNG được thêm; participants vẫn CÓ MẶT trong patch
+  // (không bị xóa hẳn field) nhưng giữ NGUYÊN nội dung existing (1 dòng u-a, không phải 2).
+  assert.equal(out.participants.length, 1, 'unit_admin KHÁC đơn vị: KHÔNG thêm được người lạ vào participants (chỉ giữ nguyên existing)');
+  assert.equal(out.participants[0].userId, 'u-a');
 });
 
 // ============================================================

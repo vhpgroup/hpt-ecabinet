@@ -134,6 +134,76 @@ export async function saveMeeting(actor: User, draft: MeetingDraft): Promise<Mee
   return meeting;
 }
 
+/**
+ * E-HSMT mục 20 "Thêm mới, cập nhật, xóa thông tin người tham gia họp" — action RIÊNG trên
+ * tab "Đại biểu" (PeopleTab), độc lập với đường vòng "Chỉnh sửa phiên họp" (saveMeeting ->
+ * buildParticipants). Chỉ vai quản lý phiên (chủ trì/thư ký/admin toàn cục HOẶC unit_admin
+ * CÙNG đơn vị phiên — UI gate bằng `can.editMeeting`, cùng điều kiện đang dùng cho nút
+ * "Chỉnh sửa") mới gọi các hàm này. Ghi atomic qua `db.meetings.update({ participants })` —
+ * KHÔNG đụng title/agenda/chairId/... của phiên (khác `saveMeeting` build lại toàn bộ).
+ * Chạy đúng cả demo (localStorage, không có server guard riêng) và REST: ở REST, PATCH
+ * `participants` đi qua `guardMeetings` — đã cho phép MANAGE/unit_admin-cùng-đơn-vị ghi TOÀN
+ * BỘ mảng participants (giữ nguyên checkedInAt server-side qua keepServerCheckins), nên
+ * thêm/xóa/sửa 1 dòng participant không bị guard chặn nhầm (xem guard.js dòng ~527-533,
+ * Guard.cs dòng ~552-559 — parity 2 backend, KHÔNG cần nới guard thêm).
+ */
+
+/** Không cho thêm/xóa/sửa (đổi vai trò biểu quyết/khách mời) người tham gia qua tab này khi
+ * họ đang là chủ trì/thư ký của CHÍNH phiên đó — vai trò đó quản lý qua "Chỉnh sửa phiên họp"
+ * (đổi chairId/secretaryId), tránh 2 đường ghi đè lẫn nhau ra kết quả không nhất quán. */
+function assertNotChairOrSecretary(m: Meeting, userId: string) {
+  if (userId === m.chairId || userId === m.secretaryId) {
+    throw new Error('Chủ trì/Thư ký của phiên quản lý qua "Chỉnh sửa phiên họp", không xóa/sửa được ở đây');
+  }
+}
+
+/** Thêm 1 người tham gia mới (E-HSMT mục 20). meetingRole chỉ nhận 'member' (biểu quyết) hoặc
+ * 'guest' (khách mời, không biểu quyết) — khớp đúng model Participant hiện có (KHÔNG có field
+ * canVote/isGuest riêng, 'member' và 'guest' đã LÀ 2 giá trị phân biệt tư cách biểu quyết). */
+export async function addParticipant(
+  actor: User, meetingId: string, userId: string, meetingRole: 'member' | 'guest' = 'member',
+) {
+  const m = await db.meetings.get(meetingId);
+  if (!m) throw new Error('Không tìm thấy phiên họp');
+  if (m.participants.some((p) => p.userId === userId)) throw new Error('Người này đã có trong danh sách tham gia');
+  const participant: Participant = { userId, meetingRole, attendStatus: 'pending', checkedInAt: null };
+  await db.meetings.update(meetingId, { participants: [...m.participants, participant] });
+  const u = await db.users.get(userId);
+  await audit(actor, 'Thêm người tham gia họp', `Thêm ${u?.fullName ?? userId} vào "${m.title}" (${meetingRole === 'guest' ? 'khách mời' : 'thành viên'})`);
+  await notify([userId], 'Bạn được thêm vào phiên họp', `Bạn vừa được thêm vào phiên họp "${m.title}".`, 'meeting', `#/meetings/${meetingId}`);
+}
+
+/** Xóa 1 người tham gia (E-HSMT mục 20). Không xóa được chủ trì/thư ký (xem
+ * assertNotChairOrSecretary). Nếu đã điểm danh, gọi nơi này CHỈ nên xác nhận sau khi UI đã
+ * cảnh báo rõ (checkedInAt) — hàm KHÔNG tự chặn cứng để vẫn xóa được người điểm danh nhầm/rời
+ * họp giữa phiên khi quản lý CHỦ ĐỘNG xác nhận (đúng yêu cầu "tối thiểu xóa được khi phiên
+ * chưa diễn ra", không hard-block phiên đang live). */
+export async function removeParticipant(actor: User, meetingId: string, userId: string) {
+  const m = await db.meetings.get(meetingId);
+  if (!m) throw new Error('Không tìm thấy phiên họp');
+  assertNotChairOrSecretary(m, userId);
+  if (!m.participants.some((p) => p.userId === userId)) throw new Error('Không tìm thấy người này trong danh sách tham gia');
+  const participants = m.participants.filter((p) => p.userId !== userId);
+  await db.meetings.update(meetingId, { participants });
+  const u = await db.users.get(userId);
+  await audit(actor, 'Xóa người tham gia họp', `Xóa ${u?.fullName ?? userId} khỏi "${m.title}"`);
+}
+
+/** Sửa vai trò tham dự (biểu quyết <-> khách mời) của 1 người đã có trong danh sách (E-HSMT
+ * mục 20). Không đổi được vai chủ trì/thư ký qua đây (xem assertNotChairOrSecretary). */
+export async function updateParticipant(
+  actor: User, meetingId: string, userId: string, meetingRole: 'member' | 'guest',
+) {
+  const m = await db.meetings.get(meetingId);
+  if (!m) throw new Error('Không tìm thấy phiên họp');
+  assertNotChairOrSecretary(m, userId);
+  if (!m.participants.some((p) => p.userId === userId)) throw new Error('Không tìm thấy người này trong danh sách tham gia');
+  const participants = m.participants.map((p) => (p.userId === userId ? { ...p, meetingRole } : p));
+  await db.meetings.update(meetingId, { participants });
+  const u = await db.users.get(userId);
+  await audit(actor, 'Cập nhật người tham gia họp', `Đổi vai trò của ${u?.fullName ?? userId} tại "${m.title}" thành ${meetingRole === 'guest' ? 'khách mời' : 'thành viên'}`);
+}
+
 function buildParticipants(draft: MeetingDraft, old: Participant[] = []): Participant[] {
   const find = (id: string) => old.find((p) => p.userId === id);
   const memberSet = new Set([draft.chairId, draft.secretaryId, ...draft.memberIds]);

@@ -280,8 +280,14 @@ export interface DocFile {
   /**
    * Thư mục tài liệu cá nhân (E-HSMT mục 14). OPTIONAL — chỉ là nhãn phân loại
    * do người dùng đặt trên tài liệu cá nhân của mình; trống = "Chưa phân thư mục".
+   * `| null` (vá 2026-07-20, mục 14 "Xóa thư mục"): PATCH REST cần 1 giá trị JSON THẬT để
+   * "gỡ nhãn" — `{ folder: undefined }` bị `JSON.stringify` LOẠI BỎ khỏi request body trước
+   * khi gửi lên server (server không thấy field này trong patch -> giữ nguyên giá trị cũ,
+   * "xóa thư mục" sẽ KHÔNG có tác dụng ở chế độ máy chủ). `null` không bị loại, round-trip
+   * đúng qua JSON — coi tương đương "chưa phân thư mục" giống undefined (mọi nơi đọc `folder`
+   * đều dùng `!d.folder`/`d.folder ?? ''`, cả 2 coi null falsy — không phá tương thích cũ).
    */
-  folder?: string;
+  folder?: string | null;
   /**
    * Loại tài liệu chọn từ danh mục loại tài liệu (E-HSMT mục 8, CatalogType='docType').
    * OPTIONAL — id của CatalogItem (type='docType'); trống = chưa phân loại.

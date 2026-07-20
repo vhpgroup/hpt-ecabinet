@@ -443,6 +443,74 @@ static async Task Group4_Guard(TestRunner t)
         Assert.Eq("rejected", r.Obj["reviewStatus"]?.GetValue<string>(), "reviewStatus=rejected");
     });
 
+    // ---------------- Vá 2026-07-20 (rà soát mục 14 "Xóa thư mục") ----------------
+    // documents.folder chấp nhận "string|null" — PATCH { folder: null } round-trip đúng qua
+    // JSON để "gỡ nhãn thư mục" ở chế độ máy chủ (khác { folder: undefined } bị
+    // JSON.stringify LOẠI khỏi body phía client, server không thấy field -> giữ nguyên giá
+    // trị cũ). Port trực tiếp case tương ứng ở server/test/smoke.mjs (nhóm 7-FILE-WHITELIST).
+    await t.Case("documents: PATCH folder=chuỗi rồi folder=null -> gỡ nhãn thư mục thật trên server (mục 14)", async () =>
+    {
+        var owner = await app.Login("sokhdt");
+        var doc = new JsonObject
+        {
+            ["id"] = "d-folder-null", ["name"] = "Tài liệu cá nhân.pdf", ["kind"] = "personal", ["ownerId"] = "u-khdt",
+            ["meetingId"] = null, ["content"] = "nội dung cá nhân", ["reviewStatus"] = "approved", ["secret"] = false, ["version"] = 1,
+        };
+        Assert.Status(201, (await app.Post("/api/documents", doc, owner)).Status, "tạo tài liệu cá nhân");
+        var r1 = await app.Patch("/api/documents/d-folder-null", new JsonObject { ["folder"] = "Chuẩn bị họp tháng 8" }, owner);
+        Assert.Status(200, r1.Status, "đặt thư mục");
+        Assert.Eq("Chuẩn bị họp tháng 8", r1.Obj["folder"]?.GetValue<string>(), "folder đã đặt đúng");
+        var r2 = await app.Patch("/api/documents/d-folder-null", new JsonObject { ["folder"] = null }, owner);
+        Assert.Status(200, r2.Status, "gỡ nhãn thư mục (folder=null)");
+        Assert.True(r2.Obj["folder"] is null || (r2.Obj["folder"] is JsonValue jv && jv.GetValue<string?>() == null),
+            "folder phải là null sau khi gỡ nhãn — GET lại bản ghi để xác nhận server ĐÃ LƯU (không chỉ echo request)");
+        var r3 = await app.Get("/api/documents/d-folder-null", owner);
+        Assert.Status(200, r3.Status, "đọc lại tài liệu");
+        Assert.True(r3.Obj["folder"] is null, "GET lại: folder=null đã LƯU THẬT trên server (không phải giữ giá trị cũ do PATCH undefined bị JSON.stringify loại khỏi body)");
+    });
+
+    await t.Case("documents: PATCH folder sai kiểu (số) -> 400", async () =>
+    {
+        var owner = await app.Login("sokhdt");
+        var r = await app.Patch("/api/documents/d-folder-null", new JsonObject { ["folder"] = 123 }, owner);
+        Assert.Status(400, r.Status, "folder phải là string|null, không nhận số");
+    });
+
+    // ---------------- Vá 2026-07-20 (rà soát mục 20 "Thêm/xóa/sửa người tham gia họp") ----------------
+    // meetingService.addParticipant/removeParticipant/updateParticipant (FE) ghi atomic qua
+    // PATCH { participants: [...] } — CÙNG đường guardMeetings với "Chỉnh sửa phiên họp" cũ.
+    // Không nới guard nào thêm; 2 ca dưới XÁC NHẬN quyền quản lý (chair/secretary/admin) THÊM
+    // và XÓA (không chỉ SỬA) 1 dòng participant vẫn KHÔNG bị chặn nhầm.
+    await t.Case("meetings: chủ trì THÊM 1 participant mới qua PATCH participants (mục 20) -> 200, có mặt trong danh sách", async () =>
+    {
+        // u-admin (quantri) KHÔNG có trong participants seed của m1 — dùng đúng đối tượng
+        // "người dùng CHƯA có trong danh sách tham gia" (khác u-yt/u-gd/... đã có sẵn từ seed).
+        var chair = await app.Login("chutich");
+        var before = await app.Get("/api/meetings/m1", chair);
+        Assert.True(!(before.Obj["participants"] as JsonArray)!.OfType<JsonObject>().Any(p => p["userId"]?.GetValue<string>() == "u-admin"),
+            "tiền điều kiện: u-admin CHƯA có trong participants của m1 (nếu seed đổi, chọn lại user khác)");
+        var parts = (JsonArray)before.Obj["participants"]!.DeepClone();
+        parts.Add(new JsonObject { ["userId"] = "u-admin", ["meetingRole"] = "guest", ["attendStatus"] = "pending", ["checkedInAt"] = null });
+        var r = await app.Patch("/api/meetings/m1", new JsonObject { ["participants"] = parts }, chair);
+        Assert.Status(200, r.Status, "chủ trì thêm participant mới");
+        var got = (r.Obj["participants"] as JsonArray)!.OfType<JsonObject>().FirstOrDefault(p => p["userId"]?.GetValue<string>() == "u-admin");
+        Assert.True(got is not null, "u-admin đã có mặt trong participants sau PATCH (mục 20 — Thêm người tham gia)");
+        Assert.Eq("guest", got!["meetingRole"]?.GetValue<string>(), "vai trò khách mời giữ đúng");
+    });
+
+    await t.Case("meetings: chủ trì XÓA 1 participant qua PATCH participants (mục 20) -> 200, người đó KHÔNG còn trong danh sách", async () =>
+    {
+        var chair = await app.Login("chutich");
+        var before = await app.Get("/api/meetings/m1", chair);
+        var parts = (before.Obj["participants"] as JsonArray)!.OfType<JsonObject>()
+            .Where(p => p["userId"]?.GetValue<string>() != "u-admin").ToList(); // gỡ đúng người vừa thêm ở ca trên
+        var arr = new JsonArray(parts.Select(p => (JsonNode)p.DeepClone()).ToArray());
+        var r = await app.Patch("/api/meetings/m1", new JsonObject { ["participants"] = arr }, chair);
+        Assert.Status(200, r.Status, "chủ trì xóa participant");
+        var still = (r.Obj["participants"] as JsonArray)!.OfType<JsonObject>().Any(p => p["userId"]?.GetValue<string>() == "u-admin");
+        Assert.True(!still, "u-admin đã bị xóa khỏi participants sau PATCH (mục 20 — Xóa người tham gia)");
+    });
+
     await t.Case("PATCH kiểu rác (participants = số) -> 400", async () =>
     {
         var tok = await app.Login("chutich");

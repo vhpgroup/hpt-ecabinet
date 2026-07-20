@@ -79,6 +79,17 @@ export default function DocumentsPage() {
     toast(folder ? `Đã chuyển vào thư mục "${folder}"` : 'Đã bỏ khỏi thư mục');
   };
 
+  // Xóa thư mục (E-HSMT mục 14) — chỉ gỡ nhãn, KHÔNG xóa tài liệu trong thư mục.
+  const removeFolder = async () => {
+    if (!folderFilter || folderFilter === NO_FOLDER) return;
+    const name = folderFilter;
+    if (!window.confirm(`Xóa thư mục "${name}"? Các tài liệu trong thư mục sẽ được chuyển về "Chưa phân thư mục", KHÔNG bị xóa.`)) return;
+    await documentService.removeFolder(user!, name);
+    setFolderFilter('');
+    await refresh();
+    toast(`Đã xóa thư mục "${name}" (tài liệu được giữ lại)`);
+  };
+
   return (
     <div>
       <PageHeader icon="file" title="Tài liệu" subtitle="Kho tài liệu phiên họp và tài liệu cá nhân"
@@ -114,6 +125,12 @@ export default function DocumentsPage() {
                   {folders.map((f) => <option key={f} value={f}>{f}</option>)}
                 </select>
                 <button className="btn outline sm" onClick={() => setNewFolderOpen(true)}><Icon name="folder" size={14} />Thư mục mới</button>
+                {/* Xóa thư mục (E-HSMT mục 14) — chỉ hiện khi đang lọc theo 1 thư mục cụ thể */}
+                {folderFilter && folderFilter !== NO_FOLDER && (
+                  <button className="btn outline sm" title="Xóa thư mục (tài liệu được giữ lại)" onClick={removeFolder}>
+                    <Icon name="trash" size={14} />Xóa thư mục
+                  </button>
+                )}
               </>
             )}
           </div>

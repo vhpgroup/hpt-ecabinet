@@ -127,10 +127,44 @@ export async function setDocType(actor: User, docId: string, docTypeId: string) 
 /**
  * Đặt/đổi thư mục cho tài liệu cá nhân (E-HSMT mục 14). folder trống = bỏ khỏi thư mục.
  * Chỉ chủ sở hữu thao tác (ACL server: documents update 'ownerOrManage').
+ * Vá parity 2026-07-20 (mục 14 "Xóa thư mục", đọc lại trong lúc thêm removeFolder): dùng
+ * `null` (không phải `undefined`) khi folder rỗng — `{ folder: undefined }` bị
+ * `JSON.stringify` LOẠI khỏi PATCH body ở chế độ máy chủ (REST), khiến "bỏ tài liệu khỏi thư
+ * mục" (chọn "Chưa phân thư mục" ở ô thư mục mỗi dòng) không có tác dụng thật trên server —
+ * chỉ ĐÚNG ở demo cục bộ (spread object JS giữ key với giá trị undefined). `null` round-trip
+ * đúng qua JSON ở CẢ 2 chế độ (xem comment `DocFile.folder` ở types.ts).
  */
 export async function setDocFolder(actor: User, docId: string, folder: string) {
-  await db.documents.update(docId, { folder: folder.trim() || undefined });
+  await db.documents.update(docId, { folder: folder.trim() || null });
   await audit(actor, 'Cập nhật thư mục tài liệu', `Chuyển tài liệu vào thư mục "${folder.trim() || '(bỏ thư mục)'}"`);
+}
+
+/**
+ * Xóa thư mục tài liệu cá nhân (E-HSMT mục 14 "Thêm mới, sửa, xóa thư mục"). Thư mục KHÔNG
+ * phải entity riêng (chỉ là nhãn trên DocFile.folder) — "xóa thư mục" = gỡ nhãn `folder` khỏi
+ * MỌI tài liệu cá nhân CỦA CHÍNH actor đang mang nhãn đó, đưa các tài liệu về "Chưa phân thư
+ * mục". KHÔNG xóa tài liệu. Chỉ tác động tài liệu actor SỞ HỮU (không đụng tài liệu người
+ * khác chia sẻ cho mình — mirror đúng phạm vi `setDocFolder`/ACL `documents.update =
+ * 'ownerOrManage'`, ở đây actor luôn là chính chủ nên không cần thêm kiểm quyền riêng).
+ * Lặp `db.documents.update` cho từng tài liệu (cùng field `folder` mà setDocFolder ghi, chỉ
+ * khác 1 dòng audit TỔNG HỢP duy nhất ở cuối thay vì N dòng lặp lại) — chạy đúng cả demo
+ * (localStorage) và REST vì dùng chung `db.documents.update`, không có batch-update riêng ở
+ * tầng data (Repo<T> interface). Gửi `folder: null` (KHÔNG dùng `undefined` như
+ * `setDocFolder` — xem comment `DocFile.folder` ở types.ts): `undefined` bị `JSON.stringify`
+ * loại khỏi PATCH body trước khi tới network, nên ở chế độ máy chủ server sẽ KHÔNG thấy field
+ * này trong patch và giữ nguyên `folder` cũ — `null` round-trip đúng qua JSON, đưa tài liệu về
+ * "chưa phân thư mục" ở CẢ 2 chế độ.
+ */
+export async function removeFolder(actor: User, folder: string): Promise<number> {
+  const name = folder.trim();
+  if (!name) return 0;
+  const all = await db.documents.list();
+  const targets = all.filter((d) => d.kind === 'personal' && d.ownerId === actor.id && d.folder === name);
+  for (const d of targets) {
+    await db.documents.update(d.id, { folder: null });
+  }
+  await audit(actor, 'Xóa thư mục tài liệu', `Xóa thư mục "${name}" — gỡ nhãn khỏi ${targets.length} tài liệu (tài liệu được giữ lại)`);
+  return targets.length;
 }
 
 export async function shareDocument(actor: User, docId: string, userIds: string[]) {

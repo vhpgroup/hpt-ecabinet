@@ -40,7 +40,11 @@ public static class Guard
             ["name"] = "string", ["kind"] = "string", ["meetingId"] = "string|null", ["agendaItemId"] = "string|null",
             ["sharedWith"] = "array", ["secret"] = "boolean", ["content"] = "string", ["dataUrl"] = "string",
             ["version"] = "number", ["mime"] = "string", ["reviewStatus"] = "string", ["reviewNote"] = "string",
-            ["reviewedById"] = "string", ["reviewedAt"] = "string", ["issuingBody"] = "string", ["folder"] = "string",
+            ["reviewedById"] = "string", ["reviewedAt"] = "string", ["issuingBody"] = "string",
+            // folder (mục 14): "string|null" — vá 2026-07-20 (mục 14 "Xóa thư mục"), port guard.js —
+            // PATCH { folder: null } round-trip đúng qua JSON để "gỡ nhãn" (undefined bị
+            // JSON.stringify loại khỏi body phía client trước khi gửi).
+            ["folder"] = "string|null",
             ["size"] = "number", ["storageKey"] = "string", // Tách file (GĐ3): OPTIONAL, không phá tương thích
         },
         ["annotations"] = new() { ["docId"] = "string", ["content"] = "string", ["isPublic"] = "boolean" },
