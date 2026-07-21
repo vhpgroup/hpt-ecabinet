@@ -73,9 +73,15 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      # ---- Redis backplane cho SCALE NGANG (App×2 sau LB) — GATED (parity bản Node) ----
+      # TRỐNG (mặc định) -> realtime + rate-limit per-process như cũ (1 instance, không đổi).
+      # ĐẶT (vd redis://redis:6379) -> bật backplane: realtime qua Pub/Sub + rate-limit chung.
+      # Bật kèm service `redis` bằng: docker compose -f docker-compose.dotnet.yml --profile scale up -d
+      REDIS_URL: ${REDIS_URL:-}
     depends_on:
       db:
         condition: service_healthy
+    # KHÔNG depends_on redis (chỉ có ở profile `scale`); backplane tự kết nối lại lũy tiến.
     restart: unless-stopped
     # expose để debug trực tiếp API (tùy chọn):
     # ports: ["3000:3000"]
@@ -190,6 +196,24 @@ services:
       - ecabinet_dotnet_caddy_config:/config
     depends_on:
       - web
+
+  # ---------- REDIS BACKPLANE (SCALE NGANG App×2 sau LB) — GATED qua PROFILE `scale` ----------
+  # Parity docker-compose.yml (bản Node). CHỈ khởi động khi truyền `--profile scale` ->
+  # `up` mặc định KHÔNG tạo redis, hành vi giữ NGUYÊN. Khi bật, đặt REDIS_URL=redis://redis:6379:
+  #   REDIS_URL=redis://redis:6379 DB_PASSWORD='...' \
+  #     docker compose -f docker-compose.dotnet.yml --profile scale up -d --build
+  # KHÔNG public cổng ra ngoài. Vận hành thật: --requirepass + REDIS_URL=redis://:pass@redis:6379.
+  redis:
+    image: redis:7-alpine
+    container_name: ecabinet-dotnet-redis
+    profiles: ["scale"]
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
 
 volumes:
   ecabinet_mssql:

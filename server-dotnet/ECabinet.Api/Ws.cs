@@ -27,8 +27,20 @@ public static class Realtime
 
     public static int ClientCount => _clients.Count;
 
-    /// <summary>Phát 1 sự kiện tới toàn bộ client (fire-and-forget). Port broadcast().</summary>
-    public static void Broadcast(JsonObject ev)
+    /// <summary>
+    /// SCALE NGANG (App×2 sau LB): backplane Redis (nếu bật). Đặt 1 lần lúc boot qua
+    /// SetBackplane. Null hoặc chưa Up -> phát LOCAL như cũ (tương thích ngược tuyệt đối).
+    /// </summary>
+    private static ECabinet.Api.Store.IRedisBackplane? _backplane;
+    public static void SetBackplane(ECabinet.Api.Store.IRedisBackplane? bp) => _backplane = bp;
+
+    /// <summary>
+    /// Phát 1 sự kiện tới toàn bộ client WS TRÊN TIẾN TRÌNH NÀY (local). Đường phát LOCAL
+    /// thuần — KHÔNG biết Redis. 1 instance (mặc định) -> NotifyChange gọi thẳng hàm này
+    /// (hành vi cũ). Khi bật backplane, handler nhận message từ kênh chung gọi FanoutLocal
+    /// -> mỗi instance fanout đúng 1 lần cho client của mình (chống double-send).
+    /// </summary>
+    public static void FanoutLocal(JsonObject ev)
     {
         if (_clients.IsEmpty) return;
         var bytes = Encoding.UTF8.GetBytes(J.Stringify(ev));
@@ -40,6 +52,9 @@ public static class Realtime
             _ = SendAsync(kv.Key, c, bytes);
         }
     }
+
+    /// <summary>TƯƠNG THÍCH NGƯỢC: giữ tên Broadcast (đường phát local) — bí danh FanoutLocal.</summary>
+    public static void Broadcast(JsonObject ev) => FanoutLocal(ev);
 
     private static async Task SendAsync(Guid id, Client c, byte[] bytes)
     {
@@ -55,16 +70,33 @@ public static class Realtime
 
     /// <summary>
     /// Tiện dựng + phát sự kiện 'change' (port notifyChange / changed).
+    ///
+    /// SCALE NGANG: backplane BẬT -> CHỈ PUBLISH lên kênh `ecabinet:changes` (KHÔNG gửi
+    /// local trực tiếp); mọi instance SUBSCRIBE nhận lại rồi FanoutLocal đúng 1 lần cho
+    /// client của mình -> chống double-send + client nối instance khác vẫn nhận. Backplane
+    /// TẮT hoặc PUBLISH lỗi -> fallback FanoutLocal như cũ. Fire-and-forget (poke-then-pull).
     /// </summary>
     public static void NotifyChange(string collection, string action, string id)
-        => Broadcast(new JsonObject
+    {
+        var ev = new JsonObject
         {
             ["type"] = "change",
             ["collection"] = collection,
             ["action"] = action,
             ["id"] = id,
             ["at"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
-        });
+        };
+        var bp = _backplane;
+        if (bp is not null && bp.Up)
+        {
+            _ = bp.PublishChangeAsync(ev).ContinueWith(t =>
+            {
+                // publish=false (Redis rớt ngay lúc phát) -> fallback local (không mất realtime local)
+                if (!t.IsFaulted && t.Result == false) FanoutLocal(ev);
+            });
+        }
+        else FanoutLocal(ev); // đường cũ (1 instance / Redis tắt) — hành vi Y HỆT
+    }
 
     /// <summary>
     /// Middleware nâng cấp WebSocket. Trả true nếu đã xử lý (đúng path), false để chuyển tiếp.

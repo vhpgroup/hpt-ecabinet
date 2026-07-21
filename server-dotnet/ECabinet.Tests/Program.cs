@@ -32,6 +32,7 @@ await Group8_UnitIsolation(t);      // P0-1/P0-2/P0-3
 await Group9_SignVoteFeedback(t);   // P0-4/P1-5/P1-6/P1-7/P1-8
 await Group10_ChairVsManage(t);     // P2-1 (QA 18/07, tester-qa.md mục 3.5)
 await Group11_BlobS3(t);            // GĐ3: tách file object storage (SigV4 + round-trip + tương thích ngược)
+await Group12_Redis(t);             // SCALE NGANG: Redis backplane (RESP tự viết + pub/sub + rate-limit chung + fallback)
 
 var exit = t.Report();
 return exit;
@@ -2393,6 +2394,286 @@ static async Task Group11_BlobS3(TestRunner t)
         Assert.Status(201, (await app.Post("/api/documents", doc, admin)).Status, "tạo doc-del-off (S3 tắt)");
         Assert.Status(200, (await app.Delete("/api/documents/doc-del-off", admin)).Status, "xóa 200");
         Assert.Eq(0, blob.Deleted.Count, "S3 tắt -> KHÔNG gọi blob.Delete (giữ hành vi cũ)");
+    });
+}
+
+// ============================================================
+// NHÓM 12 — REDIS BACKPLANE (scale ngang App×2 sau LB)
+// RESP tự viết (test-vector byte) + backplane/rate-limit qua FakeRedis in-process.
+// Parity server/test/smoke.mjs nhóm 12-REDIS-BACKPLANE. KHÔNG cần Redis thật.
+// ============================================================
+static async Task Group12_Redis(TestRunner t)
+{
+    t.Group("12-REDIS");
+    var cfg = RedisConfig.Parse("redis://localhost:6379/0")!;
+
+    // chờ tối đa ms tới khi cond() true (poll) — pub/sub bất đồng bộ
+    async Task<bool> Until(Func<bool> cond, int ms = 1000)
+    {
+        var t0 = DateTime.UtcNow;
+        while ((DateTime.UtcNow - t0).TotalMilliseconds < ms) { if (cond()) return true; await Task.Delay(5); }
+        return cond();
+    }
+
+    await t.Case("RESP encode: PUBLISH -> mảng bulk string đúng byte", () =>
+    {
+        var b = RespCodec.EncodeCommand("PUBLISH", "ecabinet:changes", "hi");
+        Assert.Eq("*3\r\n$7\r\nPUBLISH\r\n$16\r\necabinet:changes\r\n$2\r\nhi\r\n", Encoding.UTF8.GetString(b), "encode PUBLISH");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RESP encode: INCR key (2 phần tử)", () =>
+    {
+        Assert.Eq("*2\r\n$4\r\nINCR\r\n$10\r\nip:1.2.3.4\r\n", Encoding.UTF8.GetString(RespCodec.EncodeCommand("INCR", "ip:1.2.3.4")), "encode INCR");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RESP encode: UTF-8 tính theo BYTE (á = 2 byte)", () =>
+    {
+        var b = RespCodec.EncodeCommand("PUBLISH", "ch", "á");
+        Assert.Eq("*3\r\n$7\r\nPUBLISH\r\n$2\r\nch\r\n$2\r\ná\r\n", Encoding.UTF8.GetString(b), "bulk length theo byte");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RESP parse: Integer :10 -> 10L", () =>
+    {
+        var (v, c) = RespCodec.ParseReply(Encoding.ASCII.GetBytes(":10\r\n"));
+        Assert.Eq(10L, v, "integer"); Assert.True(c == 5, "consumed=5");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RESP parse: Bulk $3\\r\\nfoo -> foo", () =>
+    {
+        var (v, c) = RespCodec.ParseReply(Encoding.ASCII.GetBytes("$3\r\nfoo\r\n"));
+        Assert.Eq("foo", v, "bulk"); Assert.True(c == 9, "consumed=9");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RESP parse: Null bulk $-1 -> null", () =>
+    {
+        var (v, _) = RespCodec.ParseReply(Encoding.ASCII.GetBytes("$-1\r\n"));
+        Assert.True(v is null, "null bulk");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RESP parse: Array message *3 [message,ch,payload]", () =>
+    {
+        var (v, _) = RespCodec.ParseReply(Encoding.UTF8.GetBytes("*3\r\n$7\r\nmessage\r\n$2\r\nch\r\n$5\r\nhello\r\n"));
+        var arr = v as object?[];
+        Assert.True(arr != null && arr.Length == 3, "mảng 3 phần tử");
+        Assert.Eq("message", arr![0], "msg"); Assert.Eq("ch", arr[1], "ch"); Assert.Eq("hello", arr[2], "payload");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RESP parse: Error -ERR -> RespError", () =>
+    {
+        var (v, _) = RespCodec.ParseReply(Encoding.ASCII.GetBytes("-ERR bad\r\n"));
+        Assert.True(v is RespError e && e.Message == "ERR bad", "error reply");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RESP parse: buffer THIẾU byte -> consumed=0 (chờ thêm, không vỡ)", () =>
+    {
+        Assert.True(RespCodec.ParseReply(Encoding.ASCII.GetBytes("$3\r\nfo")).Consumed == 0, "thiếu payload");
+        Assert.True(RespCodec.ParseReply(Encoding.ASCII.GetBytes("*2\r\n$3\r\nfoo\r\n")).Consumed == 0, "thiếu phần tử 2");
+        Assert.True(RespCodec.ParseReply(Array.Empty<byte>()).Consumed == 0, "rỗng");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RESP round-trip: EncodeReply <-> ParseReply (int/string/null/array)", () =>
+    {
+        object?[] samples = { 42L, "OK", null, new object?[] { "message", "ecabinet:changes", "{\"a\":1}" } };
+        foreach (var s in samples)
+        {
+            var (v, _) = RespCodec.ParseReply(RespCodec.EncodeReply(s));
+            if (s is object?[] sa) { var va = v as object?[]; Assert.True(va != null && va.Length == sa.Length, "array round-trip"); }
+            else Assert.Eq(s, v, "round-trip scalar");
+        }
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RedisConfig.Parse: redis://:pass@host:port/db tách đủ trường", () =>
+    {
+        var u = RedisConfig.Parse("redis://:secret@db-host:6380/3")!;
+        Assert.Eq("db-host", u.Host, "host"); Assert.Eq(6380, u.Port, "port");
+        Assert.Eq("secret", u.Password, "password"); Assert.Eq(3, u.Db, "db"); Assert.Eq(false, u.Tls, "tls");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RedisConfig.Parse: mặc định 6379/db0; rediss->tls; rỗng/sai scheme -> null", () =>
+    {
+        var u = RedisConfig.Parse("redis://h")!;
+        Assert.Eq(6379, u.Port, "port mặc định"); Assert.Eq(0, u.Db, "db mặc định"); Assert.Eq("", u.Password, "no pass");
+        Assert.Eq(true, RedisConfig.Parse("rediss://h:1")!.Tls, "rediss tls");
+        Assert.True(RedisConfig.Parse("") is null, "rỗng -> null");
+        Assert.True(RedisConfig.Parse("http://x") is null, "sai scheme -> null");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("RedisConfig.Parse: user:pass@ (ACL Redis 6) -> username + password", () =>
+    {
+        var u = RedisConfig.Parse("redis://alice:pw@h:6379/0")!;
+        Assert.Eq("alice", u.Username, "username"); Assert.Eq("pw", u.Password, "password");
+        return Task.CompletedTask;
+    });
+
+    await t.Case("GATED: REDIS_URL trống -> FromEnv()=null (đường cũ, không mở kết nối)", () =>
+    {
+        var saved = Environment.GetEnvironmentVariable("REDIS_URL");
+        Environment.SetEnvironmentVariable("REDIS_URL", null);
+        Assert.True(RedisConfig.FromEnv() is null, "không cấu hình -> null");
+        Environment.SetEnvironmentVariable("REDIS_URL", "redis://localhost:6379");
+        Assert.True(RedisConfig.FromEnv() is not null, "có URL -> có config");
+        Environment.SetEnvironmentVariable("REDIS_URL", saved);
+        return Task.CompletedTask;
+    });
+
+    await t.Case("WS backplane: publish từ instance A -> instance B fanout ĐÚNG 1 lần cho B", async () =>
+    {
+        var fake = new FakeRedisServer();
+        var gotB = new List<JsonObject>();
+        var A = new RedisBackplane(cfg, _ => { }, fake.Connect, (_, _) => { });
+        var B = new RedisBackplane(cfg, ev => { lock (gotB) gotB.Add(ev); }, fake.Connect, (_, _) => { });
+        await A.StartAsync(); await B.StartAsync();
+        Assert.True(A.Up && B.Up, "cả 2 instance kết nối fake");
+
+        var published = await A.PublishChangeAsync(new JsonObject { ["type"] = "change", ["collection"] = "meetings", ["action"] = "update", ["id"] = "m1", ["at"] = "t" });
+        Assert.Eq(true, published, "A đã PUBLISH (không gửi local trực tiếp)");
+        await Until(() => { lock (gotB) return gotB.Count >= 1; });
+        lock (gotB) { Assert.Eq(1, gotB.Count, "B nhận ĐÚNG 1 message -> fanout local"); Assert.Eq("m1", gotB[0]["id"]?.GetValue<string>(), "shape giữ nguyên"); }
+        A.Stop(); B.Stop();
+    });
+
+    await t.Case("WS backplane: instance PHÁT (A) nhận LẠI qua SUBSCRIBE đúng 1 lần (chống double-send)", async () =>
+    {
+        var fake = new FakeRedisServer();
+        var gotA = new List<JsonObject>();
+        var A = new RedisBackplane(cfg, ev => { lock (gotA) gotA.Add(ev); }, fake.Connect, (_, _) => { });
+        await A.StartAsync();
+        var published = await A.PublishChangeAsync(new JsonObject { ["type"] = "change", ["collection"] = "votes", ["action"] = "create", ["id"] = "v9", ["at"] = "t" });
+        Assert.Eq(true, published, "A publish=true -> caller KHÔNG tự fanout (chống nhân đôi)");
+        await Until(() => { lock (gotA) return gotA.Count >= 1; });
+        lock (gotA) Assert.Eq(1, gotA.Count, "A nhận lại ĐÚNG 1 lần (không 0, không 2)");
+        await A.PublishChangeAsync(new JsonObject { ["type"] = "change", ["collection"] = "votes", ["action"] = "create", ["id"] = "v10", ["at"] = "t" });
+        await Until(() => { lock (gotA) return gotA.Count >= 2; });
+        lock (gotA) Assert.Eq(2, gotA.Count, "mỗi publish -> đúng 1 fanout");
+        A.Stop();
+    });
+
+    await t.Case("WS backplane: PUBLISH tới CẢ A và B (mỗi instance fanout cho client của mình)", async () =>
+    {
+        var fake = new FakeRedisServer();
+        var gotA = new List<JsonObject>(); var gotB = new List<JsonObject>();
+        var A = new RedisBackplane(cfg, ev => { lock (gotA) gotA.Add(ev); }, fake.Connect, (_, _) => { });
+        var B = new RedisBackplane(cfg, ev => { lock (gotB) gotB.Add(ev); }, fake.Connect, (_, _) => { });
+        await A.StartAsync(); await B.StartAsync();
+        await B.PublishChangeAsync(new JsonObject { ["type"] = "change", ["collection"] = "documents", ["action"] = "remove", ["id"] = "d1", ["at"] = "t" });
+        await Until(() => { lock (gotA) lock (gotB) return gotA.Count >= 1 && gotB.Count >= 1; });
+        lock (gotA) Assert.Eq(1, gotA.Count, "A (không phát) vẫn nhận -> client nối A nhận realtime từ ghi ở B");
+        lock (gotB) Assert.Eq(1, gotB.Count, "B (phát) nhận lại đúng 1 lần");
+        A.Stop(); B.Stop();
+    });
+
+    await t.Case("Rate-limit chung: INCR vượt max -> chặn (Ok=false) đúng ngưỡng", async () =>
+    {
+        var fake = new FakeRedisServer();
+        var A = new RedisBackplane(cfg, _ => { }, fake.Connect, (_, _) => { });
+        await A.StartAsync();
+        var key = "ip:9.9.9.9";
+        var r1 = await A.RateHitAsync(key, 3, 60000); Assert.Eq(true, r1!.Value.Ok, "lần 1 ok"); Assert.Eq(2, r1.Value.Remaining, "remaining=2");
+        await A.RateHitAsync(key, 3, 60000); await A.RateHitAsync(key, 3, 60000); // count=3
+        var r4 = await A.RateHitAsync(key, 3, 60000); // count=4 > 3
+        Assert.Eq(false, r4!.Value.Ok, "lần 4 vượt max -> chặn");
+        Assert.True(r4.Value.RetryAfterSec >= 1, "có retryAfter");
+        A.Stop();
+    });
+
+    await t.Case("Rate-limit chung: 2 instance đếm CHUNG 1 key (mấu chốt scale ngang)", async () =>
+    {
+        var fake = new FakeRedisServer(); // 1 server giả dùng chung -> keyspace chung
+        var A = new RedisBackplane(cfg, _ => { }, fake.Connect, (_, _) => { });
+        var B = new RedisBackplane(cfg, _ => { }, fake.Connect, (_, _) => { });
+        await A.StartAsync(); await B.StartAsync();
+        var key = "ip:5.5.5.5";
+        await A.RateHitAsync(key, 4, 60000); await A.RateHitAsync(key, 4, 60000); // count=2 (A)
+        await B.RateHitAsync(key, 4, 60000); // count=3 (B — CHUNG)
+        var r = await B.RateHitAsync(key, 4, 60000); Assert.Eq(true, r!.Value.Ok, "count=4<=4 vẫn ok");
+        var r5 = await A.RateHitAsync(key, 4, 60000); // count=5 > 4
+        Assert.Eq(false, r5!.Value.Ok, "tổng 5 hit rải qua A+B -> chặn (không lách được bằng đổi instance)");
+        A.Stop(); B.Stop();
+    });
+
+    await t.Case("Rate-limit chung: PEXPIRE đặt TTL ở lần đầu (count==1)", async () =>
+    {
+        var fake = new FakeRedisServer();
+        var A = new RedisBackplane(cfg, _ => { }, fake.Connect, (_, _) => { });
+        await A.StartAsync();
+        var key = "ip:ttl-test";
+        await A.RateHitAsync(key, 10, 5000);
+        Assert.True(fake.PttlOf(key) > 0, "PEXPIRE đã đặt hạn ở lần đầu");
+        lock (fake.Calls) Assert.True(fake.Calls.Any(c => c[0] == "PEXPIRE"), "có gọi PEXPIRE");
+        A.Stop();
+    });
+
+    await t.Case("FALLBACK: Redis lỗi PUBLISH -> PublishChangeAsync=false (caller tự fanout local)", async () =>
+    {
+        var fake = new FakeRedisServer(failOn: "PUBLISH");
+        var A = new RedisBackplane(cfg, _ => { }, fake.Connect, (_, _) => { });
+        await A.StartAsync();
+        var ok = await A.PublishChangeAsync(new JsonObject { ["type"] = "change" });
+        Assert.Eq(false, ok, "publish lỗi -> false -> NotifyChange fanoutLocal");
+        Assert.Eq(false, A.Up, "lỗi -> đánh dấu mất kết nối (kích hoạt reconnect)");
+        A.Stop();
+    });
+
+    await t.Case("FALLBACK: Redis lỗi INCR -> RateHitAsync=null (tầng trên FAIL-OPEN)", async () =>
+    {
+        var fake = new FakeRedisServer(failOn: "INCR");
+        var A = new RedisBackplane(cfg, _ => { }, fake.Connect, (_, _) => { });
+        await A.StartAsync();
+        var r = await A.RateHitAsync("ip:x", 3, 60000);
+        Assert.True(r is null, "INCR lỗi -> null -> fail-open");
+        A.Stop();
+    });
+
+    await t.Case("FALLBACK: backplane chưa Up -> publish=false & rateHit=null (đường local/fail-open)", async () =>
+    {
+        var A = new RedisBackplane(cfg, _ => { }, _ => throw new Exception("không nối được"), (_, _) => { });
+        await A.StartAsync(); // lỗi -> Up=false
+        Assert.Eq(false, A.Up, "không kết nối được -> Up=false");
+        Assert.Eq(false, await A.PublishChangeAsync(new JsonObject { ["type"] = "change" }), "chưa up -> publish=false");
+        Assert.True(await A.RateHitAsync("k", 1, 1000) is null, "chưa up -> rateHit=null");
+        A.Stop();
+    });
+
+    await t.Case("RateLimit.HitAsync: Redis TẮT -> dùng Bucket in-RAM như cũ (tương thích ngược)", async () =>
+    {
+        RateLimit.SetBackplane(null); // đảm bảo tắt
+        RateLimit.Reset();
+        var r1 = await RateLimit.HitAsync("test:offline", 2, 60000);
+        Assert.Eq(true, r1.Ok, "lần 1 ok (in-RAM)");
+        await RateLimit.HitAsync("test:offline", 2, 60000);
+        var r3 = await RateLimit.HitAsync("test:offline", 2, 60000);
+        Assert.Eq(false, r3.Ok, "lần 3 vượt max in-RAM -> chặn (đường cũ)");
+        RateLimit.Reset();
+    });
+
+    await t.Case("RateLimit.HitAsync: Redis BẬT (fake) -> đếm chung; rớt -> fail-open (cho qua)", async () =>
+    {
+        var fake = new FakeRedisServer(failOn: "INCR"); // INCR luôn lỗi -> mô phỏng Redis rớt
+        var A = new RedisBackplane(cfg, _ => { }, fake.Connect, (_, _) => { });
+        await A.StartAsync();
+        RateLimit.SetBackplane(A);
+        try
+        {
+            var r = await RateLimit.HitAsync("ip:failopen", 1, 60000);
+            Assert.Eq(true, r.Ok, "Redis rớt -> FAIL-OPEN (Ok=true, không chặn toàn hệ)");
+        }
+        finally
+        {
+            RateLimit.SetBackplane(null); // LUÔN dọn (kể cả khi assert lỗi) — không rò sang test khác
+            A.Stop();
+        }
     });
 }
 

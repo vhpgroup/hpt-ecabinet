@@ -20,12 +20,25 @@ const clients = new Set();
 
 export const clientCount = () => clients.size;
 
-/** Phát một sự kiện tới toàn bộ client đang kết nối */
-export function broadcast(event) {
+/**
+ * Phát một sự kiện tới toàn bộ client WS ĐANG KẾT NỐI TRÊN TIẾN TRÌNH NÀY (local).
+ * Đây là đường phát LOCAL thuần — KHÔNG biết gì về Redis. Khi chạy 1 instance (mặc
+ * định, không REDIS_URL) index.js gọi thẳng hàm này (hành vi cũ, giữ nguyên).
+ * Khi bật Redis backplane, index.js PUBLISH lên kênh chung thay vì gọi trực tiếp;
+ * handler nhận message của backplane sẽ gọi fanoutLocal() -> mỗi instance fanout
+ * đúng 1 lần cho client của mình (chống double-send, xem server/src/redis.js).
+ */
+export function fanoutLocal(event) {
   if (!clients.size) return;
   const msg = Buffer.from(JSON.stringify(event), 'utf8');
   for (const c of clients) sendFrame(c.socket, 0x1, msg);
 }
+
+/**
+ * TƯƠNG THÍCH NGƯỢC: giữ tên `broadcast` (đường phát local) cho mọi lời gọi cũ.
+ * Bí danh của fanoutLocal — hành vi Y HỆT bản trước khi có backplane.
+ */
+export const broadcast = fanoutLocal;
 
 export function attachRealtime(server, path = '/api/realtime') {
   server.on('upgrade', (req, socket) => {

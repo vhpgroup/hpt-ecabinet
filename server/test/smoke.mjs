@@ -36,6 +36,10 @@ import {
 import { SIGN_PIN_RE, buildBallotSignature } from '../src/actions.js';
 import { meetingInvolvesUnit } from '../src/open.js';
 import {
+  encodeCommand, parseReply, parseRedisUrl, redisConfigured,
+  RedisBackplane, makeFakeRedis, encodeReplyForFake, decodeCommandForFake,
+} from '../src/redis.js';
+import {
   signRequestV4, uriEncode, isDataUri, decodeDataUri, encodeDataUri,
   documentKey, guideKey, externalizeDocumentWrite, inlineDocumentRead,
   externalizeGuideWrite, inlineGuideRead,
@@ -1193,6 +1197,234 @@ await Case('GUIDES (đợt 3): projectGuideRead có contentUrl /api/guides/<id>/
   const outL = projectGuideRead(legacy);
   assert.equal(outL.fileData, url, 'guide cũ giữ fileData (tương thích ngược)');
   assert.equal(outL.contentUrl, undefined, 'không thêm contentUrl khi đã có fileData');
+});
+
+// ============================================================
+// NHÓM 12 — REDIS BACKPLANE (scale ngang App×2 sau LB)
+// RESP tự viết (test-vector byte) + backplane/rate-limit qua fake Redis in-process.
+// KHÔNG cần Redis thật (sandbox chặn socket) — fake giả pub/sub + INCR/PEXPIRE/PTTL.
+// ============================================================
+Group('12-REDIS-BACKPLANE');
+
+const REDIS_CFG = parseRedisUrl('redis://localhost:6379/0');
+
+// Chờ tối đa ms cho tới khi cond() true (poll) — dùng cho pub/sub bất đồng bộ.
+async function until(cond, ms = 500) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) { if (cond()) return true; await new Promise((r) => setTimeout(r, 5)); }
+  return cond();
+}
+
+await Case('RESP encode: PUBLISH -> mảng bulk string đúng byte', () => {
+  const b = encodeCommand(['PUBLISH', 'ecabinet:changes', 'hi']);
+  assert.equal(b.toString('utf8'), '*3\r\n$7\r\nPUBLISH\r\n$16\r\necabinet:changes\r\n$2\r\nhi\r\n');
+});
+
+await Case('RESP encode: INCR key (2 phần tử)', () => {
+  assert.equal(encodeCommand(['INCR', 'ip:1.2.3.4']).toString('utf8'), '*2\r\n$4\r\nINCR\r\n$10\r\nip:1.2.3.4\r\n');
+});
+
+await Case('RESP encode: giá trị UTF-8 tính theo BYTE (không theo ký tự)', () => {
+  // 'á' (NFC) = 2 byte UTF-8 -> bulk length PHẢI là 2 (không phải 1 ký tự)
+  const b = encodeCommand(['PUBLISH', 'ch', 'á']);
+  assert.equal(b.toString('utf8'), '*3\r\n$7\r\nPUBLISH\r\n$2\r\nch\r\n$2\r\ná\r\n');
+});
+
+await Case('RESP parse: Integer :10 -> 10', () => {
+  assert.equal(parseReply(Buffer.from(':10\r\n')).value, 10);
+});
+
+await Case('RESP parse: Bulk string $3\\r\\nfoo -> "foo"', () => {
+  const r = parseReply(Buffer.from('$3\r\nfoo\r\n'));
+  assert.equal(r.value, 'foo');
+  assert.equal(r.rest.length, 0);
+});
+
+await Case('RESP parse: Null bulk $-1 -> null', () => {
+  assert.equal(parseReply(Buffer.from('$-1\r\n')).value, null);
+});
+
+await Case('RESP parse: Array message *3 [message,ch,payload]', () => {
+  const r = parseReply(Buffer.from('*3\r\n$7\r\nmessage\r\n$2\r\nch\r\n$5\r\nhello\r\n'));
+  assert.deepEqual(r.value, ['message', 'ch', 'hello']);
+});
+
+await Case('RESP parse: Error reply -ERR -> {error}', () => {
+  assert.deepEqual(parseReply(Buffer.from('-ERR bad\r\n')).value, { error: 'ERR bad' });
+});
+
+await Case('RESP parse: buffer THIẾU byte -> null (chờ thêm, không vỡ)', () => {
+  assert.equal(parseReply(Buffer.from('$3\r\nfo')), null);          // thiếu payload
+  assert.equal(parseReply(Buffer.from('*2\r\n$3\r\nfoo\r\n')), null); // thiếu phần tử 2
+  assert.equal(parseReply(Buffer.alloc(0)), null);                  // rỗng
+});
+
+await Case('RESP round-trip: encodeReplyForFake <-> parseReply (int/string/null/array)', () => {
+  for (const v of [42, 'OK', null, ['message', 'ecabinet:changes', '{"a":1}']]) {
+    assert.deepEqual(parseReply(encodeReplyForFake(v)).value, v);
+  }
+});
+
+await Case('parseRedisUrl: redis://:pass@host:port/db tách đủ trường', () => {
+  const u = parseRedisUrl('redis://:secret@db-host:6380/3');
+  assert.equal(u.host, 'db-host'); assert.equal(u.port, 6380);
+  assert.equal(u.password, 'secret'); assert.equal(u.db, 3); assert.equal(u.tls, false);
+});
+
+await Case('parseRedisUrl: mặc định port 6379 + db 0; rediss:// -> tls=true; chuỗi rỗng -> null', () => {
+  const u = parseRedisUrl('redis://h');
+  assert.equal(u.port, 6379); assert.equal(u.db, 0); assert.equal(u.password, '');
+  assert.equal(parseRedisUrl('rediss://h:1').tls, true);
+  assert.equal(parseRedisUrl(''), null);
+  assert.equal(parseRedisUrl('http://x'), null); // sai scheme
+});
+
+await Case('parseRedisUrl: user:pass@ (ACL Redis 6) -> lấy username + password', () => {
+  const u = parseRedisUrl('redis://alice:pw@h:6379/0');
+  assert.equal(u.username, 'alice'); assert.equal(u.password, 'pw');
+});
+
+await Case('GATED: REDIS_URL trống -> redisConfigured()=false (đường cũ, không mở kết nối)', () => {
+  const saved = process.env.REDIS_URL;
+  delete process.env.REDIS_URL;
+  assert.equal(redisConfigured(), false, 'không cấu hình -> false');
+  process.env.REDIS_URL = 'redis://localhost:6379';
+  assert.equal(redisConfigured(), true, 'có URL -> true');
+  if (saved === undefined) delete process.env.REDIS_URL; else process.env.REDIS_URL = saved;
+});
+
+await Case('WS backplane: publish từ "instance A" -> "instance B" fanout ĐÚNG 1 lần cho B', async () => {
+  const fake = makeFakeRedis();
+  const gotA = []; const gotB = [];
+  const A = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: (e) => gotA.push(e), log: () => {} });
+  const B = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: (e) => gotB.push(e), log: () => {} });
+  await A.start(); await B.start();
+  assert.equal(A.up && B.up, true, 'cả 2 instance kết nối fake');
+
+  const event = { type: 'change', collection: 'meetings', action: 'update', id: 'm1', at: 't' };
+  const published = await A.publishChange(event);
+  assert.equal(published, true, 'A đã PUBLISH (KHÔNG gửi local trực tiếp)');
+  await until(() => gotB.length >= 1);
+  assert.equal(gotB.length, 1, 'B nhận ĐÚNG 1 message qua SUBSCRIBE -> fanout local');
+  assert.equal(gotB[0].id, 'm1', 'nội dung message giữ nguyên shape');
+  A.stop(); B.stop();
+});
+
+await Case('WS backplane: instance PHÁT (A) cũng nhận LẠI qua SUBSCRIBE -> fanout đúng 1 lần (chống double-send)', async () => {
+  const fake = makeFakeRedis();
+  const gotA = [];
+  const A = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: (e) => gotA.push(e), log: () => {} });
+  await A.start();
+  const published = await A.publishChange({ type: 'change', collection: 'votes', action: 'create', id: 'v9', at: 't' });
+  assert.equal(published, true, 'A publish=true -> caller KHÔNG tự fanout local (chống nhân đôi)');
+  await until(() => gotA.length >= 1);
+  assert.equal(gotA.length, 1, 'A nhận lại ĐÚNG 1 lần qua sub (không 0, không 2)');
+  // publish thêm 1 lần nữa -> đúng thêm 1 (tổng 2), không nhân đôi
+  await A.publishChange({ type: 'change', collection: 'votes', action: 'create', id: 'v10', at: 't' });
+  await until(() => gotA.length >= 2);
+  assert.equal(gotA.length, 2, 'mỗi publish -> đúng 1 fanout');
+  A.stop();
+});
+
+await Case('WS backplane: PUBLISH tới CẢ A và B (mỗi instance fanout cho client của mình)', async () => {
+  const fake = makeFakeRedis();
+  const gotA = []; const gotB = [];
+  const A = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: (e) => gotA.push(e), log: () => {} });
+  const B = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: (e) => gotB.push(e), log: () => {} });
+  await A.start(); await B.start();
+  await B.publishChange({ type: 'change', collection: 'documents', action: 'remove', id: 'd1', at: 't' });
+  await until(() => gotA.length >= 1 && gotB.length >= 1);
+  assert.equal(gotA.length, 1, 'A (không phát) vẫn nhận -> client nối A nhận realtime từ ghi ở B');
+  assert.equal(gotB.length, 1, 'B (phát) nhận lại đúng 1 lần');
+  A.stop(); B.stop();
+});
+
+await Case('Rate-limit chung: INCR vượt max -> chặn (ok=false) đúng ngưỡng', async () => {
+  const fake = makeFakeRedis();
+  const A = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: () => {}, log: () => {} });
+  await A.start();
+  const key = 'ip:9.9.9.9';
+  const r1 = await A.rateHit(key, 3, 60000); assert.equal(r1.ok, true, 'lần 1 ok, count=1<=3');
+  assert.equal(r1.remaining, 2, 'remaining=2');
+  await A.rateHit(key, 3, 60000); await A.rateHit(key, 3, 60000); // count=3 (vẫn ok)
+  const r4 = await A.rateHit(key, 3, 60000); // count=4 > 3 -> chặn
+  assert.equal(r4.ok, false, 'lần 4 vượt max -> chặn');
+  assert.ok(r4.retryAfterSec >= 1, 'có retryAfterSec');
+  A.stop();
+});
+
+await Case('Rate-limit chung: 2 "instance" đếm CHUNG 1 key (đây là mấu chốt scale ngang)', async () => {
+  const fake = makeFakeRedis(); // 1 server giả dùng chung -> keyspace chung
+  const A = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: () => {}, log: () => {} });
+  const B = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: () => {}, log: () => {} });
+  await A.start(); await B.start();
+  const key = 'ip:5.5.5.5';
+  await A.rateHit(key, 4, 60000); // count=1 (qua A)
+  await A.rateHit(key, 4, 60000); // count=2
+  await B.rateHit(key, 4, 60000); // count=3 (qua B — CHUNG bộ đếm)
+  const r = await B.rateHit(key, 4, 60000); // count=4 (<=4 vẫn ok)
+  assert.equal(r.ok, true, 'count=4<=4 vẫn ok (đếm chung tới đây)');
+  const r5 = await A.rateHit(key, 4, 60000); // count=5 > 4 -> chặn dù rải qua 2 instance
+  assert.equal(r5.ok, false, 'tổng 5 hit rải qua A+B -> chặn (KHÔNG lách được bằng đổi instance)');
+  A.stop(); B.stop();
+});
+
+await Case('Rate-limit chung: PEXPIRE đặt TTL ở lần đầu; PTTL trả retryAfter (best-effort)', async () => {
+  const fake = makeFakeRedis();
+  const A = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: () => {}, log: () => {} });
+  await A.start();
+  const key = 'ip:ttl-test';
+  await A.rateHit(key, 10, 5000);
+  // Sau lần đầu, keyspace phải có expireAt gần now+5000
+  const entry = fake.keyspace.get(key);
+  assert.ok(entry && entry.expireAt !== null, 'PEXPIRE đã đặt hạn ở lần đầu (count==1)');
+  const calls = fake.calls.map((c) => c[0]);
+  assert.ok(calls.includes('PEXPIRE'), 'có gọi PEXPIRE');
+  A.stop();
+});
+
+await Case('FALLBACK: Redis lỗi PUBLISH -> publishChange trả false (caller tự fanout local)', async () => {
+  const fake = makeFakeRedis({ failOn: 'PUBLISH' });
+  const A = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: () => {}, log: () => {} });
+  await A.start();
+  const ok = await A.publishChange({ type: 'change', collection: 'x', action: 'y', id: 'z', at: 't' });
+  assert.equal(ok, false, 'publish lỗi -> false -> notifyChange sẽ fanoutLocal (không mất realtime local)');
+  assert.equal(A.up, false, 'lỗi -> đánh dấu mất kết nối (kích hoạt reconnect)');
+  A.stop();
+});
+
+await Case('FALLBACK: Redis lỗi INCR -> rateHit trả null (tầng trên FAIL-OPEN, không chặn toàn hệ)', async () => {
+  const fake = makeFakeRedis({ failOn: 'INCR' });
+  const A = new RedisBackplane({ cfg: REDIS_CFG, connect: fake.connect, onMessage: () => {}, log: () => {} });
+  await A.start();
+  const r = await A.rateHit('ip:x', 3, 60000);
+  assert.equal(r, null, 'INCR lỗi -> null -> tầng index.js coi như cho qua (fail-open)');
+  A.stop();
+});
+
+await Case('FALLBACK: backplane chưa up -> publishChange=false & rateHit=null (đường local/fail-open)', async () => {
+  const A = new RedisBackplane({ cfg: REDIS_CFG, connect: () => { throw new Error('không nối được'); }, onMessage: () => {}, log: () => {} });
+  await A.start(); // sẽ lỗi -> up=false, lên lịch reconnect
+  assert.equal(A.up, false, 'không kết nối được -> up=false');
+  assert.equal(await A.publishChange({ type: 'change' }), false, 'chưa up -> publish=false (caller local)');
+  assert.equal(await A.rateHit('k', 1, 1000), null, 'chưa up -> rateHit=null (fail-open)');
+  A.stop();
+});
+
+await Case('decodeCommandForFake: giải mã ngược lệnh RESP -> mảng args (đối xứng encode)', () => {
+  const args = decodeCommandForFake(encodeCommand(['SUBSCRIBE', 'ecabinet:changes']));
+  assert.deepEqual(args, ['SUBSCRIBE', 'ecabinet:changes']);
+});
+
+await Case('makeFakeRedis: AUTH + SELECT trong handshake không làm vỡ start() (URL có pass + db)', async () => {
+  const fake = makeFakeRedis();
+  const cfg = parseRedisUrl('redis://:pw@localhost:6379/2');
+  const A = new RedisBackplane({ cfg, connect: fake.connect, onMessage: () => {}, log: () => {} });
+  await A.start();
+  assert.equal(A.up, true, 'handshake AUTH+SELECT qua fake -> up');
+  const calls = fake.calls.map((c) => c[0]);
+  assert.ok(calls.includes('AUTH') && calls.includes('SELECT'), 'đã gửi AUTH + SELECT');
+  A.stop();
 });
 
 const exitCode = report();

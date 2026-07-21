@@ -35,6 +35,23 @@ public static class App
         await store.InitAsync();
         await Seed.SeedIfEmpty(store);
 
+        // SCALE NGANG: khởi tạo Redis backplane 1 lần (chỉ khi có REDIS_URL). Message từ kênh
+        // chung -> FanoutLocal cho client WS của tiến trình này. Không REDIS_URL -> Configured()
+        // =false, KHÔNG mở kết nối, chạy local như cũ (tương thích ngược tuyệt đối).
+        var cfg = Store.RedisConfig.FromEnv();
+        if (cfg is not null)
+        {
+            var bp = new Store.RedisBackplane(cfg, ev => Realtime.FanoutLocal(ev));
+            Realtime.SetBackplane(bp);
+            RateLimit.SetBackplane(bp);
+            await bp.StartAsync();
+            Console.WriteLine("[server] Redis backplane: BẬT (App×N sau LB — realtime + rate-limit đồng bộ toàn cụm)");
+        }
+        else
+        {
+            Console.WriteLine("[server] Redis backplane: TẮT (1 instance — đặt REDIS_URL để chạy App×2 sau cân bằng tải)");
+        }
+
         ConfigurePipeline(app, store);
         return app;
     }
@@ -67,7 +84,7 @@ public static class App
             if (ctx.Request.Path != "/health")
             {
                 var max = Env.GetInt("RATE_LIMIT_MAX", 300);
-                var rl = RateLimit.Hit("ip:" + HttpUtil.ClientIp(ctx.Request), max, Env.GetInt("RATE_LIMIT_WINDOW_MS", (int)RateWindowMs));
+                var rl = await RateLimit.HitAsync("ip:" + HttpUtil.ClientIp(ctx.Request), max, Env.GetInt("RATE_LIMIT_WINDOW_MS", (int)RateWindowMs));
                 if (!rl.Ok)
                 {
                     ctx.Response.StatusCode = 429;
@@ -291,7 +308,7 @@ public static class App
 
             var loginMax = Env.GetInt("LOGIN_RATE_MAX", 10);
             var loginWindow = Env.GetInt("LOGIN_RATE_WINDOW_MS", 15 * 60000);
-            var rl = RateLimit.Hit($"login:{HttpUtil.ClientIp(c.Req)}:{username}", loginMax, loginWindow);
+            var rl = await RateLimit.HitAsync($"login:{HttpUtil.ClientIp(c.Req)}:{username}", loginMax, loginWindow);
             if (!rl.Ok)
             {
                 await HttpUtil.SendError(c.Res, 429, $"Đăng nhập sai quá nhiều lần — thử lại sau {Math.Ceiling(rl.RetryAfterSec / 60.0)} phút");

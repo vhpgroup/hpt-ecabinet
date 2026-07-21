@@ -49,9 +49,17 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      # ---- Redis backplane cho SCALE NGANG (App×2 sau cân bằng tải) — GATED ----
+      # TRỐNG (mặc định) -> broadcast realtime + rate-limit chạy per-process như cũ (1 instance):
+      #   demo/dev/1-node KHÔNG đổi hành vi. ĐẶT (vd redis://redis:6379) -> bật backplane:
+      #   realtime đồng bộ qua Redis Pub/Sub + rate-limit đếm chung toàn cụm. Xem A3.2 README.
+      # Bật kèm service `redis` bên dưới bằng: docker compose --profile scale up -d
+      REDIS_URL: ${REDIS_URL:-}
     depends_on:
       db:
         condition: service_healthy
+    # LƯU Ý: KHÔNG depends_on redis (service redis chỉ tồn tại ở profile `scale`). Backplane
+    # tự kết nối lại lũy tiến nếu Redis chưa sẵn sàng -> không chặn khởi động api.
     restart: unless-stopped
     # expose để debug trực tiếp API (tùy chọn):
     # ports: ["3000:3000"]
@@ -122,6 +130,26 @@ services:
       echo 'Bucket ${S3_BUCKET:-ecabinet-docs} sẵn sàng (private).'
       "
     restart: "no"
+
+  # ---------- REDIS BACKPLANE (SCALE NGANG App×2 sau LB) — GATED qua PROFILE ----------
+  # Cụm HSMT "App-Server ×2": khi chạy ≥2 instance api sau cân bằng tải, per-process state
+  # (realtime broadcast + rate-limit) phải đồng bộ. Service này CHỈ khởi động khi truyền
+  # `--profile scale` -> `docker compose up` mặc định KHÔNG tạo redis, hành vi giữ NGUYÊN.
+  # Khi bật: đặt REDIS_URL=redis://redis:6379 (biến .env) để api dùng backplane.
+  #   docker compose --profile scale up -d --build   (kèm REDIS_URL=redis://redis:6379)
+  # KHÔNG public cổng ra ngoài (chỉ mạng nội bộ compose). Đặt mật khẩu khi vận hành thật:
+  #   command: redis-server --requirepass "$REDIS_PASSWORD"  + REDIS_URL=redis://:pass@redis:6379
+  redis:
+    image: redis:7-alpine
+    container_name: ecabinet-redis
+    profiles: ["scale"]
+    command: redis-server --save "" --appendonly no  # backplane thuần (pub/sub + đếm) — không cần bền vững
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
 
 volumes:
   ecabinet_pgdata:

@@ -179,23 +179,31 @@ Tài liệu này đồng thời khép các bom hạ tầng liên quan trong cùn
 
 Triển khai trên chính 2 VM Web (hoặc 1 cặp VM LB riêng): **HAProxy** hoặc **nginx** làm LB + **ModSecurity + OWASP CRS** làm WAF. TLS termination tại lớp này (có thể dùng `deploy/Caddyfile` — Caddy đã hỗ trợ WebSocket passthrough, `docker-compose.dotnet.yml:143–192`). Đây là phương án **làm được bằng cấu hình**, không phụ thuộc pháp nhân, nhưng kém về thông lượng/tính năng bảo mật so với thiết bị chuyên dụng.
 
-### 5.3. Xử lý state per-process (điểm giới hạn ĐÃ BIẾT — nêu trung thực)
+### 5.3. Xử lý state per-process — Redis backplane ĐÃ TRIỂN KHAI (gated)
 
-Rà soát và chính README (`README.md:548–565`) đã ghi rõ **hai cơ chế dùng state tĩnh trong một tiến trình**, KHÔNG chia sẻ giữa nhiều instance — sẽ vỡ khi chạy App/Web ×2 sau LB nếu không xử lý:
+Trước đây có **hai cơ chế dùng state tĩnh trong một tiến trình**, KHÔNG chia sẻ giữa nhiều instance — sẽ vỡ khi chạy App/Web ×2 sau LB nếu không xử lý:
 
-1. **Rate-limit** (`server/src/ratelimit.js:7` `const buckets = new Map()`; bản .NET `RateLimit.cs`): đếm request theo IP trong bộ nhớ tiến trình → chạy nhiều instance thì đếm không đồng bộ, giảm hiệu quả chống brute-force. Chính comment mã tự ghi hướng nâng cấp: *"Triển khai nhiều instance: thay bằng Redis, giữ nguyên interface hit()"* (`ratelimit.js:4`).
-2. **WebSocket realtime broadcast** (`server/src/ws.js:19` `const clients = new Set()`; `broadcast()` chỉ gửi tới client của **đúng tiến trình đó**, dòng 24–28): client nối vào App #1 **sẽ không nhận** sự kiện realtime phát ra từ một thao tác ghi xảy ra ở App #2.
+1. **Rate-limit** (`server/src/ratelimit.js`; bản .NET `RateLimit.cs`): đếm request theo IP trong bộ nhớ tiến trình → nhiều instance đếm rời, giảm hiệu quả chống brute-force.
+2. **WebSocket realtime broadcast** (`server/src/ws.js`; `broadcast()` chỉ gửi client của **đúng tiến trình đó**): client nối App #1 **không nhận** sự kiện realtime phát từ ghi ở App #2.
 
-> Lưu ý tích cực: **refresh-token/session không có gap này** vì đã lưu qua CSDL (`README.md:559`) — nên phần đăng nhập/phiên hoạt động đúng ngay khi chạy đa instance.
+> Lưu ý tích cực: **refresh-token/session không có gap này** vì đã lưu qua CSDL — đăng nhập/phiên hoạt động đúng ngay khi chạy đa instance.
 
-**Lộ trình xử lý hai tầng (phân biệt rõ ngắn hạn cấu hình vs trung hạn phát triển):**
+**✅ NAY ĐÃ CÓ Redis backplane (tự viết, gated qua `REDIS_URL`)** giải cả 2 gap — parity Node ⇄ .NET, **không thêm dependency** (client RESP nói giao thức Redis trực tiếp qua `node:net` / `System.Net.Sockets.TcpClient`, đúng triết lý đã tự viết JWT/SigV4/WS RFC6455):
 
-| Kỳ | Giải pháp | Bản chất | Đủ tốt cho | Effort |
-|---|---|---|---|---|
-| **Ngắn hạn (khi cắt chuyển)** | (a) **Sticky session** tại LB cho `/api/realtime` → mỗi client bám 1 App node, nhận đủ realtime của node đó. (b) **Rate-limit chuyển lên tầng LB/WAF** (đếm tập trung tại thiết bị) thay vì dựa hoàn toàn vào bộ đếm in-memory ứng dụng. | Cấu hình hạ tầng, **không sửa code** | Vận hành đúng ở quy mô 90 CCU; realtime hoạt động; brute-force chặn ở tầng WAF | Cấu hình LB/WAF (TTDL / đội hạ tầng) |
-| **Trung hạn (hạng mục phát triển bổ sung)** | (a) **Redis Pub/Sub backplane** cho WS broadcast: mỗi App node subscribe kênh chung, publish khi có thay đổi → realtime đồng bộ toàn cụm, bỏ ràng buộc sticky. (b) **Redis** làm store đếm rate-limit tập trung (giữ nguyên interface `hit()`). | **Phát triển phần mềm** (thêm 1 VM/dịch vụ Redis + sửa `ws.js`/`ratelimit.js` + bản .NET) | Realtime đầy đủ khi scale ngang không giới hạn (dòng 63/267) | Ước lượng **≈1–2 tuần công** dev + test (2 điểm chạm mã đã khoanh vùng rõ) + 1 dịch vụ Redis (có thể HA) |
+- **Realtime**: mỗi instance SUBSCRIBE kênh `ecabinet:changes`; khi có ghi CRUD, instance đó **chỉ PUBLISH** (không gửi trực tiếp cho client local) → mọi instance nhận lại qua subscribe rồi fanout cho client của mình **đúng 1 lần** (chống double-send). Client nối bất kỳ instance nào đều nhận realtime → **bỏ ràng buộc sticky session**.
+- **Rate-limit**: `hit(key)` khi bật Redis dùng **INCR + PEXPIRE** (đếm chung toàn cụm) — không lách được bằng đổi instance.
+- **Fallback**: Redis rớt → realtime về fanout local-only + tự nối lại lũy tiến; rate-limit **fail-open**; lỗi Redis không sập request nghiệp vụ.
+- **File chạm**: `server/src/redis.js` (+ `ws.js`/`index.js`); `server-dotnet/ECabinet.Api/Store/RedisBackplane.cs` (+ `Ws.cs`/`RateLimit.cs`/`App.cs`). Kiểm chứng: test-vector RESP + fake Redis in-process (Node smoke nhóm `12-REDIS-BACKPLANE`, .NET nhóm `12-REDIS`). Thiết kế chi tiết: `docs/ra-soat/2026-07-21/redis-backplane.md`.
+- **Bật**: `docker compose --profile scale up -d` (kèm `REDIS_URL=redis://redis:6379`) — xem `docs/HUONG-DAN-TRIEN-KHAI-VA-HSMT.md` mục **A3.2**.
 
-> **Cam kết trung thực:** phương án ngắn hạn (sticky + rate-limit tầng LB) đủ để vận hành đúng và an toàn ở quy mô gói thầu. Hạng mục Redis backplane được ghi nhận là **việc phát triển bổ sung** nằm trong Giai đoạn 3–4 kế hoạch 12 tuần (mục 11), KHÔNG che giấu.
+**Lộ trình (đã rút gọn nhờ backplane sẵn có):**
+
+| Kỳ | Giải pháp | Bản chất | Trạng thái |
+|---|---|---|---|
+| **Ngắn hạn (nếu chưa muốn dựng Redis)** | Sticky session tại LB cho `/api/realtime` + rate-limit tầng LB/WAF | Cấu hình hạ tầng, không sửa code | Vẫn dùng được — phương án dự phòng |
+| **Khuyến nghị (đã có sẵn trong mã)** | **Bật Redis backplane** (`REDIS_URL` + profile `scale`): realtime đồng bộ toàn cụm + rate-limit đếm chung, **bỏ ràng buộc sticky** | **Chỉ cần bật env** (mã + test + compose đã xong) | ✅ **ĐÃ TRIỂN KHAI** |
+
+> **Cam kết trung thực:** Redis backplane **không còn là "hạng mục phát triển tương lai"** — đã tích hợp sẵn cả 2 backend (gated, tương thích ngược tuyệt đối), có test tự động (fake Redis) và hướng dẫn kiểm chứng thật. Việc còn lại của đội hạ tầng chỉ là **cấp 1 dịch vụ Redis** (có thể HA bằng Sentinel/Cluster) và bật `REDIS_URL`. Kiểm chứng cuối với Redis thật (2 instance sau LB) do đội vận hành chạy theo A3.2 (môi trường dev sandbox chặn socket nên chưa chạy Redis thật khi phát triển).
 
 ---
 
@@ -306,7 +314,7 @@ Khớp kế hoạch 12 tuần (`docs/ho-so/09-ke-hoach-trien-khai.md`). Nguyên 
 | 7 | **Cắt chuyển**: đồng bộ DB lần cuối (delta) → **chuyển DNS/VIP** sang hệ mới → theo dõi | Giai đoạn 5–6 (Tuần 9–11) | Trỏ DNS về hệ cũ nếu phát hiện lỗi (hệ cũ giữ nóng vài ngày) |
 | 8 | Nghiệm thu, gỡ hệ cũ sau thời gian theo dõi ổn định | Giai đoạn 7 (Tuần 12) | — |
 
-> Phần **Redis backplane** (mục 5.3, trung hạn) triển khai ở Giai đoạn 3–4 nếu chốt scale ngang đầy đủ; nếu chưa, dùng sticky session (ngắn hạn) để cắt chuyển đúng tiến độ.
+> Phần **Redis backplane** (mục 5.3) **đã tích hợp sẵn trong mã** (gated qua `REDIS_URL`, có test) → khi chốt scale ngang đầy đủ chỉ cần **cấp dịch vụ Redis + bật env** (không còn là hạng mục phát triển). Nếu chưa dựng Redis, sticky session (ngắn hạn) vẫn dùng được để cắt chuyển đúng tiến độ.
 
 ---
 
@@ -335,8 +343,8 @@ Danh sách yêu cầu/câu hỏi cụ thể cần TTDL xác nhận bằng **biê
 |---|---|---|
 | Tách 4 cụm / nhân bản 2 node mỗi cụm | Đóng gói, cấu hình chạy đa instance | Cấp 7 VM, ảo hóa |
 | Cân bằng tải + WAF | HAProxy/nginx + ModSecurity (dự phòng) | Thiết bị LB/WAF chuyên dụng + VIP |
-| State per-process (ngắn hạn) | — | Sticky session + rate-limit tại LB |
-| State per-process (trung hạn) | Redis backplane cho WS + rate-limit (≈1–2 tuần dev) | Cấp dịch vụ Redis (1 VM) |
+| State per-process (dự phòng) | — | Sticky session + rate-limit tại LB |
+| State per-process (khuyến nghị) | **Redis backplane ĐÃ CÓ** — bật `REDIS_URL` + profile `scale` | Cấp dịch vụ Redis (1 VM, có thể HA) |
 | DB HA | Cấu hình WSFC + AG + `MultiSubnetFailover=True` | **License SQL Server Standard + Windows** |
 | Tách file MinIO + SSE | Bật `S3_*`, cấu hình SSE, backup bucket | Cấp VM File + dung lượng media |
 | Mã hóa at-rest | TDE (SQL) + SSE (MinIO) | Mã hóa **cơ yếu** cho dữ liệu mật (Ban Cơ yếu) |

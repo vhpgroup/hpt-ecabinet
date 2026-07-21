@@ -85,6 +85,44 @@ MINIO_CORS_ORIGIN=https://ecabinet.<tỉnh>.gov.vn
 - Không thêm dependency: chữ ký AWS SigV4 (header + presigned query) tự viết (`server/src/blob.js`, `server-dotnet/.../Store/BlobStore.cs`) — kiểm bằng test-vector chính thức của AWS.
 - **Sao lưu**: khi bật S3, thêm lịch backup riêng cho bucket (MinIO `mc mirror`/snapshot volume `ecabinet_minio`) **độc lập** với backup DB — đúng mô hình 4 cụm.
 
+### A3.2. Bật Redis backplane để chạy App×2 sau cân bằng tải (mô hình HSMT "App-Server ×2")
+Mặc định, backend chạy **1 tiến trình** (realtime broadcast + rate-limit là state trong RAM tiến trình — xem README "Giới hạn HA"). Để chạy **≥2 instance API sau cân bằng tải** (đúng mô hình 4 cụm HSMT "Web-Server ×2 / App-Server ×2") mà realtime vẫn đồng bộ và rate-limit vẫn đếm chung, **bật Redis backplane** (đã tích hợp sẵn, GATED qua `REDIS_URL`, parity cả Node lẫn .NET).
+
+**Bước 1 — bật service `redis` + đặt `REDIS_URL`** (service `redis` gated qua **profile `scale`** → `up` thường KHÔNG tạo nó, hành vi mặc định giữ nguyên):
+```bash
+# Bản Node + PostgreSQL:
+REDIS_URL=redis://redis:6379 \
+  docker compose --profile scale up -d --build
+
+# Bản .NET + SQL Server (đúng nền tảng HSMT):
+REDIS_URL=redis://redis:6379 DB_PASSWORD='<mật-khẩu-SA-mạnh>' \
+  docker compose -f docker-compose.dotnet.yml --profile scale up -d --build
+```
+> Đặt `REDIS_URL` trong file `.env` cạnh `docker-compose*.yml` để cố định. Hỗ trợ `redis://[:password@]host:port[/db]`; TLS dùng `rediss://` (nếu Redis bật TLS). Có mật khẩu: thêm `--requirepass` cho service `redis` rồi dùng `REDIS_URL=redis://:<mật-khẩu>@redis:6379`.
+
+**Bước 2 — chạy 2 instance API sau cân bằng tải.** Cách nhanh nhất để nhân bản trong 1 host:
+```bash
+docker compose --profile scale up -d --build --scale api=2
+# (bỏ container_name của service `api` nếu compose báo trùng tên khi --scale — hoặc
+#  triển khai 2 node riêng cùng trỏ 1 Redis, đặt LB/nginx phía trước phân tải sang cả hai.)
+```
+Cân bằng tải phía trước (nginx/HAProxy/thiết bị của TTDL) trỏ vào cả 2 instance. **Khi đã bật Redis backplane, KHÔNG cần sticky session** cho realtime (client nối instance nào cũng nhận đủ sự kiện).
+
+**Bước 3 — kiểm chứng THẬT (2 việc cần xác minh):**
+1. **Realtime đồng bộ 2 instance** (client nối A nhận được ghi phát từ B):
+   - Mở 2 tab trình duyệt, đăng nhập; xác định (qua log/LB) chúng nối **2 instance khác nhau**. Ở tab 1 tạo/sửa 1 cuộc họp (ghi CRUD) → tab 2 phải **tự cập nhật** (nhận sự kiện `change`). Trước khi có backplane, tab nối instance khác sẽ **không** cập nhật.
+   - Kiểm ở tầng Redis: `docker exec -it ecabinet-redis redis-cli SUBSCRIBE ecabinet:changes` → mỗi lần ghi CRUD thấy đúng **1** message JSON `{"type":"change",...}` (không nhân đôi).
+   - Kiểm log API: mỗi instance in `[redis] backplane BẬT — pub/sub redis:6379 ... kênh=ecabinet:changes` lúc khởi động.
+2. **Rate-limit đếm chung toàn cụm** (không lách được bằng đổi instance):
+   - Bắn vượt ngưỡng request rải qua LB (tổng > `RATE_LIMIT_MAX`, mặc định 300/60s/IP) → phải nhận **429** dù request rơi vào các instance khác nhau. Kiểm khóa đếm: `docker exec -it ecabinet-redis redis-cli GET "ip:<IP-client>"` tăng dần và **dùng chung** giữa các instance; `PTTL "ip:<IP>"` cho thấy cửa sổ còn lại.
+   - Thử **đăng nhập sai** nhiều lần từ cùng IP+tài khoản qua 2 instance → khóa `login:<IP>:<user>` đếm chung, chặn đúng ngưỡng `LOGIN_RATE_MAX`.
+
+**Fallback (không cần thao tác):** nếu Redis mất kết nối lúc đang chạy → realtime tự về **fanout local-only** + tự kết nối lại lũy tiến (log cảnh báo `[redis] mất kết nối ...`); rate-limit **fail-open** (cho qua, không chặn toàn hệ). Lỗi Redis **không làm sập** request nghiệp vụ. Khi Redis trở lại, backplane tự nối lại và đồng bộ tiếp.
+
+- **GATED — tương thích ngược:** bỏ trống `REDIS_URL` (và không truyền `--profile scale`) → hành vi Y HỆT trước đây (1 instance, broadcast local, rate-limit in-RAM). Demo/dev/pilot 1-node **không đổi**.
+- **Không thêm dependency:** client Redis nói giao thức RESP tự viết (`server/src/redis.js` qua `node:net`; `server-dotnet/.../Store/RedisBackplane.cs` qua `System.Net.Sockets.TcpClient`) — kiểm bằng test-vector + fake Redis in-process (Node smoke nhóm `12-REDIS-BACKPLANE`, .NET nhóm `12-REDIS`). Thiết kế + chống double-send + fallback chi tiết: `docs/ra-soat/2026-07-21/redis-backplane.md`.
+- **Redis là backplane thuần** (pub/sub + đếm rate-limit): không lưu dữ liệu nghiệp vụ, không cần bền vững (service mẫu tắt `save`/`appendonly`). Có thể dùng Redis Sentinel/Cluster để HA chính Redis nếu cần (không bắt buộc ở quy mô gói thầu).
+
 ### A4. Sao lưu / phục hồi + diễn tập DR (chứng minh RTO ≤24h theo HSMT)
 ```bash
 # Sao lưu SQL Server (giữ 14 bản gần nhất, đổi qua env KEEP):
@@ -137,6 +175,7 @@ Dùng `docker-compose.coolify.yml`: Coolify → New → Docker Compose → repo 
 | 2 | Bật **HTTPS TLS 1.2+** | A2 |
 | 3 | Bật **họp trực tuyến LiveKit** (nếu cần video thật) | A3 |
 | 3b | Bật **object storage MinIO/S3** tách tệp khỏi DB (Cụm Server-File) — chống phình DB | A3.1 |
+| 3c | Bật **Redis backplane** để chạy **App×2 sau cân bằng tải** (realtime + rate-limit đồng bộ toàn cụm) — ĐÃ tích hợp, chỉ cần bật env | A3.2 |
 | 4 | Cấu hình **sao lưu tự động + diễn tập DR** (RTO 24h) | A4 |
 | 5 | **Load test 90 CCU** lấy số liệu SLA | A5 |
 | 6 | Đổi mật khẩu mặc định, đặt `JWT_SECRET` mạnh, thu hồi khóa API demo | A1 |
